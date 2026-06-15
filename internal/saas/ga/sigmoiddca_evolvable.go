@@ -123,7 +123,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 		if err := ctx.Err(); err != nil {
 			return FitnessResult{}, err
 		}
-		metrics := RunSigmoidDCASingleBacktest(window.Bars, window.EvalStartMs, c, plan.Spawn)
+		metrics := RunSigmoidDCASingleBacktest(window.Bars, window.EvalStartMs, plan.Interval, c, plan.Spawn)
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown)
@@ -171,16 +171,19 @@ func (SigmoidDCAEvolvable) Verify(ctx context.Context, g Gene, spawn *quant.Spaw
 	if err := ctx.Err(); err != nil {
 		return BacktestMetrics{}, err
 	}
-	return RunSigmoidDCASingleBacktest(bars, firstEvalStart(bars), asChromosome(g), spawn), nil
+	return RunSigmoidDCASingleBacktest(bars, firstEvalStart(bars), "1d", asChromosome(g), spawn), nil
 }
 
-func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, chromosome quant.Chromosome, spawn *quant.SpawnPoint) BacktestMetrics {
-	return RunSigmoidDCAPathBacktest(bars, evalStartMs, chromosome, spawn).Metrics
+func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) BacktestMetrics {
+	return RunSigmoidDCAPathBacktest(bars, evalStartMs, interval, chromosome, spawn).Metrics
 }
 
-func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, chromosome quant.Chromosome, spawn *quant.SpawnPoint) SigmoidDCAPathResult {
+func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) SigmoidDCAPathResult {
 	if len(bars) == 0 || bars[0].Close <= 0 {
 		return SigmoidDCAPathResult{}
+	}
+	if interval == "" {
+		interval = "1d"
 	}
 
 	params := sigmoiddca.DefaultParams()
@@ -225,7 +228,7 @@ func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, chromosome q
 			(portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
 		output := sigmoiddca.Step(quant.StrategyInput{
 			Symbol:       "BTCUSDT",
-			Interval:     "1d",
+			Interval:     interval,
 			Closes:       closes,
 			Timestamps:   timestamps,
 			Portfolio:    portfolio,

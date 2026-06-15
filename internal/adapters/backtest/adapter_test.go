@@ -24,8 +24,8 @@ func TestSigmoidBacktestDeterministic(t *testing.T) {
 		},
 	}
 
-	a := ga.RunSigmoidDCASingleBacktest(bars, bars[120].OpenTime, chromosome, spawn)
-	b := ga.RunSigmoidDCASingleBacktest(bars, bars[120].OpenTime, chromosome, spawn)
+	a := ga.RunSigmoidDCASingleBacktest(bars, bars[120].OpenTime, "1d", chromosome, spawn)
+	b := ga.RunSigmoidDCASingleBacktest(bars, bars[120].OpenTime, "1d", chromosome, spawn)
 	if !reflect.DeepEqual(a, b) {
 		t.Fatalf("backtest should be deterministic\nfirst=%+v\nsecond=%+v", a, b)
 	}

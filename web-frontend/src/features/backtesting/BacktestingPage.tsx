@@ -16,10 +16,19 @@ function windowLabel(key: string) {
   return map[key] ?? key;
 }
 
+const intervalOptions = [
+  ["1d", "1 天"],
+  ["1h", "1 小時"],
+  ["15m", "15 分鐘"],
+  ["5m", "5 分鐘"],
+  ["1m", "1 分鐘"]
+];
+
 export function BacktestingPage() {
   const { t } = useI18n();
   const [params] = useSearchParams();
   const [source, setSource] = useState<"champion" | "candidate" | "custom">("champion");
+  const [interval, setInterval] = useState("1d");
   const [candidateId, setCandidateId] = useState(Number(params.get("genome")) || 0);
   const [customJson, setCustomJson] = useState("{\n  \n}");
   const [result, setResult] = useState<BacktestResult | null>(null);
@@ -33,6 +42,7 @@ export function BacktestingPage() {
       const selectedCandidateId = candidateId || candidates[0]?.id;
       const payload = {
         symbol: "BTCUSDT",
+        interval,
         source,
         candidate_id: source === "candidate" ? selectedCandidateId : undefined,
         custom_params: source === "custom" ? JSON.parse(customJson || "{}") : undefined
@@ -66,6 +76,20 @@ export function BacktestingPage() {
           </div>
         </CardHeader>
         <form className="space-y-4" onSubmit={submit}>
+          <label className="block max-w-xs">
+            <span className="mb-2 block text-sm text-slate-300">{t("backtesting.interval")}</span>
+            <select
+              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
+              value={interval}
+              onChange={(event) => setInterval(event.target.value)}
+            >
+              {intervalOptions.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="grid gap-2 md:grid-cols-3">
             {[
               ["champion", t("backtesting.useChampion")],

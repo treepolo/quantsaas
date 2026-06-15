@@ -6,6 +6,7 @@
   },
   "nav": {
     "research": "Research",
+    "marketData": "Market Data",
     "dashboard": "Dashboard",
     "templates": "Templates",
     "instances": "Instances",
@@ -75,10 +76,29 @@
     "backtestingTitle": "Backtesting",
     "backtestingBody": "Compare parameter performance against the passive DCA benchmark.",
     "dataTitle": "Market Dataset",
-    "dataBody": "No historical market data has been imported yet."
+    "dataBody": "Review coverage, row counts, and latest update time for each interval."
+  },
+  "marketData": {
+    "title": "Market Data",
+    "subtitle": "Import Binance Spot public historical klines for backtesting and parameter search.",
+    "importTitle": "Import Data",
+    "importSubtitle": "Uses public market endpoints only. No API key is required.",
+    "symbol": "Symbol",
+    "interval": "Interval",
+    "startDate": "Start Date",
+    "endDate": "End Date",
+    "import": "Import",
+    "imported": "Processed bars",
+    "rows": "Rows",
+    "firstBar": "First bar",
+    "lastBar": "Last bar"
   },
   "evolution": {
     "title": "Optimization Lab",
-    "subtitle": "Create candidate parameters and review whether to promote them as the current best."
+    "subtitle": "Create candidate parameters and review whether to promote them as the current best.",
+    "interval": "Data interval"
+  },
+  "backtesting": {
+    "interval": "Data interval"
   }
 }

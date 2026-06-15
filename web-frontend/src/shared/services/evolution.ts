@@ -24,6 +24,7 @@ export type GenomeRecord = {
 
 export type CreateTaskInput = {
   strategy_id: string;
+  interval?: string;
   pop_size: number;
   max_generations: number;
   spawn_mode: "inherit" | "random_once" | "manual";

@@ -21,10 +21,19 @@ function windowLabel(key: string) {
   return map[key] ?? key;
 }
 
+const intervalOptions = [
+  ["1d", "1 天"],
+  ["1h", "1 小時"],
+  ["15m", "15 分鐘"],
+  ["5m", "5 分鐘"],
+  ["1m", "1 分鐘"]
+];
+
 function EvolutionPanel() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
+  const [interval, setInterval] = useState("1d");
   const [population, setPopulation] = useState(300);
   const [generations, setGenerations] = useState(25);
   const [mode, setMode] = useState<"inherit" | "random_once" | "manual">("inherit");
@@ -42,6 +51,7 @@ function EvolutionPanel() {
       const spawn_point = mode === "manual" ? JSON.parse(manualJson) : undefined;
       return evolutionApi.createTask({
         strategy_id: "sigmoid-dca-btc",
+        interval,
         pop_size: population,
         max_generations: generations,
         spawn_mode: mode,
@@ -107,6 +117,20 @@ function EvolutionPanel() {
       </CardHeader>
       {expanded ? (
         <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
+          <label>
+            <span className="mb-2 block text-sm text-slate-300">{t("evolution.interval")}</span>
+            <select
+              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
+              value={interval}
+              onChange={(event) => setInterval(event.target.value)}
+            >
+              {intervalOptions.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
           <label>
             <span className="mb-2 block text-sm text-slate-300">{t("evolution.population")}</span>
             <input

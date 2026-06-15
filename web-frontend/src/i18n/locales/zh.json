@@ -6,6 +6,7 @@
   },
   "nav": {
     "research": "研究總覽",
+    "marketData": "行情資料",
     "dashboard": "總覽",
     "templates": "策略模板",
     "instances": "實例管理",
@@ -103,7 +104,22 @@
     "backtestingTitle": "回測",
     "backtestingBody": "用歷史資料檢查參數表現，並與被動定投基準比較。",
     "dataTitle": "行情資料集",
-    "dataBody": "尚未匯入歷史行情資料。"
+    "dataBody": "查看各週期資料起訖、筆數與最後更新時間。"
+  },
+  "marketData": {
+    "title": "行情資料",
+    "subtitle": "匯入 Binance Spot 公開歷史 K 線，供回測與參數優化使用。",
+    "importTitle": "匯入資料",
+    "importSubtitle": "只使用公開行情端點，不需要 API Key。",
+    "symbol": "交易對",
+    "interval": "時間週期",
+    "startDate": "起始日期",
+    "endDate": "結束日期",
+    "import": "匯入",
+    "imported": "已處理筆數",
+    "rows": "筆數",
+    "firstBar": "最早資料",
+    "lastBar": "最新資料"
   },
   "templates": {
     "title": "策略模板",
@@ -145,6 +161,7 @@
     "library": "參數庫",
     "selectInstance": "選擇實例",
     "startNew": "啟動新一輪優化",
+    "interval": "資料週期",
     "population": "族群大小",
     "generations": "最大代數",
     "inheritMode": "參數繼承方式",
@@ -188,6 +205,7 @@
     "title": "回測",
     "subtitle": "用歷史資料檢查參數表現，並與被動定投基準比較。",
     "source": "參數來源",
+    "interval": "資料週期",
     "useChampion": "使用目前最優參數",
     "useCandidate": "使用指定候選參數",
     "customJson": "自訂 JSON",

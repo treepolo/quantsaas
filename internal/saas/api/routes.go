@@ -74,6 +74,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		ev = NewEvolutionHandler(deps.Config.AppRole, deps.DB, deps.Redis, deps.EpochService)
 	}
 	bt := NewBacktestHandler(deps.Config.AppRole, deps.DB)
+	md := NewMarketDataHandler(deps.Config.AppRole, deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.GET("/evolution/tasks", ev.ListTasks)
 	lab.POST("/evolution/tasks/:taskID/promote", ev.Promote)
@@ -82,6 +83,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.GET("/genome/challengers", listChallengersHandler(deps))
 	lab.POST("/backtests", bt.Create)
 	lab.GET("/backtests/:id", bt.Get)
+	lab.GET("/market-data/klines/status", md.Status)
+	lab.POST("/market-data/klines/import", md.Import)
 
 	if deps.WSHandler != nil {
 		router.GET("/ws/agent", deps.WSHandler)

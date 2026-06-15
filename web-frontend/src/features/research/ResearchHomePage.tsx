@@ -6,7 +6,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Ca
 const items = [
   { to: "/evolution", icon: FlaskConical, titleKey: "research.evolutionTitle", bodyKey: "research.evolutionBody" },
   { to: "/backtesting", icon: AreaChart, titleKey: "research.backtestingTitle", bodyKey: "research.backtestingBody" },
-  { to: "", icon: Database, titleKey: "research.dataTitle", bodyKey: "research.dataBody" }
+  { to: "/data", icon: Database, titleKey: "research.dataTitle", bodyKey: "research.dataBody" }
 ];
 
 export function ResearchHomePage() {

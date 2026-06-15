@@ -8,6 +8,7 @@ import { RegisterPage } from "../features/auth/RegisterPage";
 import { ResearchHomePage } from "../features/research/ResearchHomePage";
 import { EvolutionPage } from "../features/strategies/EvolutionPage";
 import { BacktestingPage } from "../features/backtesting/BacktestingPage";
+import { MarketDataPage } from "../features/marketdata/MarketDataPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 
 function AuthGate() {
@@ -54,6 +55,7 @@ export function AppRouter() {
                 <Route path="evolution" element={<EvolutionPage />} />
               </Route>
               <Route element={<FeatureGate feature="backtesting" />}>
+                <Route path="data" element={<MarketDataPage />} />
                 <Route path="backtesting" element={<BacktestingPage />} />
               </Route>
               <Route path="templates" element={<Navigate to="/" replace />} />

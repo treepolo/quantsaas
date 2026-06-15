@@ -197,13 +197,13 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		return nil, fmt.Errorf("尚未匯入 %s %s 的 K 線資料", req.Symbol, req.Interval)
 	}
 
-	path := ga.RunSigmoidDCAPathBacktest(bars, bars[0].OpenTime, params.Chromosome, &spawn)
+	path := ga.RunSigmoidDCAPathBacktest(bars, bars[0].OpenTime, req.Interval, params.Chromosome, &spawn)
 	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 	})
 	alpha := path.Metrics.ROI - baseline.ROI
-	windows, windowDetails := scoreWindows(bars, params.Chromosome, &spawn)
+	windows, windowDetails := scoreWindows(bars, req.Interval, params.Chromosome, &spawn)
 
 	return &Response{
 		ID:            runID,
@@ -422,12 +422,12 @@ func normalizeSpawnPoint(spawn *quant.SpawnPoint) error {
 	return nil
 }
 
-func scoreWindows(bars []quant.Bar, chromosome quant.Chromosome, spawn *quant.SpawnPoint) (map[string]float64, []WindowResult) {
+func scoreWindows(bars []quant.Bar, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) (map[string]float64, []WindowResult) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
 	for _, window := range windows {
-		metrics := ga.RunSigmoidDCASingleBacktest(window.Bars, window.EvalStartMs, chromosome, spawn)
+		metrics := ga.RunSigmoidDCASingleBacktest(window.Bars, window.EvalStartMs, interval, chromosome, spawn)
 		baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,

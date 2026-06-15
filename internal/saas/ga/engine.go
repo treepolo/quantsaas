@@ -199,6 +199,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 
 	return EvaluablePlan{
 		Pair:           cfg.Pair,
+		Interval:       cfg.Interval,
 		TemplateName:   e.evolvable.StrategyID(),
 		Spawn:          spawn,
 		LotStep:        cfg.LotStepSize,
