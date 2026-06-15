@@ -1,0 +1,31 @@
+# QuantSaaS 設定模板
+# 本檔不得填入真實密鑰。正式環境請用環境變數注入：
+# - APP_ROLE
+# - DATABASE_DSN
+# - REDIS_ADDR
+# - REDIS_PASSWORD
+# - REDIS_DB
+# - JWT_SECRET
+# - SERVER_ADDR
+
+app_role: dev
+
+database:
+  dsn: ""
+  max_idle_conns: 5
+  max_open_conns: 25
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+
+jwt:
+  secret: ""
+  issuer: "quantsaas"
+  ttl_minutes: 1440
+
+server:
+  addr: ":8080"
+  read_timeout_seconds: 15
+  write_timeout_seconds: 30

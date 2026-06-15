@@ -1,0 +1,10 @@
+# QuantSaaS Cursor Rules
+
+- 只以 `docs/` 三份真源文件作為功能來源。
+- 所有新增文件與使用者可見文字使用正體中文。
+- Go 後端使用 GORM Code-First + AutoMigrate，不寫 SQL migration。
+- 策略 `Step()` 必須是純函數；禁止網路、資料庫、檔案 I/O、計時器、隨機外部狀態。
+- 回測與實盤共用同一個 `Step()`；禁止 `isBacktest` 分支。
+- Agent 不含策略邏輯，只執行 SaaS 下發的交易命令。
+- API Key 只允許存在於 `config.agent.yaml`，不得進入 SaaS 程式碼、資料庫、前端、日誌。
+- 價格相關計算優先使用比率、對數收益率、標準化偏離等無量綱表示。

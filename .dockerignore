@@ -1,0 +1,10 @@
+.git
+.tools
+bin
+dist
+*.env
+*.exe
+config.agent.yaml
+web-frontend/node_modules
+web-frontend/.tmp
+web-frontend/dist

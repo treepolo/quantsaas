@@ -1,0 +1,10 @@
+config.agent.yaml
+*.env
+*.exe
+bin/
+dist/
+node_modules/
+web-frontend/dist/
+web-frontend/.tmp/
+.docker-codex-config/
+.tools/
