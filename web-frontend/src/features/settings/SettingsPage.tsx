@@ -64,7 +64,7 @@ export function SettingsPage() {
         <CardHeader>
           <div>
             <CardTitle>{t("settings.featureFlags")}</CardTitle>
-            <CardDescription>{t("settings.subtitle")}</CardDescription>
+            <CardDescription>{t("settings.featureFlagsDescription")}</CardDescription>
           </div>
         </CardHeader>
         <div className="grid gap-3 md:grid-cols-3">
@@ -76,13 +76,21 @@ export function SettingsPage() {
                 <div
                   key={item.to}
                   className={cn(
-                    "rounded-lg border p-4",
+                    "cursor-default rounded-lg border p-4",
                     active ? "border-[#2dd4bf]/20 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.04] bg-white/[0.02] text-slate-500"
                   )}
                 >
-                  <div className="flex items-center gap-2">
-                    <item.icon className="h-4 w-4" />
-                    <span>{t(item.labelKey)}</span>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <item.icon className="h-4 w-4" />
+                      <span>{t(item.labelKey)}</span>
+                    </div>
+                    <span className={cn("rounded-full px-2 py-1 text-xs", active ? "bg-[#2dd4bf]/10 text-[#99f6e4]" : "bg-white/[0.03] text-slate-500")}>
+                      {active ? t("settings.enabled") : t("settings.disabled")}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    {t("settings.readOnlyFeature")}
                   </div>
                 </div>
               );

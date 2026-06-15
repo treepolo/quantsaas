@@ -229,6 +229,10 @@
     "english": "English",
     "account": "帳戶",
     "role": "角色",
-    "featureFlags": "功能權限"
+    "featureFlags": "功能權限",
+    "featureFlagsDescription": "這裡顯示目前應用模式開放的功能，不能在頁面中手動切換。",
+    "enabled": "已啟用",
+    "disabled": "未啟用",
+    "readOnlyFeature": "由系統模式決定"
   }
 }

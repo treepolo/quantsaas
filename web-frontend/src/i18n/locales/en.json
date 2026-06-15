@@ -100,5 +100,11 @@
   },
   "backtesting": {
     "interval": "Data interval"
+  },
+  "settings": {
+    "featureFlagsDescription": "These features are determined by the current app mode and cannot be changed here.",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "readOnlyFeature": "System controlled"
   }
 }

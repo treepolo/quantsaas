@@ -90,10 +90,10 @@ export function AppShell() {
   }, [data, setStatus]);
 
   return (
-    <div className="relative min-h-screen overflow-hidden text-slate-200">
+    <div className="relative h-screen overflow-hidden text-slate-200">
       <AppBackground />
       <Sidebar />
-      <div className="flex min-h-screen flex-col pl-16 lg:pl-64">
+      <div className="flex h-screen min-h-0 flex-col pl-16 lg:pl-64">
         <Topbar />
         <main className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-4 lg:p-6">
           <div className="mx-auto max-w-[1800px]">
