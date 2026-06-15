@@ -73,14 +73,15 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	if ev == nil {
 		ev = NewEvolutionHandler(deps.Config.AppRole, deps.DB, deps.Redis, deps.EpochService)
 	}
+	bt := NewBacktestHandler(deps.Config.AppRole, deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.GET("/evolution/tasks", ev.ListTasks)
 	lab.POST("/evolution/tasks/:taskID/promote", ev.Promote)
 	lab.GET("/evolution/genomes", listGenomesHandler(deps))
 	lab.GET("/genome/champion", ev.GetChampion)
 	lab.GET("/genome/challengers", listChallengersHandler(deps))
-	lab.POST("/backtests", notImplemented("回測服務尚未接上"))
-	lab.GET("/backtests/:id", notImplemented("回測服務尚未接上"))
+	lab.POST("/backtests", bt.Create)
+	lab.GET("/backtests/:id", bt.Get)
 
 	if deps.WSHandler != nil {
 		router.GET("/ws/agent", deps.WSHandler)
@@ -599,16 +600,10 @@ func listGenomesHandler(deps RouterDeps) gin.HandlerFunc {
 				"created_at":   row.CreatedAt.Format(time.RFC3339),
 				"score_total":  row.ScoreTotal,
 				"max_drawdown": row.MaxDrawdown,
-				"window_score": row.WindowScore,
+				"window_score": parseWindowScores(row.WindowScore),
 			})
 		}
 		c.JSON(http.StatusOK, response)
-	}
-}
-
-func notImplemented(message string) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.JSON(http.StatusNotImplemented, gin.H{"error": message})
 	}
 }
 

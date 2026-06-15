@@ -15,24 +15,35 @@ type GhostDCAResult struct {
 	TotalInjected float64
 	MaxDrawdown   float64
 	ROI           float64
+	Times         []int64
 	NAV           []float64
 }
 
-type cashFlow struct {
+type TimedCashFlow struct {
 	TimeMs int64
 	Amount float64
 }
 
 func SimulateGhostDCA(bars []Bar, cfg GhostDCAConfig) GhostDCAResult {
+	if len(bars) == 0 {
+		return GhostDCAResult{}
+	}
+	return SimulateGhostDCAFrom(bars, bars[0].OpenTime, cfg)
+}
+
+func SimulateGhostDCAFrom(bars []Bar, evalStartMs int64, cfg GhostDCAConfig) GhostDCAResult {
 	if len(bars) == 0 || bars[0].Close <= 0 || cfg.InitialUSDT <= 0 {
 		return GhostDCAResult{}
 	}
 
 	btc := cfg.InitialUSDT / bars[0].Close
-	totalInjected := cfg.InitialUSDT
-	flows := make([]cashFlow, 0)
+	evalInjected := 0.0
+	flows := make([]TimedCashFlow, 0)
+	times := make([]int64, 0, len(bars))
 	nav := make([]float64, 0, len(bars))
 	lastYear, lastMonth := yearMonth(bars[0].OpenTime)
+	evalInitial := 0.0
+	actualEvalStart := int64(0)
 
 	for i, bar := range bars {
 		if bar.Close <= 0 {
@@ -42,12 +53,22 @@ func SimulateGhostDCA(bars []Bar, cfg GhostDCAConfig) GhostDCAResult {
 		year, month := yearMonth(bar.OpenTime)
 		if i > 0 && (year != lastYear || month != lastMonth) && cfg.MonthlyInjectUSDT > 0 {
 			btc += cfg.MonthlyInjectUSDT / bar.Close
-			totalInjected += cfg.MonthlyInjectUSDT
-			flows = append(flows, cashFlow{TimeMs: bar.OpenTime, Amount: cfg.MonthlyInjectUSDT})
+			if bar.OpenTime > evalStartMs {
+				evalInjected += cfg.MonthlyInjectUSDT
+				flows = append(flows, TimedCashFlow{TimeMs: bar.OpenTime, Amount: cfg.MonthlyInjectUSDT})
+			}
 			lastYear, lastMonth = year, month
 		}
 
-		nav = append(nav, btc*bar.Close)
+		equity := btc * bar.Close
+		if bar.OpenTime >= evalStartMs {
+			if len(nav) == 0 {
+				evalInitial = equity
+				actualEvalStart = bar.OpenTime
+			}
+			times = append(times, bar.OpenTime)
+			nav = append(nav, equity)
+		}
 	}
 
 	finalEquity := 0.0
@@ -57,9 +78,10 @@ func SimulateGhostDCA(bars []Bar, cfg GhostDCAConfig) GhostDCAResult {
 
 	return GhostDCAResult{
 		FinalEquity:   finalEquity,
-		TotalInjected: totalInjected,
+		TotalInjected: evalInitial + evalInjected,
 		MaxDrawdown:   MaxDrawdown(nav),
-		ROI:           modifiedDietzROI(cfg.InitialUSDT, finalEquity, flows, bars[0].OpenTime, bars[len(bars)-1].OpenTime),
+		ROI:           ModifiedDietzROI(evalInitial, finalEquity, flows, actualEvalStart, bars[len(bars)-1].OpenTime),
+		Times:         times,
 		NAV:           nav,
 	}
 }
@@ -87,7 +109,7 @@ func MaxDrawdown(nav []float64) float64 {
 	return maxDD
 }
 
-func modifiedDietzROI(initial, final float64, flows []cashFlow, startMs, endMs int64) float64 {
+func ModifiedDietzROI(initial, final float64, flows []TimedCashFlow, startMs, endMs int64) float64 {
 	if initial <= 0 || final <= 0 || endMs <= startMs {
 		return 0
 	}

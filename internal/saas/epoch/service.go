@@ -20,7 +20,7 @@ import (
 
 const (
 	TaskStatusRunning = "running"
-	TaskStatusDone    = "done"
+	TaskStatusDone    = "completed"
 	TaskStatusFailed  = "failed"
 )
 
@@ -58,8 +58,16 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 	}
 
 	req = normalizeRequest(req)
+	if err := validateRequest(req); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	spawn, err := s.resolveSpawnPoint(ctx, req)
 	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	if err := validateSpawnPoint(spawn); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -193,6 +201,30 @@ func normalizeRequest(req CreateTaskRequest) CreateTaskRequest {
 	return req
 }
 
+func validateRequest(req CreateTaskRequest) error {
+	if req.StrategyID != sigmoiddca.StrategyID {
+		return fmt.Errorf("尚不支援的策略: %s", req.StrategyID)
+	}
+	switch req.SpawnMode {
+	case "inherit", "random_once", "manual":
+	default:
+		return fmt.Errorf("不支援的 spawn_mode: %s", req.SpawnMode)
+	}
+	if req.TestMode {
+		if req.PopSize != 10 || req.MaxGenerations != 3 {
+			return errors.New("test_mode 必須使用 Pop=10、Gen=3")
+		}
+		return nil
+	}
+	if req.PopSize < 10 || req.PopSize > 500 {
+		return errors.New("pop_size 必須介於 10 到 500")
+	}
+	if req.MaxGenerations < 5 || req.MaxGenerations > 50 {
+		return errors.New("max_generations 必須介於 5 到 50")
+	}
+	return nil
+}
+
 func defaultSpawnPoint() *quant.SpawnPoint {
 	return &quant.SpawnPoint{
 		Policy: quant.CapitalPolicy{
@@ -206,6 +238,28 @@ func defaultSpawnPoint() *quant.SpawnPoint {
 			LotMin:         0.00001,
 		},
 	}
+}
+
+func validateSpawnPoint(spawn *quant.SpawnPoint) error {
+	if spawn == nil {
+		return errors.New("spawn_point 不可為空")
+	}
+	if spawn.Policy.InitialUSDT <= 0 {
+		return errors.New("初始資金必須大於 0")
+	}
+	if spawn.Policy.MonthlyInjectUSDT < 0 {
+		return errors.New("月度投入不可為負數")
+	}
+	if spawn.Policy.ColdSealedBTC < 0 {
+		return errors.New("封存資產不可為負數")
+	}
+	if spawn.Risk.MaxDrawdownPct <= 0 || spawn.Risk.MaxDrawdownPct > 0.88 {
+		return errors.New("最大回撤邊界必須介於 0 到 0.88")
+	}
+	if spawn.Risk.LotStep <= 0 || spawn.Risk.LotMin <= 0 {
+		return errors.New("下單精度與最小數量必須大於 0")
+	}
+	return nil
 }
 
 func randomSpawnPoint() quant.SpawnPoint {

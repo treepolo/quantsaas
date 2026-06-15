@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "composite": true,
-    "tsBuildInfoFile": "./.tmp/tsconfig.node.tsbuildinfo",
+    "tsBuildInfoFile": "../.cache/tsbuild/tsconfig.node.tsbuildinfo",
     "skipLibCheck": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",

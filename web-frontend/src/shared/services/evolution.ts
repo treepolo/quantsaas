@@ -15,7 +15,7 @@ export type EvolutionTask = {
 
 export type GenomeRecord = {
   id: number;
-  role: "candidate" | "champion" | "archived" | "challenger";
+  role: "candidate" | "champion" | "archived" | "challenger" | "retired";
   created_at: string;
   score_total: number;
   max_drawdown: number;
@@ -24,15 +24,25 @@ export type GenomeRecord = {
 
 export type CreateTaskInput = {
   strategy_id: string;
-  population_size: number;
+  pop_size: number;
   max_generations: number;
-  inherit_mode: "champion" | "random" | "manual";
-  manual_params?: Record<string, unknown>;
+  spawn_mode: "inherit" | "random_once" | "manual";
+  spawn_point?: Record<string, unknown>;
+  test_mode?: boolean;
+};
+
+export type EvolutionOverview = {
+  current_task: EvolutionTask | null;
+  running: boolean;
+  tasks: EvolutionTask[];
+  latest_challenger: GenomeRecord | null;
+  champion: GenomeRecord | null;
+  window_summaries: Record<string, number>;
 };
 
 export const evolutionApi = {
   listTasks() {
-    return apiFetch<EvolutionTask[]>("/evolution/tasks");
+    return apiFetch<EvolutionOverview>("/evolution/tasks");
   },
   createTask(input: CreateTaskInput) {
     return apiFetch<EvolutionTask>("/evolution/tasks", {
@@ -43,7 +53,7 @@ export const evolutionApi = {
   listGenomes() {
     return apiFetch<GenomeRecord[]>("/evolution/genomes");
   },
-  promote(taskId: number) {
-    return apiFetch<{ status: string }>(`/evolution/tasks/${taskId}/promote`, { method: "POST" });
+  promote(genomeId: number) {
+    return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/tasks/${genomeId}/promote`, { method: "POST" });
   }
 };

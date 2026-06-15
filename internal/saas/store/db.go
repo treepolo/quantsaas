@@ -43,6 +43,7 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		&AuditLog{},
 		&GeneRecord{},
 		&EvolutionTask{},
+		&BacktestRun{},
 		&KLine{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)

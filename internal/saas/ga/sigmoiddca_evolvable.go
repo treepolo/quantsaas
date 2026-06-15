@@ -6,12 +6,23 @@ import (
 	"encoding/json"
 	"hash/fnv"
 	"math"
+	"time"
 
 	"quantsaas/internal/quant"
 	"quantsaas/internal/strategies/sigmoiddca"
 )
 
 type SigmoidDCAEvolvable struct{}
+
+type BacktestPoint struct {
+	TimeMs      int64
+	TotalEquity float64
+}
+
+type SigmoidDCAPathResult struct {
+	Metrics BacktestMetrics
+	NAV     []BacktestPoint
+}
 
 func NewSigmoidDCAEvolvable() SigmoidDCAEvolvable {
 	return SigmoidDCAEvolvable{}
@@ -164,8 +175,12 @@ func (SigmoidDCAEvolvable) Verify(ctx context.Context, g Gene, spawn *quant.Spaw
 }
 
 func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, chromosome quant.Chromosome, spawn *quant.SpawnPoint) BacktestMetrics {
+	return RunSigmoidDCAPathBacktest(bars, evalStartMs, chromosome, spawn).Metrics
+}
+
+func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, chromosome quant.Chromosome, spawn *quant.SpawnPoint) SigmoidDCAPathResult {
 	if len(bars) == 0 || bars[0].Close <= 0 {
-		return BacktestMetrics{}
+		return SigmoidDCAPathResult{}
 	}
 
 	params := sigmoiddca.DefaultParams()
@@ -178,10 +193,17 @@ func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, chromosome
 	if portfolio.USDTBalance <= 0 {
 		portfolio.USDTBalance = 1000
 	}
-	totalInjected := portfolio.USDTBalance
+	portfolio.ColdSealedBTC = params.Spawn.Policy.ColdSealedBTC
+	evalInjected := 0.0
+	evalFlows := make([]quant.TimedCashFlow, 0)
 	state := map[string]any{}
-	var nav []float64
+	nav := make([]float64, 0, len(bars))
+	points := make([]BacktestPoint, 0, len(bars))
+	closes := make([]float64, 0, len(bars))
+	timestamps := make([]int64, 0, len(bars))
 	lastYear, lastMonth := barYearMonth(bars[0])
+	evalInitial := 0.0
+	actualEvalStart := int64(0)
 
 	for i, bar := range bars {
 		if bar.Close <= 0 {
@@ -190,16 +212,15 @@ func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, chromosome
 		year, month := barYearMonth(bar)
 		if i > 0 && (year != lastYear || month != lastMonth) && params.Spawn.Policy.MonthlyInjectUSDT > 0 {
 			portfolio.USDTBalance += params.Spawn.Policy.MonthlyInjectUSDT
-			totalInjected += params.Spawn.Policy.MonthlyInjectUSDT
+			if bar.OpenTime > evalStartMs {
+				evalInjected += params.Spawn.Policy.MonthlyInjectUSDT
+				evalFlows = append(evalFlows, quant.TimedCashFlow{TimeMs: bar.OpenTime, Amount: params.Spawn.Policy.MonthlyInjectUSDT})
+			}
 			lastYear, lastMonth = year, month
 		}
 
-		closes := make([]float64, 0, i+1)
-		timestamps := make([]int64, 0, i+1)
-		for _, b := range bars[:i+1] {
-			closes = append(closes, b.Close)
-			timestamps = append(timestamps, b.OpenTime)
-		}
+		closes = append(closes, bar.Close)
+		timestamps = append(timestamps, bar.OpenTime)
 		portfolio.TotalEquity = portfolio.USDTBalance +
 			(portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
 		output := sigmoiddca.Step(quant.StrategyInput{
@@ -216,7 +237,12 @@ func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, chromosome
 
 		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
 		if bar.OpenTime >= evalStartMs {
+			if len(nav) == 0 {
+				evalInitial = equity
+				actualEvalStart = bar.OpenTime
+			}
 			nav = append(nav, equity)
+			points = append(points, BacktestPoint{TimeMs: bar.OpenTime, TotalEquity: equity})
 		}
 	}
 
@@ -224,16 +250,23 @@ func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, chromosome
 	if len(nav) > 0 {
 		final = nav[len(nav)-1]
 	}
-	roi := 0.0
-	if totalInjected > 0 {
-		roi = final/totalInjected - 1
-	}
-	return BacktestMetrics{
-		ROI:           roi,
+	metrics := BacktestMetrics{
+		ROI:           quant.ModifiedDietzROI(evalInitial, final, evalFlows, actualEvalStart, lastBacktestPointTime(points)),
 		MaxDrawdown:   quant.MaxDrawdown(nav),
 		FinalEquity:   final,
-		TotalInjected: totalInjected,
+		TotalInjected: evalInitial + evalInjected,
 	}
+	return SigmoidDCAPathResult{
+		Metrics: metrics,
+		NAV:     points,
+	}
+}
+
+func lastBacktestPointTime(points []BacktestPoint) int64 {
+	if len(points) == 0 {
+		return 0
+	}
+	return points[len(points)-1].TimeMs
 }
 
 func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.StrategyOutput, price float64) quant.PortfolioSnapshot {
@@ -307,7 +340,7 @@ func firstEvalStart(bars []quant.Bar) int64 {
 	return bars[0].OpenTime
 }
 
-func barYearMonth(bar quant.Bar) (int, int) {
-	const monthMs = int64(30 * 24 * 60 * 60 * 1000)
-	return int(bar.OpenTime / (12 * monthMs)), int((bar.OpenTime/monthMs)%12 + 1)
+func barYearMonth(bar quant.Bar) (int, time.Month) {
+	t := time.UnixMilli(bar.OpenTime).UTC()
+	return t.Year(), t.Month()
 }

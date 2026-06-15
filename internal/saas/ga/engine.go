@@ -185,7 +185,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 
 	baselines := make([]DCABaseline, 0, len(windows))
 	for _, window := range windows {
-		dca := quant.SimulateGhostDCA(window.Bars, quant.GhostDCAConfig{
+		dca := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 		})

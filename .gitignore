@@ -8,3 +8,4 @@ web-frontend/dist/
 web-frontend/.tmp/
 .docker-codex-config/
 .tools/
+.cache/

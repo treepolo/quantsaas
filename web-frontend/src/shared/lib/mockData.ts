@@ -90,7 +90,7 @@ export const mockGenomes: GenomeRecord[] = [
     created_at: new Date(now - 3 * 24 * 3600_000).toISOString(),
     score_total: 0.711,
     max_drawdown: 0.196,
-    window_score: { "6m": 0.74, "2y": 0.69, "5y": 0.72, all: 0.71 }
+    window_score: { "6m": 0.74, "2y": 0.69, "5y": 0.72, "10y": 0.71 }
   },
   {
     id: 302,
@@ -98,7 +98,7 @@ export const mockGenomes: GenomeRecord[] = [
     created_at: new Date(now - 1 * 24 * 3600_000).toISOString(),
     score_total: 0.736,
     max_drawdown: 0.183,
-    window_score: { "6m": 0.76, "2y": 0.72, "5y": 0.73, all: 0.75 }
+    window_score: { "6m": 0.76, "2y": 0.72, "5y": 0.73, "10y": 0.75 }
   },
   {
     id: 299,
@@ -106,7 +106,7 @@ export const mockGenomes: GenomeRecord[] = [
     created_at: new Date(now - 11 * 24 * 3600_000).toISOString(),
     score_total: 0.654,
     max_drawdown: 0.238,
-    window_score: { "6m": 0.61, "2y": 0.67, "5y": 0.66, all: 0.65 }
+    window_score: { "6m": 0.61, "2y": 0.67, "5y": 0.66, "10y": 0.65 }
   }
 ];
 
@@ -116,7 +116,8 @@ export const mockBacktest: BacktestResult = {
   total_return: 0.382,
   alpha: 0.117,
   max_drawdown: 0.204,
-  sharpe: 1.28,
+  final_equity: 146200,
+  benchmark: 132400,
   nav: mockEquity(45),
-  windows: { "6 個月": 0.72, "2 年": 0.68, "5 年": 0.71, "全量": 0.7 }
+  windows: { "6m": 0.72, "2y": 0.68, "5y": 0.71, "10y": 0.7 }
 };

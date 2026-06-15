@@ -61,7 +61,7 @@ func BuildCrucibleWindows(bars []Bar, warmupDays int) []CrucibleWindow {
 	}
 
 	windows = append(windows, CrucibleWindow{
-		Label:       "full",
+		Label:       "10y",
 		Weight:      0.40,
 		Bars:        sorted,
 		EvalStartMs: sorted[0].OpenTime,

@@ -28,6 +28,10 @@ const (
 	GeneRoleChallenger = "challenger"
 	GeneRoleChampion   = "champion"
 	GeneRoleRetired    = "retired"
+
+	BacktestStatusRunning   = "running"
+	BacktestStatusCompleted = "completed"
+	BacktestStatusFailed    = "failed"
 )
 
 type User struct {
@@ -175,6 +179,27 @@ type EvolutionTask struct {
 	ErrorMessage string  `gorm:"type:text"`
 	StartedAt    *time.Time
 	FinishedAt   *time.Time
+}
+
+type BacktestRun struct {
+	ID           uint `gorm:"primaryKey"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	UserID       uint   `gorm:"not null;index"`
+	StrategyID   string `gorm:"size:80;not null;index"`
+	InstanceID   *uint  `gorm:"index"`
+	Symbol       string `gorm:"size:32;not null;index"`
+	Interval     string `gorm:"size:16;not null;index"`
+	Source       string `gorm:"size:32;not null;index"`
+	Status       string `gorm:"size:32;not null;index"`
+	Request      JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	Result       JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ErrorMessage string `gorm:"type:text"`
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+
+	User     User              `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+	Instance *StrategyInstance `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
 }
 
 type KLine struct {

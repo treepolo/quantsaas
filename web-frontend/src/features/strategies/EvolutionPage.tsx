@@ -1,10 +1,9 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, FlaskConical, Square } from "lucide-react";
+import { CheckCircle2, FlaskConical } from "lucide-react";
 import { useI18n } from "../../i18n/useI18n";
 import { formatPercent, relativeTime } from "../../shared/lib/format";
-import { mockGenomes, mockInstances, mockTasks } from "../../shared/lib/mockData";
 import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
 import { instancesApi } from "../../shared/services/instances";
 import { Button } from "../../shared/ui/Button";
@@ -14,20 +13,20 @@ import { cn } from "../../shared/lib/cn";
 
 function roleLabel(t: (key: string) => string, role: GenomeRecord["role"]) {
   if (role === "champion") return t("evolution.champion");
-  if (role === "archived") return t("evolution.archived");
+  if (role === "archived" || role === "retired") return t("evolution.archived");
   return t("evolution.candidate");
 }
 
 function windowLabel(key: string) {
-  const map: Record<string, string> = { "6m": "6 個月", "2y": "2 年", "5y": "5 年", all: "全量" };
+  const map: Record<string, string> = { "6m": "6 個月", "2y": "2 年", "5y": "5 年", "10y": "完整歷史" };
   return map[key] ?? key;
 }
 
 function InstancePicker({ selectedId, onSelect }: { selectedId?: number; onSelect: (id: number) => void }) {
   const { t } = useI18n();
-  const { data: instances = mockInstances } = useQuery({
+  const { data: instances = [], isLoading } = useQuery({
     queryKey: ["instances"],
-    queryFn: () => instancesApi.list().catch(() => mockInstances)
+    queryFn: () => instancesApi.list()
   });
   const supported = instances.filter((item) => item.template_id === "sigmoid-dca-btc");
   return (
@@ -38,24 +37,28 @@ function InstancePicker({ selectedId, onSelect }: { selectedId?: number; onSelec
           <CardDescription>{t("evolution.subtitle")}</CardDescription>
         </div>
       </CardHeader>
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {supported.map((instance) => (
-          <button
-            key={instance.id}
-            className={cn(
-              "rounded-lg border p-3 text-left transition",
-              selectedId === instance.id ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10" : "border-white/[0.04] bg-white/[0.02] hover:border-white/10"
-            )}
-            onClick={() => onSelect(instance.id)}
-          >
-            <div className="flex items-center justify-between gap-3">
-              <span className="font-semibold text-slate-100">{instance.name}</span>
-              <StatusBadge status={instance.status} />
-            </div>
-            <div className="mt-2 font-mono text-xs text-slate-500">{instance.symbol}</div>
-          </button>
-        ))}
-      </div>
+      {isLoading ? <div className="text-sm text-slate-500">{t("common.loading")}</div> : null}
+      {!isLoading && supported.length === 0 ? <div className="text-sm text-slate-500">{t("evolution.noInstance")}</div> : null}
+      {supported.length > 0 ? (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {supported.map((instance) => (
+            <button
+              key={instance.id}
+              className={cn(
+                "rounded-lg border p-3 text-left transition",
+                selectedId === instance.id ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10" : "border-white/[0.04] bg-white/[0.02] hover:border-white/10"
+              )}
+              onClick={() => onSelect(instance.id)}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-semibold text-slate-100">{instance.name}</span>
+                <StatusBadge status={instance.status} />
+              </div>
+              <div className="mt-2 font-mono text-xs text-slate-500">{instance.symbol}</div>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -66,26 +69,26 @@ function EvolutionPanel() {
   const [expanded, setExpanded] = useState(false);
   const [population, setPopulation] = useState(300);
   const [generations, setGenerations] = useState(25);
-  const [mode, setMode] = useState<"champion" | "random" | "manual">("champion");
-  const [manualJson, setManualJson] = useState("{\n  \n}");
-  const { data: tasks = mockTasks } = useQuery({
+  const [mode, setMode] = useState<"inherit" | "random_once" | "manual">("inherit");
+  const [manualJson, setManualJson] = useState(
+    '{\n  "policy": {\n    "initial_usdt": 1000,\n    "monthly_inject_usdt": 100,\n    "cold_sealed_btc": 0\n  },\n  "risk": {\n    "max_drawdown_pct": 0.88,\n    "fee_rate": 0.001,\n    "lot_step": 0.000001,\n    "lot_min": 0.00001\n  }\n}'
+  );
+  const { data: overview } = useQuery({
     queryKey: ["evolution-tasks"],
-    queryFn: () => evolutionApi.listTasks().catch(() => mockTasks),
+    queryFn: () => evolutionApi.listTasks(),
     refetchInterval: 5_000
   });
-  const running = tasks.find((task) => task.status === "running");
+  const running = overview?.current_task ?? overview?.tasks.find((task) => task.status === "running");
   const createMutation = useMutation({
     mutationFn: () => {
-      const manual_params = mode === "manual" ? JSON.parse(manualJson || "{}") : undefined;
-      return evolutionApi
-        .createTask({
-          strategy_id: "sigmoid-dca-btc",
-          population_size: population,
-          max_generations: generations,
-          inherit_mode: mode,
-          manual_params
-        })
-        .catch(() => mockTasks[0]);
+      const spawn_point = mode === "manual" ? JSON.parse(manualJson) : undefined;
+      return evolutionApi.createTask({
+        strategy_id: "sigmoid-dca-btc",
+        pop_size: population,
+        max_generations: generations,
+        spawn_mode: mode,
+        spawn_point
+      });
     },
     onSuccess: () => {
       setExpanded(false);
@@ -130,7 +133,6 @@ function EvolutionPanel() {
               <div className="mt-2 font-mono text-2xl text-[#fecaca]">{formatPercent(running.max_drawdown ?? 0)}</div>
             </div>
           </div>
-          <Button variant="danger" icon={Square}>{t("evolution.terminate")}</Button>
         </div>
       </Card>
     );
@@ -173,8 +175,8 @@ function EvolutionPanel() {
             <div className="mb-2 text-sm text-slate-300">{t("evolution.inheritMode")}</div>
             <div className="grid gap-2 md:grid-cols-3">
               {[
-                ["champion", t("evolution.inheritChampion")],
-                ["random", t("evolution.randomExplore")],
+                ["inherit", t("evolution.inheritChampion")],
+                ["random_once", t("evolution.randomExplore")],
                 ["manual", t("evolution.manual")]
               ].map(([value, label]) => (
                 <button
@@ -203,6 +205,7 @@ function EvolutionPanel() {
           ) : null}
           <div className="md:col-span-2">
             <Button type="submit" loading={createMutation.isPending}>{t("evolution.submitTask")}</Button>
+            {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}
           </div>
         </form>
       ) : null}
@@ -212,11 +215,12 @@ function EvolutionPanel() {
 
 function TaskQueueView() {
   const { t } = useI18n();
-  const { data: tasks = mockTasks } = useQuery({
+  const { data: overview, isLoading } = useQuery({
     queryKey: ["evolution-tasks"],
-    queryFn: () => evolutionApi.listTasks().catch(() => mockTasks),
+    queryFn: () => evolutionApi.listTasks(),
     refetchInterval: 5_000
   });
+  const tasks = overview?.tasks ?? [];
   return (
     <Card>
       <CardHeader>
@@ -226,6 +230,8 @@ function TaskQueueView() {
         </div>
       </CardHeader>
       <div className="space-y-3">
+        {isLoading ? <div className="text-sm text-slate-500">{t("common.loading")}</div> : null}
+        {!isLoading && tasks.length === 0 ? <div className="text-sm text-slate-500">{t("evolution.noTasks")}</div> : null}
         {tasks.map((task) => (
           <div key={task.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
             <div>
@@ -253,7 +259,7 @@ function ChampionCard({ champion }: { champion?: GenomeRecord }) {
         <CheckCircle2 className="h-5 w-5 text-[#2dd4bf]" />
       </CardHeader>
       {champion ? (
-        <div className="grid gap-3 md:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2">
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4">
             <div className="text-sm text-slate-500">{t("evolution.bestScore")}</div>
             <div className="mt-2 font-mono text-2xl text-slate-100">{champion.score_total.toFixed(3)}</div>
@@ -262,11 +268,10 @@ function ChampionCard({ champion }: { champion?: GenomeRecord }) {
             <div className="text-sm text-slate-500">{t("evolution.maxDrawdown")}</div>
             <div className="mt-2 font-mono text-2xl text-[#fecaca]">{formatPercent(champion.max_drawdown)}</div>
           </div>
-          <Link to="/" className="flex items-stretch">
-            <Button className="w-full" icon={ArrowRight}>{t("evolution.applyToInstance")}</Button>
-          </Link>
         </div>
-      ) : null}
+      ) : (
+        <div className="text-sm text-slate-500">{t("evolution.noChampion")}</div>
+      )}
     </Card>
   );
 }
@@ -276,10 +281,11 @@ function GenomeLibrary({ genomes }: { genomes: GenomeRecord[] }) {
   const [confirmPromote, setConfirmPromote] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const promoteMutation = useMutation({
-    mutationFn: (id: number) => evolutionApi.promote(id).catch(() => ({ status: "ok" })),
+    mutationFn: (id: number) => evolutionApi.promote(id),
     onSuccess: () => {
       setConfirmPromote(null);
       queryClient.invalidateQueries({ queryKey: ["genomes"] });
+      queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
     }
   });
   return (
@@ -318,6 +324,7 @@ function GenomeLibrary({ genomes }: { genomes: GenomeRecord[] }) {
                   <Button onClick={() => setConfirmPromote(genome.id)}>{t("evolution.promote")}</Button>
                 )
               ) : null}
+              {promoteMutation.error && confirmPromote === genome.id ? <div className="text-sm text-[#fecaca]">{String(promoteMutation.error.message)}</div> : null}
               <Link to={`/backtesting?genome=${genome.id}`}>
                 <Button variant="secondary">{t("evolution.viewBacktest")}</Button>
               </Link>
@@ -333,12 +340,12 @@ export function EvolutionPage() {
   const { t } = useI18n();
   const [params, setParams] = useSearchParams();
   const [tab, setTab] = useState<"optimize" | "library">("optimize");
-  const selectedId = Number(params.get("instance")) || mockInstances[0].id;
-  const { data: genomes = mockGenomes } = useQuery({
+  const selectedId = Number(params.get("instance")) || undefined;
+  const { data: genomes = [] } = useQuery({
     queryKey: ["genomes"],
-    queryFn: () => evolutionApi.listGenomes().catch(() => mockGenomes)
+    queryFn: () => evolutionApi.listGenomes()
   });
-  const champion = useMemo(() => genomes.find((item) => item.role === "champion") ?? genomes[0], [genomes]);
+  const champion = useMemo(() => genomes.find((item) => item.role === "champion"), [genomes]);
 
   return (
     <section className="space-y-4">
@@ -368,7 +375,7 @@ export function EvolutionPage() {
           <ChampionCard champion={champion} />
         </div>
       ) : (
-        <GenomeLibrary genomes={genomes} />
+        genomes.length > 0 ? <GenomeLibrary genomes={genomes} /> : <Card className="p-4 text-sm text-slate-500">{t("evolution.noGenomes")}</Card>
       )}
     </section>
   );

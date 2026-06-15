@@ -5,7 +5,6 @@ import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, X
 import { PlayCircle } from "lucide-react";
 import { useI18n } from "../../i18n/useI18n";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
-import { mockBacktest, mockGenomes, mockInstances } from "../../shared/lib/mockData";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
 import { evolutionApi } from "../../shared/services/evolution";
 import { instancesApi } from "../../shared/services/instances";
@@ -13,33 +12,38 @@ import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
 
+function windowLabel(key: string) {
+  const map: Record<string, string> = { "6m": "6 個月", "2y": "2 年", "5y": "5 年", "10y": "完整歷史" };
+  return map[key] ?? key;
+}
+
 export function BacktestingPage() {
   const { t } = useI18n();
   const [params] = useSearchParams();
   const [source, setSource] = useState<"champion" | "candidate" | "custom">("champion");
-  const [candidateId, setCandidateId] = useState(Number(params.get("genome")) || mockGenomes[1].id);
+  const [candidateId, setCandidateId] = useState(Number(params.get("genome")) || 0);
   const [customJson, setCustomJson] = useState("{\n  \n}");
-  const [result, setResult] = useState<BacktestResult | null>(mockBacktest);
-  const { data: instances = mockInstances } = useQuery({
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const { data: instances = [] } = useQuery({
     queryKey: ["instances"],
-    queryFn: () => instancesApi.list().catch(() => mockInstances)
+    queryFn: () => instancesApi.list()
   });
-  const { data: genomes = mockGenomes } = useQuery({
+  const { data: genomes = [] } = useQuery({
     queryKey: ["genomes"],
-    queryFn: () => evolutionApi.listGenomes().catch(() => mockGenomes)
+    queryFn: () => evolutionApi.listGenomes()
   });
-  const candidates = genomes.filter((genome) => genome.role !== "archived");
+  const candidates = genomes.filter((genome) => genome.role === "candidate" || genome.role === "challenger");
   const selectedInstance = useMemo(() => instances[0], [instances]);
   const startMutation = useMutation({
     mutationFn: async () => {
+      const selectedCandidateId = candidateId || candidates[0]?.id;
       const payload = {
         instance_id: selectedInstance?.id,
         source,
-        candidate_id: candidateId,
+        candidate_id: source === "candidate" ? selectedCandidateId : undefined,
         custom_params: source === "custom" ? JSON.parse(customJson || "{}") : undefined
       };
-      await backtestsApi.create(payload).catch(() => ({ id: mockBacktest.id }));
-      return mockBacktest;
+      return backtestsApi.create(payload);
     },
     onSuccess: setResult
   });
@@ -90,7 +94,7 @@ export function BacktestingPage() {
           {source === "candidate" ? (
             <select
               className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              value={candidateId}
+              value={candidateId || candidates[0]?.id || ""}
               onChange={(event) => setCandidateId(Number(event.target.value))}
             >
               {candidates.map((genome) => (
@@ -107,7 +111,11 @@ export function BacktestingPage() {
               onChange={(event) => setCustomJson(event.target.value)}
             />
           ) : null}
-          <Button icon={PlayCircle} loading={startMutation.isPending} type="submit">{t("backtesting.start")}</Button>
+          <Button icon={PlayCircle} loading={startMutation.isPending} type="submit" disabled={source === "candidate" && candidates.length === 0}>
+            {t("backtesting.start")}
+          </Button>
+          {source === "candidate" && candidates.length === 0 ? <div className="text-sm text-slate-500">{t("backtesting.noCandidate")}</div> : null}
+          {startMutation.error ? <div className="text-sm text-[#fecaca]">{String(startMutation.error.message)}</div> : null}
         </form>
       </Card>
       {result ? (
@@ -117,7 +125,7 @@ export function BacktestingPage() {
               [t("backtesting.totalReturn"), formatPercent(result.total_return), "text-[#bbf7d0]"],
               [t("backtesting.alpha"), formatPercent(result.alpha), "text-[#99f6e4]"],
               [t("backtesting.maxDrawdown"), formatPercent(result.max_drawdown), "text-[#fecaca]"],
-              [t("backtesting.sharpe"), (result.sharpe ?? 0).toFixed(2), "text-slate-100"]
+              [t("backtesting.finalEquity"), formatMoney(result.final_equity), "text-slate-100"]
             ].map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>
@@ -165,14 +173,16 @@ export function BacktestingPage() {
             <div className="grid gap-3 md:grid-cols-4">
               {Object.entries(result.windows).map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4">
-                  <div className="text-sm text-slate-500">{label}</div>
+                  <div className="text-sm text-slate-500">{windowLabel(label)}</div>
                   <div className="mt-2 font-mono text-xl text-slate-100">{value.toFixed(2)}</div>
                 </div>
               ))}
             </div>
           </Card>
         </>
-      ) : null}
+      ) : (
+        <Card className="p-4 text-sm text-slate-500">{t("backtesting.noResult")}</Card>
+      )}
     </section>
   );
 }
