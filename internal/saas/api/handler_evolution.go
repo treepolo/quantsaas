@@ -49,6 +49,21 @@ func (h *EvolutionHandler) CreateTask(c *gin.Context) {
 }
 
 func (h *EvolutionHandler) ListTasks(c *gin.Context) {
+	if h.service != nil && h.service.CurrentTask() == nil {
+		now := time.Now().UTC()
+		if err := h.db.WithContext(c.Request.Context()).
+			Model(&saasstore.EvolutionTask{}).
+			Where("status = ?", epoch.TaskStatusRunning).
+			Updates(map[string]any{
+				"status":        epoch.TaskStatusFailed,
+				"error_message": "服務曾重啟或任務中斷，請重新建立任務",
+				"finished_at":   &now,
+			}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	var tasks []saasstore.EvolutionTask
 	if err := h.db.WithContext(c.Request.Context()).
 		Order("created_at DESC").
@@ -178,7 +193,12 @@ func championCacheKey(strategyID string) string {
 
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
-		MaxGenerations int `json:"max_generations"`
+		Pair           string `json:"pair"`
+		Interval       string `json:"interval"`
+		PopSize        int    `json:"pop_size"`
+		MaxGenerations int    `json:"max_generations"`
+		SpawnMode      string `json:"spawn_mode"`
+		TestMode       bool   `json:"test_mode"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -186,23 +206,49 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		currentGeneration = int(math.Round(task.Progress * float64(cfg.MaxGenerations)))
 	}
 	var result struct {
-		Fitness struct {
+		CurrentGeneration   int     `json:"current_generation"`
+		BestScore           float64 `json:"best_score"`
+		MutationProbability float64 `json:"mutation_probability"`
+		MutationScale       float64 `json:"mutation_scale"`
+		UpdatedAt           string  `json:"updated_at"`
+		Fitness             struct {
 			ScoreTotal  float64 `json:"ScoreTotal"`
 			MaxDrawdown float64 `json:"MaxDrawdown"`
 		} `json:"Fitness"`
 	}
 	_ = json.Unmarshal([]byte(task.Result), &result)
+	if result.CurrentGeneration > 0 {
+		currentGeneration = result.CurrentGeneration
+	}
+	bestScore := result.BestScore
+	if bestScore == 0 {
+		bestScore = result.Fitness.ScoreTotal
+	}
+	totalEvaluations := currentGeneration * cfg.PopSize
+	totalPlannedEvaluations := cfg.PopSize * cfg.MaxGenerations
 	return gin.H{
-		"id":                 task.ID,
-		"status":             task.Status,
-		"progress":           task.Progress,
-		"current_generation": currentGeneration,
-		"max_generations":    cfg.MaxGenerations,
-		"best_score":         result.Fitness.ScoreTotal,
-		"max_drawdown":       result.Fitness.MaxDrawdown,
-		"created_at":         task.CreatedAt.Format(time.RFC3339),
-		"started_at":         formatOptionalTime(task.StartedAt),
-		"finished_at":        formatOptionalTime(task.FinishedAt),
+		"id":                    task.ID,
+		"strategy_id":           task.StrategyID,
+		"status":                task.Status,
+		"progress":              task.Progress,
+		"current_generation":    currentGeneration,
+		"max_generations":       cfg.MaxGenerations,
+		"pop_size":              cfg.PopSize,
+		"pair":                  cfg.Pair,
+		"interval":              cfg.Interval,
+		"spawn_mode":            cfg.SpawnMode,
+		"test_mode":             cfg.TestMode,
+		"best_score":            bestScore,
+		"max_drawdown":          result.Fitness.MaxDrawdown,
+		"mutation_probability":  result.MutationProbability,
+		"mutation_scale":        result.MutationScale,
+		"evaluated_individuals": totalEvaluations,
+		"planned_evaluations":   totalPlannedEvaluations,
+		"monitor_updated_at":    result.UpdatedAt,
+		"error":                 task.ErrorMessage,
+		"created_at":            task.CreatedAt.Format(time.RFC3339),
+		"started_at":            formatOptionalTime(task.StartedAt),
+		"finished_at":           formatOptionalTime(task.FinishedAt),
 	}
 }
 

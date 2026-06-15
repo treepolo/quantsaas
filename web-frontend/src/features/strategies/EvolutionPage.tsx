@@ -1,9 +1,9 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, FlaskConical } from "lucide-react";
+import { Activity, CheckCircle2, FlaskConical } from "lucide-react";
 import { useI18n } from "../../i18n/useI18n";
-import { formatPercent, relativeTime } from "../../shared/lib/format";
+import { formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
 import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
@@ -29,6 +29,11 @@ const intervalOptions = [
   ["1m", "1 分鐘"]
 ];
 
+function monitorValue(value: string | number | undefined) {
+  if (value === undefined || value === "") return "等待回報";
+  return value;
+}
+
 function EvolutionPanel() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -43,7 +48,7 @@ function EvolutionPanel() {
   const { data: overview } = useQuery({
     queryKey: ["evolution-tasks"],
     queryFn: () => evolutionApi.listTasks(),
-    refetchInterval: 5_000
+    refetchInterval: 2_000
   });
   const running = overview?.current_task ?? overview?.tasks.find((task) => task.status === "running");
   const createMutation = useMutation({
@@ -72,6 +77,9 @@ function EvolutionPanel() {
   if (running) {
     const current = running.current_generation ?? Math.round((running.progress || 0) * (running.max_generations ?? 25));
     const max = running.max_generations ?? 25;
+    const progressPct = Math.min(100, Math.round((running.progress || 0) * 100));
+    const evaluated = running.evaluated_individuals ?? current * (running.pop_size ?? 0);
+    const planned = running.planned_evaluations ?? (running.pop_size ?? 0) * max;
     return (
       <Card>
         <CardHeader>
@@ -82,13 +90,36 @@ function EvolutionPanel() {
           <StatusBadge status="running" />
         </CardHeader>
         <div className="space-y-4">
+          <div className="rounded-lg border border-[#2dd4bf]/20 bg-[#2dd4bf]/[0.06] p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#99f6e4]">
+              <Activity className="h-4 w-4" />
+              {t("evolution.monitor")}
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {[
+                [t("evolution.taskId"), `#${running.id}`],
+                [t("evolution.dataset"), `${running.pair ?? "BTCUSDT"} · ${running.interval ?? "1d"}`],
+                [t("evolution.population"), running.pop_size?.toLocaleString("zh-TW")],
+                [t("evolution.progress"), `${progressPct}%`],
+                [t("evolution.evaluated"), planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")],
+                [t("evolution.mutationProbability"), running.mutation_probability !== undefined ? formatPercent(running.mutation_probability) : undefined],
+                [t("evolution.mutationScale"), running.mutation_scale?.toFixed(2)],
+                [t("evolution.lastMonitorUpdate"), running.monitor_updated_at ? shortDateTime(running.monitor_updated_at) : undefined]
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-white/[0.04] bg-slate-950/30 p-3">
+                  <div className="text-xs text-slate-500">{label}</div>
+                  <div className="mt-1 font-mono text-sm text-slate-100">{monitorValue(value)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
           <div>
             <div className="mb-2 flex justify-between text-sm">
               <span className="text-slate-400">{t("evolution.currentGeneration")}</span>
               <span className="font-mono text-slate-200">{current} / {max}</span>
             </div>
             <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-              <div className="h-full rounded-full bg-[#2dd4bf]" style={{ width: `${Math.min(100, running.progress * 100)}%` }} />
+              <div className="h-full rounded-full bg-[#2dd4bf]" style={{ width: `${progressPct}%` }} />
             </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2">
@@ -215,13 +246,16 @@ function TaskQueueView() {
         {isLoading ? <div className="text-sm text-slate-500">{t("common.loading")}</div> : null}
         {!isLoading && tasks.length === 0 ? <div className="text-sm text-slate-500">{t("evolution.noTasks")}</div> : null}
         {tasks.map((task) => (
-          <div key={task.id} className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-            <div>
-              <div className="font-mono text-sm text-slate-200">#{task.id}</div>
-              <div className="mt-1 text-xs text-slate-500">{relativeTime(task.created_at)}</div>
+          <div key={task.id} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="font-mono text-sm text-slate-200">#{task.id}</div>
+                <div className="mt-1 text-xs text-slate-500">{relativeTime(task.created_at)}</div>
+              </div>
+              <StatusBadge status={task.status} />
+              <div className="text-right font-mono text-sm text-slate-300">{((task.best_score ?? 0) * 100).toFixed(1)}</div>
             </div>
-            <StatusBadge status={task.status} />
-            <div className="text-right font-mono text-sm text-slate-300">{((task.best_score ?? 0) * 100).toFixed(1)}</div>
+            {task.error ? <div className="mt-2 text-xs text-[#fecaca]">{task.error}</div> : null}
           </div>
         ))}
       </div>

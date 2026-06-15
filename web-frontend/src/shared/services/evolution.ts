@@ -2,12 +2,24 @@ import { apiFetch } from "./client";
 
 export type EvolutionTask = {
   id: number;
+  strategy_id?: string;
   status: "pending" | "running" | "completed" | "failed";
   progress: number;
   current_generation?: number;
   max_generations?: number;
+  pop_size?: number;
+  pair?: string;
+  interval?: string;
+  spawn_mode?: "inherit" | "random_once" | "manual";
+  test_mode?: boolean;
   best_score?: number;
   max_drawdown?: number;
+  mutation_probability?: number;
+  mutation_scale?: number;
+  evaluated_individuals?: number;
+  planned_evaluations?: number;
+  monitor_updated_at?: string;
+  error?: string;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;

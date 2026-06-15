@@ -98,8 +98,16 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 
 func (s *Service) CurrentTask() *saasstore.EvolutionTask {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.currentTask
+	task := s.currentTask
+	s.mu.Unlock()
+	if task == nil {
+		return nil
+	}
+	var latest saasstore.EvolutionTask
+	if err := s.db.First(&latest, task.ID).Error; err != nil {
+		return task
+	}
+	return &latest
 }
 
 func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
@@ -113,10 +121,18 @@ func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.Spaw
 		LotMinQty:          spawn.Risk.LotMin,
 		SpawnPointOverride: spawn,
 		OnProgress: func(progress ga.EpochProgress) {
+			raw, _ := json.Marshal(map[string]any{
+				"current_generation":   progress.Generation + 1,
+				"best_score":           progress.BestFitness,
+				"mutation_probability": progress.MutationProbability,
+				"mutation_scale":       progress.MutationScale,
+				"updated_at":           time.Now().UTC().Format(time.RFC3339),
+			})
 			_ = s.db.Model(&saasstore.EvolutionTask{}).
 				Where("id = ?", taskID).
 				Updates(map[string]any{
 					"progress": float64(progress.Generation+1) / float64(max(1, req.MaxGenerations)),
+					"result":   saasstore.JSONB(raw),
 				}).Error
 		},
 	})

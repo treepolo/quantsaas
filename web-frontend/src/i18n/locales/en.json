@@ -96,7 +96,15 @@
   "evolution": {
     "title": "Optimization Lab",
     "subtitle": "Create candidate parameters and review whether to promote them as the current best.",
-    "interval": "Data interval"
+    "interval": "Data interval",
+    "monitor": "Compute Monitor",
+    "taskId": "Task ID",
+    "dataset": "Dataset",
+    "progress": "Progress",
+    "evaluated": "Evaluated",
+    "mutationProbability": "Mutation probability",
+    "mutationScale": "Mutation scale",
+    "lastMonitorUpdate": "Backend update"
   },
   "backtesting": {
     "interval": "Data interval"
