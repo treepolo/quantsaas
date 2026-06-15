@@ -5,6 +5,7 @@
     "slogan": "Keep strategy, capital, and execution aligned."
   },
   "nav": {
+    "research": "Research",
     "dashboard": "Dashboard",
     "templates": "Templates",
     "instances": "Instances",
@@ -65,5 +66,19 @@
     "passwordMismatch": "Passwords do not match",
     "authFailed": "Authentication failed.",
     "restoreFailed": "Session expired."
+  },
+  "research": {
+    "title": "Research",
+    "subtitle": "Parameter search, backtesting, and historical market datasets.",
+    "evolutionTitle": "Optimization Lab",
+    "evolutionBody": "Create evolution tasks, review candidates, and promote the current best parameter set.",
+    "backtestingTitle": "Backtesting",
+    "backtestingBody": "Compare parameter performance against the passive DCA benchmark.",
+    "dataTitle": "Market Dataset",
+    "dataBody": "No historical market data has been imported yet."
+  },
+  "evolution": {
+    "title": "Optimization Lab",
+    "subtitle": "Create candidate parameters and review whether to promote them as the current best."
   }
 }

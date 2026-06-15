@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -7,7 +7,6 @@ import { useI18n } from "../../i18n/useI18n";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
 import { evolutionApi } from "../../shared/services/evolution";
-import { instancesApi } from "../../shared/services/instances";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
@@ -24,21 +23,16 @@ export function BacktestingPage() {
   const [candidateId, setCandidateId] = useState(Number(params.get("genome")) || 0);
   const [customJson, setCustomJson] = useState("{\n  \n}");
   const [result, setResult] = useState<BacktestResult | null>(null);
-  const { data: instances = [] } = useQuery({
-    queryKey: ["instances"],
-    queryFn: () => instancesApi.list()
-  });
   const { data: genomes = [] } = useQuery({
     queryKey: ["genomes"],
     queryFn: () => evolutionApi.listGenomes()
   });
   const candidates = genomes.filter((genome) => genome.role === "candidate" || genome.role === "challenger");
-  const selectedInstance = useMemo(() => instances[0], [instances]);
   const startMutation = useMutation({
     mutationFn: async () => {
       const selectedCandidateId = candidateId || candidates[0]?.id;
       const payload = {
-        instance_id: selectedInstance?.id,
+        symbol: "BTCUSDT",
         source,
         candidate_id: source === "candidate" ? selectedCandidateId : undefined,
         custom_params: source === "custom" ? JSON.parse(customJson || "{}") : undefined
@@ -67,7 +61,7 @@ export function BacktestingPage() {
       <Card>
         <CardHeader>
           <div>
-            <CardTitle>{selectedInstance?.name ?? t("dashboard.noInstance")}</CardTitle>
+            <CardTitle>BTCUSDT</CardTitle>
             <CardDescription>{t("backtesting.source")}</CardDescription>
           </div>
         </CardHeader>

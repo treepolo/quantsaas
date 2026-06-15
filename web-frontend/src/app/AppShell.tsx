@@ -1,9 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, LogOut } from "lucide-react";
 import { AppBackground } from "./AppBackground";
-import { ReconciliationModal } from "./ReconciliationModal";
 import { useAuth } from "./AuthProvider";
 import { useI18n } from "../i18n/useI18n";
 import { hasFeature } from "../shared/config/features";
@@ -56,42 +55,13 @@ function Sidebar() {
   );
 }
 
-function Indicator({ label, value, tone }: { label: string; value: string; tone: "safe" | "warn" | "danger" | "muted" }) {
-  const tones = {
-    safe: "bg-[#34d399] text-[#bbf7d0]",
-    warn: "bg-[#fbbf24] text-[#fde68a]",
-    danger: "bg-[#f87171] text-[#fecaca]",
-    muted: "bg-slate-500 text-slate-300"
-  };
-  return (
-    <div className="hidden items-center gap-2 rounded-full border border-white/5 bg-white/[0.03] px-3 py-1.5 text-xs sm:flex">
-      <span className={cn("h-1.5 w-1.5 rounded-full", tones[tone].split(" ")[0])} />
-      <span className="text-slate-500">{label}</span>
-      <span className={cn("font-medium", tones[tone].split(" ")[1])}>{value}</span>
-    </div>
-  );
-}
-
 function Topbar() {
   const { t } = useI18n();
   const { user, logout } = useAuth();
-  const status = useSystemStatusStore((state) => state.status);
   const navigate = useNavigate();
-  const engineTone = status.engine_status === "running" ? "safe" : status.engine_status === "paused" ? "warn" : "danger";
 
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-end gap-3 border-b border-white/[0.04] bg-[#020617]/50 px-4 backdrop-blur-xl lg:px-6">
-      <Indicator
-        label={t("topbar.apiKey")}
-        value={status.api_configured ? t("common.configured") : t("common.notConfigured")}
-        tone={status.api_configured ? "safe" : "warn"}
-      />
-      <Indicator
-        label={t("topbar.agent")}
-        value={status.api_connected ? t("common.online") : t("common.offline")}
-        tone={status.api_connected ? "safe" : "muted"}
-      />
-      <Indicator label={t("topbar.engine")} value={t(`status.${status.engine_status}`)} tone={engineTone} />
       <div className="flex items-center gap-2 rounded-lg border border-white/5 bg-white/[0.03] px-2 py-1.5">
         <button
           className="flex max-w-[180px] items-center gap-2 truncate px-1 text-sm text-slate-300"
@@ -107,9 +77,7 @@ function Topbar() {
 }
 
 export function AppShell() {
-  const [dismissedReconcile, setDismissedReconcile] = useState(false);
   const setStatus = useSystemStatusStore((state) => state.setStatus);
-  const status = useSystemStatusStore((state) => state.status);
 
   const { data } = useQuery({
     queryKey: ["system-status"],
@@ -133,7 +101,6 @@ export function AppShell() {
           </div>
         </main>
       </div>
-      {status.requires_reconcile && !dismissedReconcile ? <ReconciliationModal onClose={() => setDismissedReconcile(true)} /> : null}
     </div>
   );
 }

@@ -1,11 +1,10 @@
 import { FormEvent, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FlaskConical } from "lucide-react";
 import { useI18n } from "../../i18n/useI18n";
 import { formatPercent, relativeTime } from "../../shared/lib/format";
 import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
-import { instancesApi } from "../../shared/services/instances";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { StatusBadge } from "../../shared/ui/StatusBadge";
@@ -20,47 +19,6 @@ function roleLabel(t: (key: string) => string, role: GenomeRecord["role"]) {
 function windowLabel(key: string) {
   const map: Record<string, string> = { "6m": "6 個月", "2y": "2 年", "5y": "5 年", "10y": "完整歷史" };
   return map[key] ?? key;
-}
-
-function InstancePicker({ selectedId, onSelect }: { selectedId?: number; onSelect: (id: number) => void }) {
-  const { t } = useI18n();
-  const { data: instances = [], isLoading } = useQuery({
-    queryKey: ["instances"],
-    queryFn: () => instancesApi.list()
-  });
-  const supported = instances.filter((item) => item.template_id === "sigmoid-dca-btc");
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>{t("evolution.selectInstance")}</CardTitle>
-          <CardDescription>{t("evolution.subtitle")}</CardDescription>
-        </div>
-      </CardHeader>
-      {isLoading ? <div className="text-sm text-slate-500">{t("common.loading")}</div> : null}
-      {!isLoading && supported.length === 0 ? <div className="text-sm text-slate-500">{t("evolution.noInstance")}</div> : null}
-      {supported.length > 0 ? (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {supported.map((instance) => (
-            <button
-              key={instance.id}
-              className={cn(
-                "rounded-lg border p-3 text-left transition",
-                selectedId === instance.id ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10" : "border-white/[0.04] bg-white/[0.02] hover:border-white/10"
-              )}
-              onClick={() => onSelect(instance.id)}
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="font-semibold text-slate-100">{instance.name}</span>
-                <StatusBadge status={instance.status} />
-              </div>
-              <div className="mt-2 font-mono text-xs text-slate-500">{instance.symbol}</div>
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </Card>
-  );
 }
 
 function EvolutionPanel() {
@@ -338,9 +296,7 @@ function GenomeLibrary({ genomes }: { genomes: GenomeRecord[] }) {
 
 export function EvolutionPage() {
   const { t } = useI18n();
-  const [params, setParams] = useSearchParams();
   const [tab, setTab] = useState<"optimize" | "library">("optimize");
-  const selectedId = Number(params.get("instance")) || undefined;
   const { data: genomes = [] } = useQuery({
     queryKey: ["genomes"],
     queryFn: () => evolutionApi.listGenomes()
@@ -353,7 +309,6 @@ export function EvolutionPage() {
         <h1 className="text-2xl font-bold text-slate-100">{t("evolution.title")}</h1>
         <p className="mt-1 text-sm text-slate-400">{t("evolution.subtitle")}</p>
       </div>
-      <InstancePicker selectedId={selectedId} onSelect={(id) => setParams({ instance: String(id) })} />
       <div className="flex w-fit rounded-lg border border-white/[0.06] bg-white/[0.03] p-1">
         {[
           ["optimize", t("evolution.optimize")],

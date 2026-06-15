@@ -5,6 +5,7 @@
     "slogan": "讓策略、資產與執行端保持同步。"
   },
   "nav": {
+    "research": "研究總覽",
     "dashboard": "總覽",
     "templates": "策略模板",
     "instances": "實例管理",
@@ -94,6 +95,16 @@
     "monthlyTrades": "本月成交",
     "noInstance": "尚未建立策略實例"
   },
+  "research": {
+    "title": "研究總覽",
+    "subtitle": "目前聚焦在參數優化、回測與歷史行情資料集。",
+    "evolutionTitle": "優化實驗室",
+    "evolutionBody": "建立進化任務、查看候選參數，並審核是否晉升為目前最優。",
+    "backtestingTitle": "回測",
+    "backtestingBody": "用歷史資料檢查參數表現，並與被動定投基準比較。",
+    "dataTitle": "行情資料集",
+    "dataBody": "尚未匯入歷史行情資料。"
+  },
   "templates": {
     "title": "策略模板",
     "subtitle": "選擇適合的資產管理邏輯，建立可追蹤、可優化的策略實例。",
@@ -129,7 +140,7 @@
   },
   "evolution": {
     "title": "優化實驗室",
-    "subtitle": "針對已支援的策略實例，建立候選參數並審核是否晉升。",
+    "subtitle": "建立候選參數並審核是否晉升為目前最優。",
     "optimize": "參數優化",
     "library": "參數庫",
     "selectInstance": "選擇實例",
