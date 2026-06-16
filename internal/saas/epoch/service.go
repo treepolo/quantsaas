@@ -383,6 +383,9 @@ func validateRequest(req CreateTaskRequest) error {
 	if !marketdata.IsSupportedExecutionMode(req.ExecutionMode) {
 		return fmt.Errorf("unsupported execution mode: %s", req.ExecutionMode)
 	}
+	if req.ExecutionMode == marketdata.ExecutionModePreclose10m {
+		return errors.New("收盤前 10 分鐘模式需要歷史快照搜尋路徑，目前尚未開放，不能用日 K 假裝參數搜尋")
+	}
 	if req.TrainStartMs > 0 && req.TrainEndMs > 0 && req.TrainStartMs > req.TrainEndMs {
 		return errors.New("train_start_ms must be earlier than train_end_ms")
 	}

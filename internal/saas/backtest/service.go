@@ -214,13 +214,14 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		return nil, fmt.Errorf("尚未匯入 %s %s 的 K 線資料", req.Symbol, req.Interval)
 	}
 
-	path := ga.RunSigmoidDCAPathBacktest(bars, bars[0].OpenTime, req.Interval, params.Chromosome, &spawn)
+	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn)
 	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
+		UseOpenExecution:  req.ExecutionMode == marketdata.ExecutionModeCloseNextOpen,
 	})
 	alpha := path.Metrics.ROI - baseline.ROI
-	windows, windowDetails := scoreWindows(bars, req.Interval, params.Chromosome, &spawn)
+	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn)
 
 	return &Response{
 		ID:            runID,
@@ -393,6 +394,9 @@ func validateBasicRequest(req CreateRequest) error {
 	if !marketdata.IsSupportedExecutionMode(req.ExecutionMode) {
 		return fmt.Errorf("unsupported execution mode: %s", req.ExecutionMode)
 	}
+	if req.ExecutionMode == marketdata.ExecutionModePreclose10m {
+		return errors.New("收盤前 10 分鐘模式需要歷史快照回測路徑，目前尚未開放，不能用日 K 假裝回測")
+	}
 	if req.StartTimeMs > 0 && req.EndTimeMs > 0 && req.StartTimeMs > req.EndTimeMs {
 		return errors.New("start_time_ms must be earlier than end_time_ms")
 	}
@@ -482,15 +486,16 @@ func normalizeSpawnPoint(spawn *quant.SpawnPoint) error {
 	return nil
 }
 
-func scoreWindows(bars []quant.Bar, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) (map[string]float64, []WindowResult) {
+func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) (map[string]float64, []WindowResult) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
 	for _, window := range windows {
-		metrics := ga.RunSigmoidDCASingleBacktest(window.Bars, window.EvalStartMs, interval, chromosome, spawn)
+		metrics := ga.RunSigmoidDCASingleBacktestWithMode(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn)
 		baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
+			UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
 		})
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown)

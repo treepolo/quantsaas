@@ -20,6 +20,7 @@ type DCABaseline struct {
 type EvaluablePlan struct {
 	Pair           string
 	Interval       string
+	ExecutionMode  string
 	TemplateName   string
 	Spawn          *quant.SpawnPoint
 	LotStep        float64

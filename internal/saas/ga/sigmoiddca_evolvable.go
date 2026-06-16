@@ -12,6 +12,12 @@ import (
 	"quantsaas/internal/strategies/sigmoiddca"
 )
 
+const (
+	executionModeCloseSameBar  = "close_same_bar"
+	executionModeCloseNextOpen = "close_next_open"
+	executionModePreclose10m   = "preclose_10m"
+)
+
 type SigmoidDCAEvolvable struct{}
 
 type BacktestPoint struct {
@@ -130,7 +136,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			"window":     window.Label,
 			"bars":       len(window.Bars),
 		})
-		metrics := RunSigmoidDCASingleBacktestWithTrace(window.Bars, window.EvalStartMs, plan.Interval, c, plan.Spawn, PathTraceConfig{
+		metrics := RunSigmoidDCASingleBacktestWithTraceAndMode(window.Bars, window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
 			Trace:         plan.Trace,
 			Mode:          plan.TraceMode,
 			TraceModeFunc: plan.TraceModeFunc,
@@ -220,6 +226,10 @@ func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, interval s
 	return RunSigmoidDCAPathBacktest(bars, evalStartMs, interval, chromosome, spawn).Metrics
 }
 
+func RunSigmoidDCASingleBacktestWithMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) BacktestMetrics {
+	return RunSigmoidDCAPathBacktestWithMode(bars, evalStartMs, interval, executionMode, chromosome, spawn).Metrics
+}
+
 type PathTraceConfig struct {
 	Trace         func(TraceEvent)
 	Mode          TraceMode
@@ -234,12 +244,25 @@ func RunSigmoidDCASingleBacktestWithTrace(bars []quant.Bar, evalStartMs int64, i
 	return RunSigmoidDCAPathBacktestWithTrace(bars, evalStartMs, interval, chromosome, spawn, traceCfg).Metrics
 }
 
+func RunSigmoidDCASingleBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) BacktestMetrics {
+	return RunSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg).Metrics
+}
+
 func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) SigmoidDCAPathResult {
 	return RunSigmoidDCAPathBacktestWithTrace(bars, evalStartMs, interval, chromosome, spawn, PathTraceConfig{})
 }
 
+func RunSigmoidDCAPathBacktestWithMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) SigmoidDCAPathResult {
+	return RunSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{})
+}
+
 func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
-	if len(bars) == 0 || bars[0].Close <= 0 {
+	return RunSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionModeCloseSameBar, chromosome, spawn, traceCfg)
+}
+
+func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
+	executionMode = normalizeBacktestExecutionMode(executionMode)
+	if len(bars) == 0 || bars[0].Close <= 0 || executionMode == executionModePreclose10m {
 		return SigmoidDCAPathResult{}
 	}
 	if interval == "" {
@@ -267,6 +290,8 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 	lastYear, lastMonth := barYearMonth(bars[0])
 	evalInitial := 0.0
 	actualEvalStart := int64(0)
+	pendingOutput := quant.StrategyOutput{}
+	hasPendingOutput := false
 
 	for i, bar := range bars {
 		if bar.Close <= 0 {
@@ -280,6 +305,13 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 				evalFlows = append(evalFlows, quant.TimedCashFlow{TimeMs: bar.OpenTime, Amount: params.Spawn.Policy.MonthlyInjectUSDT})
 			}
 			lastYear, lastMonth = year, month
+		}
+		if usesNextOpenExecution(executionMode) && hasPendingOutput {
+			if bar.Open <= 0 {
+				return SigmoidDCAPathResult{}
+			}
+			portfolio = applyBacktestOutput(portfolio, pendingOutput, bar.Open)
+			hasPendingOutput = false
 		}
 
 		closes = append(closes, bar.Close)
@@ -296,7 +328,12 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 			Spawn:        params.Spawn,
 		}, params)
 		state = output.RuntimeState
-		portfolio = applyBacktestOutput(portfolio, output, bar.Close)
+		if usesNextOpenExecution(executionMode) {
+			pendingOutput = output
+			hasPendingOutput = true
+		} else {
+			portfolio = applyBacktestOutput(portfolio, output, bar.Close)
+		}
 
 		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
 		if TraceEnabled(activePathTraceMode(traceCfg), TraceModeFull) {
@@ -308,6 +345,7 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 				"bar_index":       i,
 				"open_time":       bar.OpenTime,
 				"close":           bar.Close,
+				"execution_mode":  executionMode,
 				"total_equity":    equity,
 				"usdt_balance":    portfolio.USDTBalance,
 				"dead_btc":        portfolio.DeadBTC,
@@ -342,6 +380,19 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 		Metrics: metrics,
 		NAV:     points,
 	}
+}
+
+func normalizeBacktestExecutionMode(mode string) string {
+	switch mode {
+	case executionModeCloseNextOpen, executionModePreclose10m:
+		return mode
+	default:
+		return executionModeCloseSameBar
+	}
+}
+
+func usesNextOpenExecution(mode string) bool {
+	return normalizeBacktestExecutionMode(mode) == executionModeCloseNextOpen
 }
 
 func trace(plan EvaluablePlan, required TraceMode, source string, scope string, message string, fields map[string]any) {

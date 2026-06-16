@@ -288,6 +288,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		dca := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
+			UseOpenExecution:  usesNextOpenExecution(cfg.ExecutionMode),
 		})
 		baselines = append(baselines, DCABaseline{
 			FinalEquity:   dca.FinalEquity,
@@ -309,6 +310,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 	return EvaluablePlan{
 		Pair:           cfg.Pair,
 		Interval:       cfg.Interval,
+		ExecutionMode:  cfg.ExecutionMode,
 		TemplateName:   e.evolvable.StrategyID(),
 		Spawn:          spawn,
 		LotStep:        cfg.LotStepSize,
