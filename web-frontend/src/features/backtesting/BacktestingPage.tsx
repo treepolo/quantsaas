@@ -1,50 +1,216 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { PlayCircle } from "lucide-react";
-import { useI18n } from "../../i18n/useI18n";
+import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
-import { evolutionApi } from "../../shared/services/evolution";
+import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
+import { marketDataApi } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
+
+type ScaleMode = "absolute" | "log";
+type ValueMode = "nav" | "relative";
+type ChartRange = { start: number; end: number };
+type PanDrag = { startX: number; range: ChartRange; width: number };
+type ChartPoint = {
+  label: string;
+  time_ms: number;
+  time: string;
+  total_assets: number;
+  benchmark?: number;
+  strategy_value?: number;
+  benchmark_value?: number;
+};
+
+const executionModes = [
+  ["close_same_bar", "收盤同根"],
+  ["close_next_open", "隔日開盤"],
+  ["preclose_10m", "收盤前 10 分鐘"]
+] as const;
+
+const intervalLabels: Record<string, string> = {
+  "1d": "日 K",
+  "1h": "1 小時",
+  "15m": "15 分鐘",
+  "5m": "5 分鐘",
+  "1m": "1 分鐘",
+  "1s": "1 秒"
+};
+
+const dayMs = 24 * 60 * 60 * 1000;
+
+function roleLabel(role: GenomeRecord["role"]) {
+  if (role === "champion") return "已採用";
+  if (role === "retired" || role === "archived") return "已封存";
+  return "候選";
+}
 
 function windowLabel(key: string) {
   const map: Record<string, string> = { "6m": "6 個月", "2y": "2 年", "5y": "5 年", "10y": "完整歷史" };
   return map[key] ?? key;
 }
 
-const intervalOptions = [
-  ["1d", "1 天"],
-  ["1h", "1 小時"],
-  ["15m", "15 分鐘"],
-  ["5m", "5 分鐘"],
-  ["1m", "1 分鐘"]
-];
+function formatAxisTime(value: string) {
+  return new Intl.DateTimeFormat("zh-TW", { year: "2-digit", month: "2-digit", day: "2-digit" }).format(new Date(value));
+}
+
+function formatFullAxisTime(value: number | string) {
+  return new Intl.DateTimeFormat("zh-TW", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Number(value)));
+}
+
+function formatTick(value: number | string, mode: "year" | "month" | "day") {
+  const date = new Date(Number(value));
+  if (mode === "year") return new Intl.DateTimeFormat("zh-TW", { year: "numeric" }).format(date);
+  if (mode === "month") return new Intl.DateTimeFormat("zh-TW", { year: "2-digit", month: "2-digit" }).format(date);
+  return new Intl.DateTimeFormat("zh-TW", { month: "2-digit", day: "2-digit" }).format(date);
+}
+
+function genomeLabel(genome: GenomeRecord, instrumentNames: Record<string, string>) {
+  const instrument = instrumentNames[genome.instrument_id ?? ""] ?? genome.instrument_id ?? "未知標的";
+  return `#${genome.id} - ${roleLabel(genome.role)} - ${instrument} - ${genome.score_total.toFixed(3)}`;
+}
+
+function clampRangeBySize(start: number, size: number, length: number): ChartRange {
+  const clampedSize = Math.max(1, Math.min(length, size));
+  let nextStart = Math.max(0, Math.min(start, length - clampedSize));
+  if (!Number.isFinite(nextStart)) nextStart = 0;
+  return { start: nextStart, end: nextStart + clampedSize - 1 };
+}
+
+function toChartValue(value: number | undefined, mode: ScaleMode) {
+  const safe = Math.max(1, value ?? 1);
+  return mode === "log" ? Math.log10(safe) : safe;
+}
+
+function fromChartValue(value: number | string, mode: ScaleMode) {
+  const numeric = Number(value);
+  return mode === "log" ? Math.pow(10, numeric) : numeric;
+}
+
+function formatRelativeIndex(value: number) {
+  return value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function limitTicks(values: number[], maxTicks: number) {
+  if (values.length <= maxTicks) return values;
+  const step = Math.ceil(values.length / maxTicks);
+  return values.filter((_, index) => index % step === 0);
+}
+
+function firstTickBy(points: ChartPoint[], keyFor: (date: Date) => string) {
+  const seen = new Set<string>();
+  const out: number[] = [];
+  for (const point of points) {
+    const key = keyFor(new Date(point.time_ms));
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(point.time_ms);
+    }
+  }
+  return out;
+}
+
+function spacedTicks(points: ChartPoint[], stepDays: number, maxTicks: number) {
+  if (!points.length) return [];
+  const out: number[] = [];
+  let last = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    if (point.time_ms - last >= stepDays * dayMs) {
+      out.push(point.time_ms);
+      last = point.time_ms;
+    }
+  }
+  return limitTicks(out, maxTicks);
+}
+
+function buildAxisTicks(points: ChartPoint[]) {
+  if (points.length === 0) {
+    return { ticks: [] as number[], formatter: (value: number | string) => String(value) };
+  }
+  const first = points[0].time_ms;
+  const last = points[points.length - 1].time_ms;
+  const spanDays = Math.max(1, (last - first) / dayMs);
+
+  if (spanDays > 900) {
+    const ticks = firstTickBy(points, (date) => String(date.getFullYear()));
+    return { ticks: limitTicks(ticks, 8), formatter: (value: number | string) => formatTick(value, "year") };
+  }
+  if (spanDays > 370) {
+    const ticks = firstTickBy(points, (date) => `${date.getFullYear()}-${Math.floor(date.getMonth() / 3)}`);
+    return { ticks: limitTicks(ticks, 8), formatter: (value: number | string) => formatTick(value, "month") };
+  }
+  if (spanDays > 120) {
+    const ticks = firstTickBy(points, (date) => `${date.getFullYear()}-${date.getMonth()}`);
+    return { ticks: limitTicks(ticks, 10), formatter: (value: number | string) => formatTick(value, "month") };
+  }
+  if (spanDays > 45) {
+    return { ticks: spacedTicks(points, 14, 9), formatter: (value: number | string) => formatTick(value, "day") };
+  }
+  if (spanDays > 18) {
+    return { ticks: spacedTicks(points, 7, 10), formatter: (value: number | string) => formatTick(value, "day") };
+  }
+  if (points.length <= 32) {
+    return { ticks: points.map((point) => point.time_ms), formatter: (value: number | string) => formatTick(value, "day") };
+  }
+  return { ticks: spacedTicks(points, Math.max(1, Math.ceil(spanDays / 14)), 14), formatter: (value: number | string) => formatTick(value, "day") };
+}
+
+function dateStartMs(value: string) {
+  if (!value) return undefined;
+  const ms = new Date(`${value}T00:00:00`).getTime();
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+function dateEndMs(value: string) {
+  if (!value) return undefined;
+  const ms = new Date(`${value}T23:59:59.999`).getTime();
+  return Number.isFinite(ms) ? ms : undefined;
+}
 
 export function BacktestingPage() {
-  const { t } = useI18n();
   const [params] = useSearchParams();
-  const [source, setSource] = useState<"champion" | "candidate" | "custom">("champion");
+  const initialGenome = Number(params.get("genome")) || 0;
+  const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
+  const instruments = instrumentsQuery.data?.instruments ?? [];
+  const instrumentNames = useMemo(() => Object.fromEntries(instruments.map((item) => [item.id, item.display_name])), [instruments]);
+  const [instrumentId, setInstrumentId] = useState("BTCUSDT");
+  const selectedInstrument = instruments.find((item) => item.id === instrumentId);
   const [interval, setInterval] = useState("1d");
-  const [candidateId, setCandidateId] = useState(Number(params.get("genome")) || 0);
+  const [executionMode, setExecutionMode] = useState("close_same_bar");
+  const [source, setSource] = useState<"champion" | "candidate" | "custom">("champion");
+  const [candidateId, setCandidateId] = useState(initialGenome);
   const [customJson, setCustomJson] = useState("{\n  \n}");
+  const [backtestStart, setBacktestStart] = useState("");
+  const [backtestEnd, setBacktestEnd] = useState("");
   const [result, setResult] = useState<BacktestResult | null>(null);
-  const { data: genomes = [] } = useQuery({
-    queryKey: ["genomes"],
-    queryFn: () => evolutionApi.listGenomes()
-  });
-  const candidates = genomes.filter((genome) => genome.role === "candidate" || genome.role === "challenger");
+  const [range, setRange] = useState<ChartRange | null>(null);
+  const [scaleMode, setScaleMode] = useState<ScaleMode>("absolute");
+  const [valueMode, setValueMode] = useState<ValueMode>("nav");
+  const rangeRef = useRef<ChartRange | null>(null);
+  const chartLengthRef = useRef(0);
+  const panDragRef = useRef<PanDrag | null>(null);
+  const chartLayerRef = useRef<HTMLDivElement | null>(null);
+  const [isPanning, setIsPanning] = useState(false);
+  const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
+  const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
+  const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes[0];
+  const isCrossInstrument = source === "candidate" && selectedGenome?.instrument_id && selectedGenome.instrument_id !== instrumentId;
+
   const startMutation = useMutation({
     mutationFn: async () => {
-      const selectedCandidateId = candidateId || candidates[0]?.id;
       const payload = {
-        symbol: "BTCUSDT",
+        instrument_id: instrumentId,
+        data_source: selectedInstrument?.data_source,
+        symbol: selectedInstrument?.symbol ?? instrumentId,
         interval,
+        execution_mode: executionMode,
+        start_time_ms: dateStartMs(backtestStart),
+        end_time_ms: dateEndMs(backtestEnd),
         source,
-        candidate_id: source === "candidate" ? selectedCandidateId : undefined,
+        candidate_id: source === "candidate" ? selectedGenome?.id : undefined,
         custom_params: source === "custom" ? JSON.parse(customJson || "{}") : undefined
       };
       return backtestsApi.create(payload);
@@ -52,98 +218,209 @@ export function BacktestingPage() {
     onSuccess: setResult
   });
 
+  const chartData = useMemo(
+    () =>
+      (result?.nav ?? []).map((item) => ({
+        ...item,
+        label: formatAxisTime(item.time),
+        time_ms: new Date(item.time).getTime()
+      })),
+    [result]
+  );
+
+  useEffect(() => {
+    setRange(chartData.length ? { start: 0, end: chartData.length - 1 } : null);
+  }, [chartData.length]);
+
+  useEffect(() => {
+    rangeRef.current = range;
+  }, [range]);
+
+  useEffect(() => {
+    chartLengthRef.current = chartData.length;
+  }, [chartData.length]);
+
+  const visibleRawChartData = useMemo(() => {
+    if (!range) return chartData;
+    return chartData.slice(range.start, range.end + 1);
+  }, [chartData, range]);
+  const visibleChartData = useMemo(() => {
+    if (visibleRawChartData.length === 0) return [];
+    const baseStrategy = Math.max(1, visibleRawChartData[0].total_assets);
+    const baseBenchmark = Math.max(1, visibleRawChartData[0].benchmark ?? visibleRawChartData[0].total_assets);
+    return visibleRawChartData.map((item) => {
+      const strategyRaw = valueMode === "relative" ? (item.total_assets / baseStrategy) * 100 : item.total_assets;
+      const benchmarkRaw = valueMode === "relative" ? ((item.benchmark ?? item.total_assets) / baseBenchmark) * 100 : item.benchmark ?? item.total_assets;
+      return {
+        ...item,
+        strategy_value: toChartValue(strategyRaw, scaleMode),
+        benchmark_value: toChartValue(benchmarkRaw, scaleMode)
+      };
+    });
+  }, [visibleRawChartData, scaleMode, valueMode]);
+  const axisTicks = useMemo(() => buildAxisTicks(visibleChartData), [visibleChartData]);
+
+  useEffect(() => {
+    const element = chartLayerRef.current;
+    if (!element) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      zoomRangeFromWheel(event.deltaY, event.clientX, element.getBoundingClientRect());
+    };
+    element.addEventListener("wheel", handleWheel, { passive: false });
+    return () => element.removeEventListener("wheel", handleWheel);
+  }, [chartData.length]);
+
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     startMutation.mutate();
   }
 
-  const chartData = (result?.nav ?? []).map((item) => ({
-    ...item,
-    label: new Intl.DateTimeFormat("zh-TW", { month: "2-digit", day: "2-digit" }).format(new Date(item.time))
-  }));
+  function changeInstrument(nextId: string) {
+    const next = instruments.find((item) => item.id === nextId);
+    setInstrumentId(nextId);
+    setInterval(next?.supported_intervals[0] ?? "1d");
+  }
+
+  function zoomRangeFromWheel(deltaY: number, clientX: number, rect: DOMRect) {
+    if (chartLengthRef.current < 3) return;
+    setRange((currentRange) => {
+      const length = chartLengthRef.current;
+      if (!currentRange || length < 3) return currentRange;
+      const currentSize = currentRange.end - currentRange.start + 1;
+      const nextSize = Math.round(currentSize * (deltaY < 0 ? 0.75 : 1.35));
+      const clampedSize = Math.max(Math.min(10, length), Math.min(length, nextSize));
+      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+      const center = currentRange.start + Math.round((currentSize - 1) * ratio);
+      const nextStart = center - Math.round((clampedSize - 1) * ratio);
+      return clampRangeBySize(nextStart, clampedSize, length);
+    });
+  }
+
+  function beginPan(event: ReactMouseEvent<HTMLDivElement>) {
+    if (![0, 1].includes(event.button) || !rangeRef.current || chartLengthRef.current < 2) return;
+    event.preventDefault();
+    event.stopPropagation();
+    panDragRef.current = {
+      startX: event.clientX,
+      range: rangeRef.current,
+      width: Math.max(1, event.currentTarget.clientWidth)
+    };
+    setIsPanning(true);
+  }
+
+  function movePan(event: ReactMouseEvent<HTMLDivElement>) {
+    const drag = panDragRef.current;
+    if (!drag) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const size = drag.range.end - drag.range.start + 1;
+    const barsPerPixel = size / drag.width;
+    const shift = Math.round((drag.startX - event.clientX) * barsPerPixel);
+    setRange(clampRangeBySize(drag.range.start + shift, size, chartLengthRef.current));
+  }
+
+  function endPan(event: ReactMouseEvent<HTMLDivElement>) {
+    if (panDragRef.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      panDragRef.current = null;
+      setIsPanning(false);
+    }
+  }
+
+  function resetRange() {
+    setRange(chartData.length ? { start: 0, end: chartData.length - 1 } : null);
+  }
+
+  const axisFormatter = (value: number | string) => {
+    const display = fromChartValue(value, scaleMode);
+    if (valueMode === "relative") {
+      return display >= 100 ? display.toFixed(0) : display.toFixed(1);
+    }
+    if (display >= 1_000_000) return `${(display / 1_000_000).toFixed(1)}M`;
+    if (display >= 1_000) return `${Math.round(display / 1_000)}k`;
+    return Math.round(display).toString();
+  };
+
+  const tooltipFormatter = (value: number | string, name: string) => {
+    const display = fromChartValue(value, scaleMode);
+    if (valueMode === "relative") {
+      return [formatRelativeIndex(display), name];
+    }
+    return [formatMoney(display), name];
+  };
 
   return (
     <section className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold text-slate-100">{t("backtesting.title")}</h1>
-        <p className="mt-1 text-sm text-slate-400">{t("backtesting.subtitle")}</p>
+        <h1 className="text-2xl font-bold text-slate-100">回測</h1>
+        <p className="mt-1 text-sm text-slate-400">選擇標的、參數來源與執行設定，檢查同一組參數在不同市場中的表現。</p>
       </div>
+
       <Card>
         <CardHeader>
           <div>
-            <CardTitle>BTCUSDT</CardTitle>
-            <CardDescription>{t("backtesting.source")}</CardDescription>
+            <CardTitle>{selectedInstrument?.display_name ?? "研究標的"}</CardTitle>
+            <CardDescription>可使用本標的採用參數，也可指定候選參數做跨商品回測。</CardDescription>
           </div>
         </CardHeader>
-        <form className="space-y-4" onSubmit={submit}>
-          <label className="block max-w-xs">
-            <span className="mb-2 block text-sm text-slate-300">{t("backtesting.interval")}</span>
-            <select
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              value={interval}
-              onChange={(event) => setInterval(event.target.value)}
-            >
-              {intervalOptions.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="grid gap-2 md:grid-cols-3">
-            {[
-              ["champion", t("backtesting.useChampion")],
-              ["candidate", t("backtesting.useCandidate")],
-              ["custom", t("backtesting.customJson")]
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={cn(
-                  "rounded-lg border px-3 py-2 text-sm transition",
-                  source === value ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.04] text-slate-400"
-                )}
-                onClick={() => setSource(value as typeof source)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+        <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
+          <Select label="回測商品" value={instrumentId} onChange={changeInstrument} options={instruments.map((item) => [item.id, item.display_name])} />
+          <Select label="資料週期" value={interval} onChange={setInterval} options={(selectedInstrument?.supported_intervals ?? ["1d"]).map((item) => [item, intervalLabels[item] ?? item])} />
+          <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes} />
+          <Select
+            label="參數來源"
+            value={source}
+            onChange={(value) => setSource(value as typeof source)}
+            options={[
+              ["champion", "使用此商品採用參數"],
+              ["candidate", "指定任一參數包"],
+              ["custom", "自訂 JSON"]
+            ]}
+          />
+          <DateInput label="回測開始日" value={backtestStart} onChange={setBacktestStart} />
+          <DateInput label="回測結束日" value={backtestEnd} onChange={setBacktestEnd} />
+
           {source === "candidate" ? (
-            <select
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              value={candidateId || candidates[0]?.id || ""}
-              onChange={(event) => setCandidateId(Number(event.target.value))}
-            >
-              {candidates.map((genome) => (
-                <option key={genome.id} value={genome.id}>
-                  #{genome.id} · {genome.score_total.toFixed(3)}
-                </option>
-              ))}
-            </select>
+            <label className="md:col-span-2">
+              <span className="mb-2 block text-sm text-slate-300">參數包</span>
+              <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={selectedGenome?.id ?? ""} onChange={(event) => setCandidateId(Number(event.target.value))}>
+                {selectableGenomes.map((genome) => (
+                  <option key={genome.id} value={genome.id}>
+                    {genomeLabel(genome, instrumentNames)}
+                  </option>
+                ))}
+              </select>
+              {isCrossInstrument ? <div className="mt-2 text-xs text-[#fde68a]">跨商品回測：此參數來自 {instrumentNames[selectedGenome.instrument_id ?? ""] ?? selectedGenome.instrument_id}，目前套用到 {selectedInstrument?.display_name ?? instrumentId}。</div> : null}
+            </label>
           ) : null}
+
           {source === "custom" ? (
-            <textarea
-              className="h-40 w-full rounded-lg border border-slate-700 bg-slate-950/80 p-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              value={customJson}
-              onChange={(event) => setCustomJson(event.target.value)}
-            />
+            <textarea className="h-40 w-full rounded-lg border border-slate-700 bg-slate-950/80 p-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf] md:col-span-2" value={customJson} onChange={(event) => setCustomJson(event.target.value)} />
           ) : null}
-          <Button icon={PlayCircle} loading={startMutation.isPending} type="submit" disabled={source === "candidate" && candidates.length === 0}>
-            {t("backtesting.start")}
-          </Button>
-          {source === "candidate" && candidates.length === 0 ? <div className="text-sm text-slate-500">{t("backtesting.noCandidate")}</div> : null}
-          {startMutation.error ? <div className="text-sm text-[#fecaca]">{String(startMutation.error.message)}</div> : null}
+
+          {executionMode === "preclose_10m" ? <div className="text-xs text-[#fde68a] md:col-span-2">此模式需要已匯入收盤前 10 分鐘快照。若資料不足，請先到資料頁匯入包含快照的日 K 資料。</div> : null}
+
+          <div className="md:col-span-2">
+            <Button icon={PlayCircle} loading={startMutation.isPending} type="submit" disabled={source === "candidate" && selectableGenomes.length === 0}>
+              開始回測
+            </Button>
+            {source === "candidate" && selectableGenomes.length === 0 ? <div className="mt-2 text-sm text-slate-500">尚無可回測的參數。</div> : null}
+            {startMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(startMutation.error.message)}</div> : null}
+          </div>
         </form>
       </Card>
+
       {result ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {[
-              [t("backtesting.totalReturn"), formatPercent(result.total_return), "text-[#bbf7d0]"],
-              [t("backtesting.alpha"), formatPercent(result.alpha), "text-[#99f6e4]"],
-              [t("backtesting.maxDrawdown"), formatPercent(result.max_drawdown), "text-[#fecaca]"],
-              [t("backtesting.finalEquity"), formatMoney(result.final_equity), "text-slate-100"]
+              ["總報酬", formatPercent(result.total_return), "text-[#bbf7d0]"],
+              ["超額報酬", formatPercent(result.alpha), "text-[#99f6e4]"],
+              ["最大回撤", formatPercent(result.max_drawdown), "text-[#fecaca]"],
+              ["期末權益", formatMoney(result.final_equity), "text-slate-100"]
             ].map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>
@@ -151,16 +428,48 @@ export function BacktestingPage() {
               </Card>
             ))}
           </div>
+
           <Card>
-            <CardHeader>
+            <CardHeader className="items-center">
               <div>
-                <CardTitle>{t("backtesting.nav")}</CardTitle>
-                <CardDescription>{t("backtesting.benchmark")}</CardDescription>
+                <CardTitle>淨值曲線</CardTitle>
+                <CardDescription>滾輪縮放；拖曳圖表或按住滑鼠滾輪左右拖動可平移時間範圍。</CardDescription>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-1" aria-label="顯示模式">
+                  <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", valueMode === "nav" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setValueMode("nav")}>
+                    實際淨值
+                  </button>
+                  <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", valueMode === "relative" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setValueMode("relative")}>
+                    區間相對
+                  </button>
+                </div>
+                <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-1" aria-label="刻度模式">
+                  <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", scaleMode === "absolute" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setScaleMode("absolute")}>
+                    絕對值
+                  </button>
+                  <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", scaleMode === "log" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setScaleMode("log")}>
+                    對數
+                  </button>
+                </div>
+                <Button icon={RotateCcw} variant="secondary" onClick={resetRange}>
+                  重設
+                </Button>
               </div>
             </CardHeader>
-            <div className="h-80">
+            <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+              <span className="inline-flex items-center gap-2" data-testid="backtest-visible-count">
+                <ZoomIn className="h-4 w-4" />
+                顯示 {visibleChartData.length.toLocaleString("zh-TW")} / {chartData.length.toLocaleString("zh-TW")} 筆
+              </span>
+              <span className="inline-flex items-center gap-2">
+                <BarChart3 className="h-4 w-4" />
+                {valueMode === "relative" ? "左側起點 = 100" : scaleMode === "log" ? "對數刻度" : "絕對值刻度"}
+              </span>
+            </div>
+            <div className="relative h-96 overflow-hidden rounded-lg border border-white/[0.04] bg-slate-950/30 p-2">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={chartData} margin={{ left: 0, right: 10, top: 10, bottom: 0 }}>
+                <AreaChart data={visibleChartData} margin={{ left: 0, right: 10, top: 10, bottom: 30 }}>
                   <defs>
                     <linearGradient id="backtestFill" x1="0" x2="0" y1="0" y2="1">
                       <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.3} />
@@ -168,24 +477,39 @@ export function BacktestingPage() {
                     </linearGradient>
                   </defs>
                   <CartesianGrid stroke="rgba(148,163,184,0.08)" vertical={false} />
-                  <XAxis dataKey="label" stroke="#64748b" tickLine={false} axisLine={false} fontSize={12} />
-                  <YAxis stroke="#64748b" tickLine={false} axisLine={false} fontSize={12} tickFormatter={(value) => `${Math.round(value / 1000)}k`} />
+                  <XAxis dataKey="time_ms" ticks={axisTicks.ticks} tickFormatter={axisTicks.formatter} stroke="#64748b" tickLine={false} axisLine={false} fontSize={11} interval={0} minTickGap={24} />
+                  <YAxis stroke="#64748b" tickLine={false} axisLine={false} fontSize={12} tickFormatter={axisFormatter} domain={["auto", "auto"]} />
                   <Tooltip
                     contentStyle={{ background: "#020617", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}
-                    formatter={(value: number) => [formatMoney(value), "USDT"]}
+                    formatter={tooltipFormatter}
+                    labelFormatter={(value) => formatFullAxisTime(value)}
                   />
                   <Legend />
-                  <Area name={t("backtesting.result")} type="monotone" dataKey="total_assets" stroke="#2dd4bf" strokeWidth={2} fill="url(#backtestFill)" />
-                  <Area name={t("backtesting.benchmark")} type="monotone" dataKey="benchmark" stroke="#64748b" strokeDasharray="5 5" fill="transparent" />
+                  <Area name="策略結果" type="monotone" dataKey="strategy_value" stroke="#2dd4bf" strokeWidth={2} fill="url(#backtestFill)" isAnimationActive={false} />
+                  <Area name="基準" type="monotone" dataKey="benchmark_value" stroke="#64748b" strokeDasharray="5 5" fill="transparent" isAnimationActive={false} />
                 </AreaChart>
               </ResponsiveContainer>
+              <div
+                aria-label="圖表互動區"
+                data-testid="backtest-chart-layer"
+                ref={chartLayerRef}
+                className={cn("absolute inset-x-2 bottom-14 top-2 z-10 cursor-grab select-none touch-none overscroll-contain rounded-md", isPanning && "cursor-grabbing")}
+                onMouseDown={beginPan}
+                onMouseMove={movePan}
+                onMouseUp={endPan}
+                onMouseLeave={endPan}
+                onAuxClick={(event) => {
+                  if (event.button === 1) event.preventDefault();
+                }}
+              />
             </div>
           </Card>
+
           <Card>
             <CardHeader>
               <div>
-                <CardTitle>{t("backtesting.windows")}</CardTitle>
-                <CardDescription>{t("backtesting.subtitle")}</CardDescription>
+                <CardTitle>窗口評分</CardTitle>
+                <CardDescription>同一參數在不同歷史視窗中的表現。</CardDescription>
               </div>
             </CardHeader>
             <div className="grid gap-3 md:grid-cols-4">
@@ -199,8 +523,47 @@ export function BacktestingPage() {
           </Card>
         </>
       ) : (
-        <Card className="p-4 text-sm text-slate-500">{t("backtesting.noResult")}</Card>
+        <Card className="p-4 text-sm text-slate-500">尚無回測結果。</Card>
       )}
     </section>
+  );
+}
+
+function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <label>
+      <span className="mb-2 block text-sm text-slate-300">{label}</span>
+      <input
+        className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
+        type="date"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function Select({
+  label,
+  value,
+  onChange,
+  options
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: ReadonlyArray<readonly [string, string]>;
+}) {
+  return (
+    <label>
+      <span className="mb-2 block text-sm text-slate-300">{label}</span>
+      <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map(([optionValue, optionLabel]) => (
+          <option key={optionValue} value={optionValue}>
+            {optionLabel}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

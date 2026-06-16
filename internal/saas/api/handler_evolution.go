@@ -7,12 +7,14 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/config"
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/ga"
+	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -156,6 +158,26 @@ func (h *EvolutionHandler) SetTraceMode(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"task_id": taskID, "mode": mode})
 }
 
+func (h *EvolutionHandler) CancelTask(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "此功能僅允許 lab/dev 模式"})
+		return
+	}
+	if h.service == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "evolution service unavailable"})
+		return
+	}
+	taskID, ok := parseUintParam(c, "taskID")
+	if !ok {
+		return
+	}
+	if err := h.service.CancelTask(c.Request.Context(), uint(taskID)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": epoch.TaskStatusCancelled, "task_id": taskID})
+}
+
 func (h *EvolutionHandler) Promote(c *gin.Context) {
 	if !h.canUseLab() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "此功能僅允許 lab/dev 模式"})
@@ -169,11 +191,12 @@ func (h *EvolutionHandler) Promote(c *gin.Context) {
 
 	var promoted saasstore.GeneRecord
 	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("id = ? AND role = ?", id, saasstore.GeneRoleChallenger).First(&promoted).Error; err != nil {
+		if err := tx.Where("id = ? AND role IN ?", id, []string{saasstore.GeneRoleChallenger, saasstore.GeneRoleRetired}).First(&promoted).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&saasstore.GeneRecord{}).
-			Where("strategy_id = ? AND role = ?", promoted.StrategyID, saasstore.GeneRoleChampion).
+			Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
+				promoted.StrategyID, promoted.InstrumentID, promoted.DataSource, promoted.Interval, promoted.ExecutionMode, saasstore.GeneRoleChampion).
 			Update("role", saasstore.GeneRoleRetired).Error; err != nil {
 			return err
 		}
@@ -208,6 +231,7 @@ func (h *EvolutionHandler) GetChampion(c *gin.Context) {
 
 	var record saasstore.GeneRecord
 	if err := h.db.WithContext(c.Request.Context()).
+		Scopes(geneScopeFromQuery(c)).
 		Where("strategy_id = ? AND role = ?", strategyID, saasstore.GeneRoleChampion).
 		Order("activated_at DESC NULLS LAST, created_at DESC").
 		First(&record).Error; err != nil {
@@ -232,6 +256,11 @@ func championCacheKey(strategyID string) string {
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
 		Pair           string `json:"pair"`
+		InstrumentID   string `json:"instrument_id"`
+		DataSource     string `json:"data_source"`
+		ExecutionMode  string `json:"execution_mode"`
+		TrainStartMs   int64  `json:"train_start_ms"`
+		TrainEndMs     int64  `json:"train_end_ms"`
 		Interval       string `json:"interval"`
 		PopSize        int    `json:"pop_size"`
 		MaxGenerations int    `json:"max_generations"`
@@ -282,6 +311,11 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"max_generations":       cfg.MaxGenerations,
 		"pop_size":              cfg.PopSize,
 		"pair":                  cfg.Pair,
+		"instrument_id":         firstNonEmpty(task.InstrumentID, cfg.InstrumentID),
+		"data_source":           firstNonEmpty(task.DataSource, cfg.DataSource),
+		"execution_mode":        firstNonEmpty(task.ExecutionMode, cfg.ExecutionMode),
+		"train_start_ms":        firstNonZero(task.TrainStartMs, cfg.TrainStartMs),
+		"train_end_ms":          firstNonZero(task.TrainEndMs, cfg.TrainEndMs),
 		"interval":              cfg.Interval,
 		"spawn_mode":            cfg.SpawnMode,
 		"test_mode":             cfg.TestMode,
@@ -312,14 +346,59 @@ func genePtrResponse(record *saasstore.GeneRecord) any {
 
 func geneResponse(record saasstore.GeneRecord) gin.H {
 	return gin.H{
-		"id":           record.ID,
-		"role":         record.Role,
-		"created_at":   record.CreatedAt.Format(time.RFC3339),
-		"score_total":  record.ScoreTotal,
-		"max_drawdown": record.MaxDrawdown,
-		"window_score": parseWindowScores(record.WindowScore),
-		"param_pack":   parseRawJSON(json.RawMessage(record.ParamPack)),
+		"id":             record.ID,
+		"role":           record.Role,
+		"strategy_id":    record.StrategyID,
+		"instrument_id":  record.InstrumentID,
+		"data_source":    record.DataSource,
+		"interval":       record.Interval,
+		"execution_mode": record.ExecutionMode,
+		"created_at":     record.CreatedAt.Format(time.RFC3339),
+		"score_total":    record.ScoreTotal,
+		"max_drawdown":   record.MaxDrawdown,
+		"window_score":   parseWindowScores(record.WindowScore),
+		"param_pack":     parseRawJSON(json.RawMessage(record.ParamPack)),
 	}
+}
+
+func geneScopeFromQuery(c *gin.Context) func(*gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		instrumentID := strings.TrimSpace(c.Query("instrument_id"))
+		if instrumentID != "" {
+			db = db.Where("instrument_id = ?", strings.ToUpper(instrumentID))
+		}
+		dataSource := strings.TrimSpace(c.Query("data_source"))
+		if dataSource != "" {
+			db = db.Where("data_source = ?", strings.ToLower(dataSource))
+		}
+		interval := strings.TrimSpace(c.Query("interval"))
+		if interval != "" {
+			db = db.Where("interval = ?", interval)
+		}
+		executionMode := marketdata.NormalizeExecutionMode(c.Query("execution_mode"))
+		if c.Query("execution_mode") != "" {
+			db = db.Where("execution_mode = ?", executionMode)
+		}
+		return db
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstNonZero(values ...int64) int64 {
+	for _, value := range values {
+		if value != 0 {
+			return value
+		}
+	}
+	return 0
 }
 
 func parseWindowScores(raw saasstore.JSONB) map[string]float64 {

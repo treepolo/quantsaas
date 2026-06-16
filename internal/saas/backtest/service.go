@@ -11,6 +11,7 @@ import (
 
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/ga"
+	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -30,16 +31,21 @@ type Service struct {
 }
 
 type CreateRequest struct {
-	StrategyID   string            `json:"strategy_id"`
-	InstanceID   uint              `json:"instance_id"`
-	Pair         string            `json:"pair"`
-	Symbol       string            `json:"symbol"`
-	Interval     string            `json:"interval"`
-	Source       string            `json:"source"`
-	CandidateID  uint              `json:"candidate_id"`
-	GenomeID     uint              `json:"genome_id"`
-	CustomParams json.RawMessage   `json:"custom_params"`
-	SpawnPoint   *quant.SpawnPoint `json:"spawn_point"`
+	StrategyID    string            `json:"strategy_id"`
+	InstanceID    uint              `json:"instance_id"`
+	InstrumentID  string            `json:"instrument_id"`
+	DataSource    string            `json:"data_source"`
+	ExecutionMode string            `json:"execution_mode"`
+	StartTimeMs   int64             `json:"start_time_ms"`
+	EndTimeMs     int64             `json:"end_time_ms"`
+	Pair          string            `json:"pair"`
+	Symbol        string            `json:"symbol"`
+	Interval      string            `json:"interval"`
+	Source        string            `json:"source"`
+	CandidateID   uint              `json:"candidate_id"`
+	GenomeID      uint              `json:"genome_id"`
+	CustomParams  json.RawMessage   `json:"custom_params"`
+	SpawnPoint    *quant.SpawnPoint `json:"spawn_point"`
 }
 
 type EquitySnapshot struct {
@@ -63,6 +69,9 @@ type Response struct {
 	Status        string             `json:"status"`
 	StrategyID    string             `json:"strategy_id"`
 	Symbol        string             `json:"symbol"`
+	InstrumentID  string             `json:"instrument_id"`
+	DataSource    string             `json:"data_source"`
+	ExecutionMode string             `json:"execution_mode"`
 	Interval      string             `json:"interval"`
 	Source        string             `json:"source"`
 	TotalReturn   float64            `json:"total_return"`
@@ -105,15 +114,20 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*
 	}
 	now := time.Now().UTC()
 	run := saasstore.BacktestRun{
-		UserID:     userID,
-		StrategyID: req.StrategyID,
-		InstanceID: instanceID,
-		Symbol:     req.Symbol,
-		Interval:   req.Interval,
-		Source:     req.Source,
-		Status:     saasstore.BacktestStatusRunning,
-		Request:    saasstore.JSONB(requestRaw),
-		StartedAt:  &now,
+		UserID:        userID,
+		StrategyID:    req.StrategyID,
+		InstanceID:    instanceID,
+		InstrumentID:  req.InstrumentID,
+		DataSource:    req.DataSource,
+		ExecutionMode: req.ExecutionMode,
+		StartTimeMs:   req.StartTimeMs,
+		EndTimeMs:     req.EndTimeMs,
+		Symbol:        req.Symbol,
+		Interval:      req.Interval,
+		Source:        req.Source,
+		Status:        saasstore.BacktestStatusRunning,
+		Request:       saasstore.JSONB(requestRaw),
+		StartedAt:     &now,
 	}
 	if err := s.db.WithContext(ctx).Create(&run).Error; err != nil {
 		return nil, err
@@ -155,14 +169,17 @@ func (s *Service) Get(ctx context.Context, userID uint, id uint) (*Response, err
 	}
 	if run.Status != saasstore.BacktestStatusCompleted {
 		return &Response{
-			ID:         run.ID,
-			Status:     run.Status,
-			StrategyID: run.StrategyID,
-			Symbol:     run.Symbol,
-			Interval:   run.Interval,
-			Source:     run.Source,
-			Error:      run.ErrorMessage,
-			CreatedAt:  run.CreatedAt.Format(time.RFC3339),
+			ID:            run.ID,
+			Status:        run.Status,
+			StrategyID:    run.StrategyID,
+			Symbol:        run.Symbol,
+			InstrumentID:  run.InstrumentID,
+			DataSource:    run.DataSource,
+			ExecutionMode: run.ExecutionMode,
+			Interval:      run.Interval,
+			Source:        run.Source,
+			Error:         run.ErrorMessage,
+			CreatedAt:     run.CreatedAt.Format(time.RFC3339),
 		}, nil
 	}
 
@@ -189,7 +206,7 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		return nil, err
 	}
 
-	bars, err := s.loadBars(ctx, req.Symbol, req.Interval)
+	bars, err := s.loadBars(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -210,6 +227,9 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		Status:        saasstore.BacktestStatusCompleted,
 		StrategyID:    req.StrategyID,
 		Symbol:        req.Symbol,
+		InstrumentID:  req.InstrumentID,
+		DataSource:    req.DataSource,
+		ExecutionMode: req.ExecutionMode,
 		Interval:      req.Interval,
 		Source:        req.Source,
 		TotalReturn:   path.Metrics.ROI,
@@ -229,7 +249,7 @@ func (s *Service) resolveParams(ctx context.Context, userID uint, req CreateRequ
 
 	switch req.Source {
 	case SourceChampion:
-		record, err := s.loadLatestGene(ctx, req.StrategyID, saasstore.GeneRoleChampion)
+		record, err := s.loadLatestGene(ctx, req, saasstore.GeneRoleChampion)
 		if err == nil {
 			params = sigmoiddca.ParseParamsFromParamPack([]byte(record.ParamPack))
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -272,10 +292,11 @@ func (s *Service) resolveParams(ctx context.Context, userID uint, req CreateRequ
 	return params, nil
 }
 
-func (s *Service) loadLatestGene(ctx context.Context, strategyID string, role string) (saasstore.GeneRecord, error) {
+func (s *Service) loadLatestGene(ctx context.Context, req CreateRequest, role string) (saasstore.GeneRecord, error) {
 	var record saasstore.GeneRecord
 	err := s.db.WithContext(ctx).
-		Where("strategy_id = ? AND role = ?", strategyID, role).
+		Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
+			req.StrategyID, req.InstrumentID, req.DataSource, req.Interval, req.ExecutionMode, role).
 		Order("activated_at DESC NULLS LAST, created_at DESC").
 		First(&record).Error
 	return record, err
@@ -284,7 +305,7 @@ func (s *Service) loadLatestGene(ctx context.Context, strategyID string, role st
 func (s *Service) loadGeneByID(ctx context.Context, id uint) (saasstore.GeneRecord, error) {
 	var record saasstore.GeneRecord
 	err := s.db.WithContext(ctx).
-		Where("id = ? AND role IN ?", id, []string{saasstore.GeneRoleChallenger, saasstore.GeneRoleChampion}).
+		Where("id = ? AND role IN ?", id, []string{saasstore.GeneRoleChallenger, saasstore.GeneRoleChampion, saasstore.GeneRoleRetired}).
 		First(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return record, fmt.Errorf("找不到可回測的候選參數")
@@ -301,12 +322,17 @@ func (s *Service) loadInstance(ctx context.Context, userID uint, id uint) (saass
 	return instance, err
 }
 
-func (s *Service) loadBars(ctx context.Context, symbol string, interval string) ([]quant.Bar, error) {
+func (s *Service) loadBars(ctx context.Context, req CreateRequest) ([]quant.Bar, error) {
 	var rows []saasstore.KLine
-	if err := s.db.WithContext(ctx).
-		Where("symbol = ? AND interval = ?", symbol, interval).
-		Order("open_time ASC").
-		Find(&rows).Error; err != nil {
+	query := s.db.WithContext(ctx).
+		Where("symbol = ? AND interval = ? AND instrument_id = ? AND source = ?", req.Symbol, req.Interval, req.InstrumentID, req.DataSource)
+	if req.StartTimeMs > 0 {
+		query = query.Where("open_time >= ?", req.StartTimeMs)
+	}
+	if req.EndTimeMs > 0 {
+		query = query.Where("open_time <= ?", req.EndTimeMs)
+	}
+	if err := query.Order("open_time ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	bars := make([]quant.Bar, 0, len(rows))
@@ -330,13 +356,22 @@ func normalizeRequest(req CreateRequest) CreateRequest {
 	if req.Symbol == "" {
 		req.Symbol = req.Pair
 	}
+	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	if err == nil {
+		req.InstrumentID = instrument.ID
+		req.Symbol = instrument.Symbol
+		req.DataSource = instrument.DataSource
+	}
 	if req.Symbol == "" {
-		req.Symbol = "BTCUSDT"
+		req.Symbol = marketdata.DefaultSymbol
+		req.InstrumentID = marketdata.InstrumentBTCUSDT
+		req.DataSource = marketdata.DataSourceBinance
 	}
 	req.Symbol = strings.ToUpper(strings.TrimSpace(req.Symbol))
 	if req.Interval == "" {
 		req.Interval = "1d"
 	}
+	req.ExecutionMode = marketdata.NormalizeExecutionMode(req.ExecutionMode)
 	if req.Source == "" {
 		req.Source = SourceChampion
 	}
@@ -345,6 +380,22 @@ func normalizeRequest(req CreateRequest) CreateRequest {
 }
 
 func validateBasicRequest(req CreateRequest) error {
+	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	if err != nil {
+		return err
+	}
+	if req.DataSource != instrument.DataSource {
+		return fmt.Errorf("unsupported data source: %s", req.DataSource)
+	}
+	if !supportsInterval(instrument.SupportedIntervals, req.Interval) {
+		return fmt.Errorf("unsupported interval for %s: %s", instrument.ID, req.Interval)
+	}
+	if !marketdata.IsSupportedExecutionMode(req.ExecutionMode) {
+		return fmt.Errorf("unsupported execution mode: %s", req.ExecutionMode)
+	}
+	if req.StartTimeMs > 0 && req.EndTimeMs > 0 && req.StartTimeMs > req.EndTimeMs {
+		return errors.New("start_time_ms must be earlier than end_time_ms")
+	}
 	if req.StrategyID != sigmoiddca.StrategyID {
 		return fmt.Errorf("尚不支援的策略: %s", req.StrategyID)
 	}
@@ -354,6 +405,15 @@ func validateBasicRequest(req CreateRequest) error {
 		return fmt.Errorf("不支援的回測來源: %s", req.Source)
 	}
 	return nil
+}
+
+func supportsInterval(supported []string, interval string) bool {
+	for _, item := range supported {
+		if item == interval {
+			return true
+		}
+	}
+	return false
 }
 
 func parseCustomParams(raw json.RawMessage) (sigmoiddca.Params, error) {

@@ -1,39 +1,42 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, CheckCircle2, FlaskConical, TerminalSquare } from "lucide-react";
-import { useI18n } from "../../i18n/useI18n";
+import { Activity, CheckCircle2, FlaskConical, Square, TerminalSquare } from "lucide-react";
 import { formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
 import { evolutionApi, type EvolutionTask, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
+import { marketDataApi } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { StatusBadge } from "../../shared/ui/StatusBadge";
 import { cn } from "../../shared/lib/cn";
 
-const intervalOptions = [
-  ["1d", "1 天"],
-  ["1h", "1 小時"],
-  ["15m", "15 分鐘"],
-  ["5m", "5 分鐘"],
-  ["1m", "1 分鐘"]
-];
-
+const intervalLabels: Record<string, string> = { "1d": "日 K", "1h": "1 小時", "15m": "15 分鐘", "5m": "5 分鐘", "1m": "1 分鐘", "1s": "1 秒" };
+const executionModes = [
+  ["close_same_bar", "收盤同根", "用當根收盤價作為研究判斷基準"],
+  ["close_next_open", "隔日開盤", "用收盤訊號，假設下一根開盤才調整"],
+  ["preclose_10m", "收盤前 10 分鐘", "需要額外快照資料，缺資料時不會假裝可用"]
+] as const;
 const traceModeOptions: Array<[TraceMode, string, string]> = [
   ["off", "關閉", "不產生原始追蹤"],
-  ["summary", "摘要", "只顯示任務與世代事件"],
-  ["detailed", "詳細", "顯示個體、窗口、交叉與變異"],
-  ["full", "逐筆", "顯示策略步驟，會拖慢優化"]
+  ["summary", "摘要", "只顯示任務與世代摘要"],
+  ["detailed", "詳細", "顯示資料視窗、個體評估與世代資訊"],
+  ["full", "逐筆", "顯示策略步進事件，會拖慢運算"]
 ];
 
-function roleLabel(t: (key: string) => string, role: GenomeRecord["role"]) {
-  if (role === "champion") return "已採用參數";
-  if (role === "archived" || role === "retired") return t("evolution.archived");
-  return t("evolution.candidate");
+function dateInputValue(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
-function windowLabel(key: string) {
-  const map: Record<string, string> = { "6m": "6 個月", "2y": "2 年", "5y": "5 年", "10y": "完整歷史" };
-  return map[key] ?? key;
+function dayStartMs(value: string) {
+  return new Date(`${value}T00:00:00.000Z`).getTime();
+}
+
+function dayEndMs(value: string) {
+  return new Date(`${value}T23:59:59.999Z`).getTime();
+}
+
+function msToDateInput(value?: number) {
+  return value ? new Date(value).toISOString().slice(0, 10) : "";
 }
 
 function monitorValue(value: string | number | undefined) {
@@ -48,47 +51,16 @@ function formatTraceValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function labelForInstrument(id?: string, names?: Record<string, string>) {
+  return names?.[id ?? ""] ?? id ?? "未指定";
+}
+
 function JsonPreview({ value }: { value?: Record<string, unknown> | null }) {
-  if (!value) return <div className="text-sm text-slate-500">等待參數產生</div>;
+  if (!value) return <div className="text-sm text-slate-500">尚未產生參數</div>;
   return (
     <pre className="max-h-72 overflow-auto rounded-lg border border-white/[0.04] bg-slate-950/70 p-3 text-xs leading-relaxed text-slate-300">
       {JSON.stringify(value, null, 2)}
     </pre>
-  );
-}
-
-function CurrentBestCard({ task }: { task: EvolutionTask }) {
-  return (
-    <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>本次任務目前最佳</CardTitle>
-          <CardDescription>這是運算中的暫時第一名，任務完成後才會寫入候選參數庫。</CardDescription>
-        </div>
-      </CardHeader>
-      <div className="space-y-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-            <div className="text-xs text-slate-500">評分</div>
-            <div className="mt-1 font-mono text-lg text-slate-100">{(task.best_score ?? 0).toFixed(4)}</div>
-          </div>
-          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-            <div className="text-xs text-slate-500">最大回撤</div>
-            <div className="mt-1 font-mono text-lg text-[#fecaca]">{formatPercent(task.max_drawdown ?? 0)}</div>
-          </div>
-          {Object.entries(task.window_score ?? {}).map(([key, value]) => (
-            <div key={key} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-              <div className="text-xs text-slate-500">{windowLabel(key)}</div>
-              <div className="mt-1 font-mono text-lg text-slate-100">{value.toFixed(4)}</div>
-            </div>
-          ))}
-        </div>
-        <div>
-          <div className="mb-2 text-sm font-semibold text-slate-300">參數預覽</div>
-          <JsonPreview value={task.best_param_pack} />
-        </div>
-      </div>
-    </Card>
   );
 }
 
@@ -97,7 +69,7 @@ function TraceConsole({ task }: { task: EvolutionTask }) {
   const [mode, setMode] = useState<TraceMode>(task.trace_mode ?? "detailed");
   const queryClient = useQueryClient();
   const traceQuery = useQuery({
-    queryKey: ["evolution-trace", task.id, open],
+    queryKey: ["evolution-trace", task.id, open, mode],
     queryFn: () => evolutionApi.trace(task.id, mode === "full" ? 1200 : 600),
     enabled: open,
     refetchInterval: open ? 1000 : false
@@ -109,14 +81,13 @@ function TraceConsole({ task }: { task: EvolutionTask }) {
       queryClient.invalidateQueries({ queryKey: ["evolution-trace", task.id] });
     }
   });
-  const events = traceQuery.data?.events ?? [];
-  const visibleEvents = events.slice(-500);
+  const visibleEvents = (traceQuery.data?.events ?? []).slice(-500);
   return (
     <Card>
       <CardHeader>
         <div>
           <CardTitle>原始追蹤</CardTitle>
-          <CardDescription>泛用 trace viewer；逐筆模式會拖慢優化，只保留最近事件。</CardDescription>
+          <CardDescription>泛用 trace viewer；關閉視窗時停止前端輪詢，逐筆模式會增加後端追蹤成本。</CardDescription>
         </div>
         <Button icon={TerminalSquare} variant="secondary" onClick={() => setOpen((value) => !value)}>
           {open ? "收合" : "展開"}
@@ -125,32 +96,19 @@ function TraceConsole({ task }: { task: EvolutionTask }) {
       <div className="space-y-3">
         <div className="flex flex-wrap gap-2">
           {traceModeOptions.map(([value, label, description]) => (
-            <button
-              key={value}
-              type="button"
-              title={description}
-              className={cn(
-                "rounded-lg border px-3 py-2 text-sm transition",
-                mode === value ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.04] text-slate-400 hover:text-slate-200"
-              )}
-              onClick={() => modeMutation.mutate(value)}
-            >
+            <button key={value} type="button" title={description} className={cn("rounded-lg border px-3 py-2 text-sm transition", mode === value ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.04] text-slate-400 hover:text-slate-200")} onClick={() => modeMutation.mutate(value)}>
               {label}
             </button>
           ))}
         </div>
-        {mode === "full" ? <div className="text-xs text-[#fde68a]">逐筆追蹤會產生大量事件，適合短任務或臨時觀察。</div> : null}
+        {mode === "full" ? <div className="text-xs text-[#fde68a]">逐筆追蹤會拖慢優化，只建議短時間觀察。</div> : null}
         {open ? (
           <div className="h-[28rem] overflow-auto rounded-lg border border-white/[0.06] bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-300">
-            {traceQuery.isLoading ? <div className="text-slate-500">等待追蹤資料...</div> : null}
-            {!traceQuery.isLoading && visibleEvents.length === 0 ? <div className="text-slate-500">尚無追蹤事件，或目前追蹤模式為關閉。</div> : null}
+            {traceQuery.isLoading ? <div className="text-slate-500">載入追蹤資料...</div> : null}
+            {!traceQuery.isLoading && visibleEvents.length === 0 ? <div className="text-slate-500">尚無追蹤事件。</div> : null}
             {visibleEvents.map((event) => (
               <div key={event.id} className="border-b border-white/[0.03] py-1">
-                <span className="text-slate-500">#{event.id}</span>{" "}
-                <span className="text-[#99f6e4]">{shortDateTime(event.time)}</span>{" "}
-                <span className="text-[#fde68a]">{event.source}</span>{" "}
-                <span className="text-[#c4b5fd]">{event.scope}</span>{" "}
-                <span>{event.message}</span>
+                <span className="text-slate-500">#{event.id}</span> <span className="text-[#99f6e4]">{shortDateTime(event.time)}</span> <span className="text-[#fde68a]">{event.source}</span> <span className="text-[#c4b5fd]">{event.scope}</span> <span>{event.message}</span>
                 {event.fields ? (
                   <div className="mt-1 break-words pl-4 text-slate-400">
                     {Object.entries(event.fields).map(([key, value]) => (
@@ -169,46 +127,88 @@ function TraceConsole({ task }: { task: EvolutionTask }) {
   );
 }
 
-function EvolutionPanel() {
-  const { t } = useI18n();
+function CurrentBestCard({ task }: { task: EvolutionTask }) {
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>本次任務目前最佳</CardTitle>
+          <CardDescription>任務尚未完成前，這裡顯示運算中暫時領先的參數包。</CardDescription>
+        </div>
+      </CardHeader>
+      <div className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Metric label="最佳評分" value={(task.best_score ?? 0).toFixed(4)} />
+          <Metric label="最大回撤" value={formatPercent(task.max_drawdown ?? 0)} danger />
+          {Object.entries(task.window_score ?? {}).map(([key, value]) => <Metric key={key} label={key} value={value.toFixed(4)} />)}
+        </div>
+        <JsonPreview value={task.best_param_pack} />
+      </div>
+    </Card>
+  );
+}
+
+function Metric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
+  return (
+    <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className={cn("mt-1 font-mono text-lg", danger ? "text-[#fecaca]" : "text-slate-100")}>{value}</div>
+    </div>
+  );
+}
+
+function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, string> }) {
   const queryClient = useQueryClient();
+  const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
+  const instruments = instrumentsQuery.data?.instruments ?? [];
   const [expanded, setExpanded] = useState(false);
+  const [instrumentId, setInstrumentId] = useState("BTCUSDT");
+  const selected = instruments.find((item) => item.id === instrumentId);
   const [interval, setInterval] = useState("1d");
+  const [executionMode, setExecutionMode] = useState("close_same_bar");
+  const [startDate, setStartDate] = useState(dateInputValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
+  const [endDate, setEndDate] = useState(dateInputValue(new Date()));
   const [population, setPopulation] = useState(300);
   const [generations, setGenerations] = useState(25);
-  const [mode, setMode] = useState<"inherit" | "random_once" | "manual">("inherit");
+  const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>("detailed");
-  const [manualJson, setManualJson] = useState(
-    '{\n  "policy": {\n    "initial_usdt": 1000,\n    "monthly_inject_usdt": 100,\n    "cold_sealed_btc": 0\n  },\n  "risk": {\n    "max_drawdown_pct": 0.88,\n    "fee_rate": 0.001,\n    "lot_step": 0.000001,\n    "lot_min": 0.00001\n  }\n}'
-  );
-  const { data: overview } = useQuery({
-    queryKey: ["evolution-tasks"],
-    queryFn: () => evolutionApi.listTasks(),
-    refetchInterval: 2_000
-  });
-  const running = overview?.current_task ?? overview?.tasks.find((task) => task.status === "running");
+  const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 2_000 });
+  const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
   const createMutation = useMutation({
-    mutationFn: () => {
-      const spawn_point = mode === "manual" ? JSON.parse(manualJson) : undefined;
-      return evolutionApi.createTask({
+    mutationFn: () =>
+      evolutionApi.createTask({
         strategy_id: "sigmoid-dca-btc",
+        pair: selected?.symbol ?? instrumentId,
+        instrument_id: instrumentId,
+        data_source: selected?.data_source,
         interval,
+        execution_mode: executionMode,
+        train_start_ms: dayStartMs(startDate),
+        train_end_ms: dayEndMs(endDate),
         pop_size: population,
         max_generations: generations,
-        spawn_mode: mode,
-        spawn_point,
+        spawn_mode: spawnMode,
         trace_mode: traceMode
-      });
-    },
+      }),
     onSuccess: () => {
       setExpanded(false);
       queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
     }
   });
+  const cancelMutation = useMutation({
+    mutationFn: (taskId: number) => evolutionApi.cancel(taskId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] })
+  });
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     createMutation.mutate();
+  }
+
+  function changeInstrument(nextId: string) {
+    const next = instruments.find((item) => item.id === nextId);
+    setInstrumentId(nextId);
+    setInterval(next?.supported_intervals[0] ?? "1d");
   }
 
   if (running) {
@@ -222,44 +222,34 @@ function EvolutionPanel() {
         <Card>
           <CardHeader>
             <div>
-              <CardTitle>{t("evolution.runningTask")}</CardTitle>
-              <CardDescription>{relativeTime(running.created_at)}</CardDescription>
+              <CardTitle>參數搜尋運行中</CardTitle>
+              <CardDescription>{labelForInstrument(running.instrument_id, instrumentNames)} · {intervalLabels[running.interval ?? "1d"] ?? running.interval}</CardDescription>
             </div>
-            <StatusBadge status="running" />
+            <div className="flex items-center gap-2">
+              <StatusBadge status="running" />
+              <Button icon={Square} variant="secondary" loading={cancelMutation.isPending} onClick={() => cancelMutation.mutate(running.id)}>中止</Button>
+            </div>
           </CardHeader>
           <div className="space-y-4">
             <div className="rounded-lg border border-[#2dd4bf]/20 bg-[#2dd4bf]/[0.06] p-4">
-              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#99f6e4]">
-                <Activity className="h-4 w-4" />
-                {t("evolution.monitor")}
-              </div>
+              <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#99f6e4]"><Activity className="h-4 w-4" />運算監控</div>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {[
-                  [t("evolution.taskId"), `#${running.id}`],
-                  [t("evolution.dataset"), `${running.pair ?? "BTCUSDT"} · ${running.interval ?? "1d"}`],
-                  [t("evolution.population"), running.pop_size?.toLocaleString("zh-TW")],
-                  [t("evolution.progress"), `${progressPct}%`],
-                  [t("evolution.evaluated"), planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")],
-                  [t("evolution.mutationProbability"), running.mutation_probability !== undefined ? formatPercent(running.mutation_probability) : undefined],
-                  [t("evolution.mutationScale"), running.mutation_scale?.toFixed(2)],
-                  [t("evolution.maxDrawdown"), running.max_drawdown !== undefined ? formatPercent(running.max_drawdown) : undefined],
-                  [t("evolution.lastMonitorUpdate"), running.monitor_updated_at ? shortDateTime(running.monitor_updated_at) : undefined]
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-lg border border-white/[0.04] bg-slate-950/30 p-3">
-                    <div className="text-xs text-slate-500">{label}</div>
-                    <div className="mt-1 font-mono text-sm text-slate-100">{monitorValue(value)}</div>
-                  </div>
-                ))}
+                <Metric label="任務 ID" value={`#${running.id}`} />
+                <Metric label="資料範圍" value={`${msToDateInput(running.train_start_ms) || "-"} ~ ${msToDateInput(running.train_end_ms) || "-"}`} />
+                <Metric label="進度" value={`${progressPct}%`} />
+                <Metric label="已評估" value={planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")} />
+                <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
+                <Metric label="最大回撤" value={running.max_drawdown !== undefined ? formatPercent(running.max_drawdown) : "等待回報"} danger />
+                <Metric label="變異機率" value={running.mutation_probability !== undefined ? formatPercent(running.mutation_probability) : "等待回報"} />
+                <Metric label="最後更新" value={monitorValue(running.monitor_updated_at ? shortDateTime(running.monitor_updated_at) : undefined).toString()} />
               </div>
             </div>
             <div>
               <div className="mb-2 flex justify-between text-sm">
-                <span className="text-slate-400">{t("evolution.currentGeneration")}</span>
+                <span className="text-slate-400">目前世代</span>
                 <span className="font-mono text-slate-200">{current} / {max}</span>
               </div>
-              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-                <div className="h-full rounded-full bg-[#2dd4bf]" style={{ width: `${progressPct}%` }} />
-              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-[#2dd4bf]" style={{ width: `${progressPct}%` }} /></div>
             </div>
           </div>
         </Card>
@@ -273,103 +263,34 @@ function EvolutionPanel() {
     <Card>
       <CardHeader>
         <div>
-          <CardTitle>{t("evolution.optimize")}</CardTitle>
-          <CardDescription>{t("evolution.subtitle")}</CardDescription>
+          <CardTitle>參數搜尋</CardTitle>
+          <CardDescription>選擇研究標的、資料範圍與執行假設後建立運算任務。</CardDescription>
         </div>
-        <Button icon={FlaskConical} onClick={() => setExpanded((value) => !value)}>{t("evolution.startNew")}</Button>
+        <Button icon={FlaskConical} onClick={() => setExpanded((value) => !value)}>建立任務</Button>
       </CardHeader>
       {expanded ? (
         <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">{t("evolution.interval")}</span>
-            <select
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              value={interval}
-              onChange={(event) => setInterval(event.target.value)}
-            >
-              {intervalOptions.map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">{t("evolution.population")}</span>
-            <input
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              type="number"
-              min="10"
-              max="500"
-              value={population}
-              onChange={(event) => setPopulation(Number(event.target.value))}
-            />
-          </label>
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">{t("evolution.generations")}</span>
-            <input
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              type="number"
-              min="5"
-              max="50"
-              value={generations}
-              onChange={(event) => setGenerations(Number(event.target.value))}
-            />
-          </label>
-          <div className="md:col-span-2">
-            <div className="mb-2 text-sm text-slate-300">{t("evolution.inheritMode")}</div>
-            <div className="grid gap-2 md:grid-cols-3">
-              {[
-                ["inherit", t("evolution.inheritChampion")],
-                ["random_once", t("evolution.randomExplore")],
-                ["manual", t("evolution.manual")]
-              ].map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={cn(
-                    "rounded-lg border px-3 py-2 text-sm transition",
-                    mode === value ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.04] text-slate-400"
-                  )}
-                  onClick={() => setMode(value as typeof mode)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-          {mode === "manual" ? (
-            <label className="md:col-span-2">
-              <span className="mb-2 block text-sm text-slate-300">{t("evolution.manualJson")}</span>
-              <textarea
-                className="h-40 w-full rounded-lg border border-slate-700 bg-slate-950/80 p-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-                value={manualJson}
-                onChange={(event) => setManualJson(event.target.value)}
-              />
-            </label>
-          ) : null}
+          <Select label="研究標的" value={instrumentId} onChange={changeInstrument} options={instruments.map((item) => [item.id, item.display_name])} />
+          <Select label="資料週期" value={interval} onChange={setInterval} options={(selected?.supported_intervals ?? ["1d"]).map((item) => [item, intervalLabels[item] ?? item])} />
+          <label><span className="mb-2 block text-sm text-slate-300">開始日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+          <label><span className="mb-2 block text-sm text-slate-300">結束日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
+          <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes.map(([value, label]) => [value, label])} />
+          <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
+          <NumberInput label="族群數" min={10} max={500} value={population} onChange={setPopulation} />
+          <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
           <div className="md:col-span-2">
             <div className="mb-2 text-sm text-slate-300">原始追蹤模式</div>
             <div className="grid gap-2 md:grid-cols-4">
               {traceModeOptions.map(([value, label, description]) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={cn(
-                    "rounded-lg border px-3 py-2 text-left text-sm transition",
-                    traceMode === value ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.04] text-slate-400"
-                  )}
-                  onClick={() => setTraceMode(value)}
-                >
-                  <span className="block font-semibold">{label}</span>
-                  <span className="mt-1 block text-xs text-slate-500">{description}</span>
+                <button key={value} type="button" className={cn("rounded-lg border px-3 py-2 text-left text-sm transition", traceMode === value ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.04] text-slate-400")} onClick={() => setTraceMode(value)}>
+                  <span className="block font-semibold">{label}</span><span className="mt-1 block text-xs text-slate-500">{description}</span>
                 </button>
               ))}
             </div>
           </div>
-          {traceMode === "full" ? <div className="md:col-span-2 text-xs text-[#fde68a]">逐筆追蹤會拖慢優化，建議先用較小族群或較少代數觀察。</div> : null}
+          {executionMode === "preclose_10m" ? <div className="md:col-span-2 text-xs text-[#fde68a]">這個模式需要收盤前快照資料；缺資料時任務可能無法產生有效結果。</div> : null}
           <div className="md:col-span-2">
-            <Button type="submit" loading={createMutation.isPending}>{t("evolution.submitTask")}</Button>
+            <Button type="submit" loading={createMutation.isPending}>開始搜尋</Button>
             {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}
           </div>
         </form>
@@ -378,31 +299,41 @@ function EvolutionPanel() {
   );
 }
 
-function TaskQueueView() {
-  const { t } = useI18n();
-  const { data: overview, isLoading } = useQuery({
-    queryKey: ["evolution-tasks"],
-    queryFn: () => evolutionApi.listTasks(),
-    refetchInterval: 5_000
-  });
+function Select({ label, value, onChange, options }: { label: string; value: string; onChange: (value: string) => void; options: string[][] }) {
+  return (
+    <label>
+      <span className="mb-2 block text-sm text-slate-300">{label}</span>
+      <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map(([optionValue, optionLabel]) => <option key={optionValue} value={optionValue}>{optionLabel}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
+  return (
+    <label>
+      <span className="mb-2 block text-sm text-slate-300">{label}</span>
+      <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+    </label>
+  );
+}
+
+function TaskQueueView({ instrumentNames }: { instrumentNames: Record<string, string> }) {
+  const { data: overview, isLoading } = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 5_000 });
   const tasks = overview?.tasks ?? [];
   return (
     <Card>
-      <CardHeader>
-        <div>
-          <CardTitle>{t("evolution.queue")}</CardTitle>
-          <CardDescription>已建立的優化任務與完成狀態。</CardDescription>
-        </div>
-      </CardHeader>
+      <CardHeader><div><CardTitle>任務紀錄</CardTitle><CardDescription>已建立的參數搜尋任務與狀態。</CardDescription></div></CardHeader>
       <div className="space-y-3">
-        {isLoading ? <div className="text-sm text-slate-500">{t("common.loading")}</div> : null}
-        {!isLoading && tasks.length === 0 ? <div className="text-sm text-slate-500">{t("evolution.noTasks")}</div> : null}
+        {isLoading ? <div className="text-sm text-slate-500">載入中...</div> : null}
+        {!isLoading && tasks.length === 0 ? <div className="text-sm text-slate-500">尚無任務。</div> : null}
         {tasks.map((task) => (
           <div key={task.id} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="font-mono text-sm text-slate-200">#{task.id}</div>
-                <div className="mt-1 text-xs text-slate-500">{relativeTime(task.created_at)}</div>
+                <div className="font-mono text-sm text-slate-200">#{task.id} · {labelForInstrument(task.instrument_id, instrumentNames)}</div>
+                <div className="mt-1 text-xs text-slate-500">{relativeTime(task.created_at)} · {intervalLabels[task.interval ?? "1d"] ?? task.interval}</div>
               </div>
               <StatusBadge status={task.status} />
               <div className="text-right font-mono text-sm text-slate-300">{(task.best_score ?? 0).toFixed(3)}</div>
@@ -415,40 +346,24 @@ function TaskQueueView() {
   );
 }
 
-function ChampionCard({ champion }: { champion?: GenomeRecord }) {
-  const { t } = useI18n();
+function ChampionCard({ champion, instrumentNames }: { champion?: GenomeRecord; instrumentNames: Record<string, string> }) {
   return (
     <Card className="border-[#2dd4bf]/20">
       <CardHeader>
-        <div>
-          <CardTitle>已採用參數</CardTitle>
-          <CardDescription>{champion ? relativeTime(champion.created_at) : t("common.unknown")}</CardDescription>
-        </div>
+        <div><CardTitle>目前採用參數</CardTitle><CardDescription>{champion ? `${labelForInstrument(champion.instrument_id, instrumentNames)} · ${relativeTime(champion.created_at)}` : "尚未採用"}</CardDescription></div>
         <CheckCircle2 className="h-5 w-5 text-[#2dd4bf]" />
       </CardHeader>
       {champion ? (
         <div className="space-y-4">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4">
-              <div className="text-sm text-slate-500">{t("evolution.bestScore")}</div>
-              <div className="mt-2 font-mono text-2xl text-slate-100">{champion.score_total.toFixed(3)}</div>
-            </div>
-            <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4">
-              <div className="text-sm text-slate-500">{t("evolution.maxDrawdown")}</div>
-              <div className="mt-2 font-mono text-2xl text-[#fecaca]">{formatPercent(champion.max_drawdown)}</div>
-            </div>
-          </div>
+          <div className="grid gap-3 md:grid-cols-2"><Metric label="評分" value={champion.score_total.toFixed(3)} /><Metric label="最大回撤" value={formatPercent(champion.max_drawdown)} danger /></div>
           <JsonPreview value={champion.param_pack} />
         </div>
-      ) : (
-        <div className="text-sm text-slate-500">{t("evolution.noChampion")}</div>
-      )}
+      ) : <div className="text-sm text-slate-500">候選參數晉升後會出現在這裡。</div>}
     </Card>
   );
 }
 
-function GenomeLibrary({ genomes }: { genomes: GenomeRecord[] }) {
-  const { t } = useI18n();
+function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; instrumentNames: Record<string, string> }) {
   const [confirmPromote, setConfirmPromote] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const promoteMutation = useMutation({
@@ -463,49 +378,19 @@ function GenomeLibrary({ genomes }: { genomes: GenomeRecord[] }) {
     <div className="grid gap-4 lg:grid-cols-2">
       {genomes.map((genome) => {
         const isChampion = genome.role === "champion";
-        const canPromote = genome.role === "candidate" || genome.role === "challenger";
+        const canPromote = genome.role === "candidate" || genome.role === "challenger" || genome.role === "retired";
         return (
           <Card key={genome.id} className={cn(isChampion ? "border-[#2dd4bf]/30" : "")}>
             <CardHeader>
-              <div>
-                <CardTitle>{roleLabel(t, genome.role)}</CardTitle>
-                <CardDescription>{relativeTime(genome.created_at)}</CardDescription>
-              </div>
+              <div><CardTitle>{isChampion ? "已採用參數" : genome.role === "retired" ? "已退休參數" : "候選參數"}</CardTitle><CardDescription>{labelForInstrument(genome.instrument_id, instrumentNames)} · {relativeTime(genome.created_at)}</CardDescription></div>
               <span className="font-mono text-lg font-semibold text-slate-100">{genome.score_total.toFixed(3)}</span>
             </CardHeader>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                  <div className="text-xs text-slate-500">{t("evolution.maxDrawdown")}</div>
-                  <div className="mt-1 font-mono text-sm text-[#fecaca]">{formatPercent(genome.max_drawdown)}</div>
-                </div>
-                {Object.entries(genome.window_score).map(([key, value]) => (
-                  <div key={key} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
-                    <div className="text-xs text-slate-500">{windowLabel(key)}</div>
-                    <div className="mt-1 font-mono text-sm text-slate-200">{value.toFixed(2)}</div>
-                  </div>
-                ))}
-              </div>
-              <details className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3">
-                <summary className="cursor-pointer text-sm font-semibold text-slate-300">參數 JSON</summary>
-                <div className="mt-3">
-                  <JsonPreview value={genome.param_pack} />
-                </div>
-              </details>
+              <div className="grid grid-cols-2 gap-3"><Metric label="最大回撤" value={formatPercent(genome.max_drawdown)} danger /><Metric label="週期" value={intervalLabels[genome.interval ?? "1d"] ?? genome.interval ?? "-"} /></div>
+              <details className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-semibold text-slate-300">參數 JSON</summary><div className="mt-3"><JsonPreview value={genome.param_pack} /></div></details>
               <div className="flex flex-wrap gap-2">
-                {canPromote ? (
-                  confirmPromote === genome.id ? (
-                    <Button loading={promoteMutation.isPending} onClick={() => promoteMutation.mutate(genome.id)}>
-                      {t("common.confirm")}
-                    </Button>
-                  ) : (
-                    <Button onClick={() => setConfirmPromote(genome.id)}>{t("evolution.promote")}</Button>
-                  )
-                ) : null}
-                {promoteMutation.error && confirmPromote === genome.id ? <div className="text-sm text-[#fecaca]">{String(promoteMutation.error.message)}</div> : null}
-                <Link to={`/backtesting?genome=${genome.id}`}>
-                  <Button variant="secondary">{t("evolution.viewBacktest")}</Button>
-                </Link>
+                {canPromote && !isChampion ? (confirmPromote === genome.id ? <Button loading={promoteMutation.isPending} onClick={() => promoteMutation.mutate(genome.id)}>確認採用</Button> : <Button onClick={() => setConfirmPromote(genome.id)}>設為採用</Button>) : null}
+                <Link to={`/backtesting?genome=${genome.id}`}><Button variant="secondary">回測</Button></Link>
               </div>
             </div>
           </Card>
@@ -516,43 +401,19 @@ function GenomeLibrary({ genomes }: { genomes: GenomeRecord[] }) {
 }
 
 export function EvolutionPage() {
-  const { t } = useI18n();
   const [tab, setTab] = useState<"optimize" | "library">("optimize");
-  const { data: genomes = [] } = useQuery({
-    queryKey: ["genomes"],
-    queryFn: () => evolutionApi.listGenomes()
-  });
+  const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
+  const instrumentNames = useMemo(() => Object.fromEntries((instrumentsQuery.data?.instruments ?? []).map((item) => [item.id, item.display_name])), [instrumentsQuery.data]);
+  const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const champion = useMemo(() => genomes.find((item) => item.role === "champion"), [genomes]);
 
   return (
     <section className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-100">{t("evolution.title")}</h1>
-        <p className="mt-1 text-sm text-slate-400">{t("evolution.subtitle")}</p>
-      </div>
+      <div><h1 className="text-2xl font-bold text-slate-100">優化實驗室</h1><p className="mt-1 text-sm text-slate-400">針對研究標的搜尋參數、觀察運算過程，並管理可回復的候選參數。</p></div>
       <div className="flex w-fit rounded-lg border border-white/[0.06] bg-white/[0.03] p-1">
-        {[
-          ["optimize", t("evolution.optimize")],
-          ["library", "候選參數庫"]
-        ].map(([value, label]) => (
-          <button
-            key={value}
-            className={cn("rounded-md px-4 py-2 text-sm font-semibold transition", tab === value ? "bg-[#2dd4bf]/10 text-[#2dd4bf]" : "text-slate-500")}
-            onClick={() => setTab(value as typeof tab)}
-          >
-            {label}
-          </button>
-        ))}
+        {[["optimize", "參數搜尋"], ["library", "參數庫"]].map(([value, label]) => <button key={value} className={cn("rounded-md px-4 py-2 text-sm font-semibold transition", tab === value ? "bg-[#2dd4bf]/10 text-[#2dd4bf]" : "text-slate-500")} onClick={() => setTab(value as typeof tab)}>{label}</button>)}
       </div>
-      {tab === "optimize" ? (
-        <div className="space-y-4">
-          <EvolutionPanel />
-          <TaskQueueView />
-          <ChampionCard champion={champion} />
-        </div>
-      ) : (
-        genomes.length > 0 ? <GenomeLibrary genomes={genomes} /> : <Card className="p-4 text-sm text-slate-500">{t("evolution.noGenomes")}</Card>
-      )}
+      {tab === "optimize" ? <div className="space-y-4"><EvolutionPanel instrumentNames={instrumentNames} /><TaskQueueView instrumentNames={instrumentNames} /><ChampionCard champion={champion} instrumentNames={instrumentNames} /></div> : genomes.length > 0 ? <GenomeLibrary genomes={genomes} instrumentNames={instrumentNames} /> : <Card className="p-4 text-sm text-slate-500">尚無參數。</Card>}
     </section>
   );
 }

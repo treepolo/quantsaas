@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	saasstore "quantsaas/internal/saas/store"
@@ -18,8 +19,12 @@ import (
 )
 
 const (
-	DefaultBaseURL = "https://api.binance.com"
-	DefaultSymbol  = "BTCUSDT"
+	DefaultBaseURL      = "https://api.binance.com"
+	DefaultYahooBaseURL = "https://query1.finance.yahoo.com"
+	DefaultSymbol       = "BTCUSDT"
+
+	yahooUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 QuantSaaS/0.1"
+	yahooMinRequestInterval = 1200 * time.Millisecond
 )
 
 var (
@@ -51,6 +56,13 @@ type Client struct {
 	HTTPClient *http.Client
 }
 
+type YahooClient struct {
+	BaseURL    string
+	HTTPClient *http.Client
+	mu         sync.Mutex
+	lastAt     time.Time
+}
+
 type BinanceKLine struct {
 	OpenTime int64
 	Open     float64
@@ -61,43 +73,55 @@ type BinanceKLine struct {
 }
 
 type Service struct {
-	db     *gorm.DB
-	client *Client
-	now    func() time.Time
+	db          *gorm.DB
+	client      *Client
+	yahooClient *YahooClient
+	now         func() time.Time
 }
 
 type ImportRequest struct {
-	Symbol      string `json:"symbol"`
-	Interval    string `json:"interval"`
-	StartTimeMs int64  `json:"start_time_ms"`
-	EndTimeMs   int64  `json:"end_time_ms"`
+	InstrumentID             string `json:"instrument_id"`
+	DataSource               string `json:"data_source"`
+	Symbol                   string `json:"symbol"`
+	Interval                 string `json:"interval"`
+	StartTimeMs              int64  `json:"start_time_ms"`
+	EndTimeMs                int64  `json:"end_time_ms"`
+	IncludePrecloseSnapshots bool   `json:"include_preclose_snapshots"`
 }
 
 type ImportResult struct {
-	Symbol      string `json:"symbol"`
-	Interval    string `json:"interval"`
-	StartTimeMs int64  `json:"start_time_ms"`
-	EndTimeMs   int64  `json:"end_time_ms"`
-	FetchedBars int    `json:"fetched_bars"`
-	StoredBars  int64  `json:"stored_bars"`
-	FirstOpenMs int64  `json:"first_open_ms,omitempty"`
-	LastOpenMs  int64  `json:"last_open_ms,omitempty"`
+	InstrumentID          string `json:"instrument_id"`
+	DataSource            string `json:"data_source"`
+	Symbol                string `json:"symbol"`
+	Interval              string `json:"interval"`
+	StartTimeMs           int64  `json:"start_time_ms"`
+	EndTimeMs             int64  `json:"end_time_ms"`
+	FetchedBars           int    `json:"fetched_bars"`
+	StoredBars            int64  `json:"stored_bars"`
+	PrecloseSnapshotCount int64  `json:"preclose_snapshot_count"`
+	FirstOpenMs           int64  `json:"first_open_ms,omitempty"`
+	LastOpenMs            int64  `json:"last_open_ms,omitempty"`
 }
 
 type DatasetSummary struct {
-	Symbol      string `json:"symbol"`
-	Interval    string `json:"interval"`
-	Count       int64  `json:"count"`
-	FirstOpenMs int64  `json:"first_open_ms,omitempty"`
-	LastOpenMs  int64  `json:"last_open_ms,omitempty"`
-	UpdatedAt   string `json:"updated_at,omitempty"`
+	InstrumentID          string `json:"instrument_id"`
+	DataSource            string `json:"data_source"`
+	Symbol                string `json:"symbol"`
+	Interval              string `json:"interval"`
+	Count                 int64  `json:"count"`
+	PrecloseSnapshotCount int64  `json:"preclose_snapshot_count"`
+	FirstPrecloseMs       int64  `json:"first_preclose_ms,omitempty"`
+	LastPrecloseMs        int64  `json:"last_preclose_ms,omitempty"`
+	FirstOpenMs           int64  `json:"first_open_ms,omitempty"`
+	LastOpenMs            int64  `json:"last_open_ms,omitempty"`
+	UpdatedAt             string `json:"updated_at,omitempty"`
 }
 
 func NewService(db *gorm.DB, client *Client) *Service {
 	if client == nil {
 		client = NewClient(DefaultBaseURL)
 	}
-	return &Service{db: db, client: client, now: func() time.Time { return time.Now().UTC() }}
+	return &Service{db: db, client: client, yahooClient: NewYahooClient(DefaultYahooBaseURL), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func NewClient(baseURL string) *Client {
@@ -105,6 +129,18 @@ func NewClient(baseURL string) *Client {
 		baseURL = DefaultBaseURL
 	}
 	return &Client{
+		BaseURL: strings.TrimRight(baseURL, "/"),
+		HTTPClient: &http.Client{
+			Timeout: 20 * time.Second,
+		},
+	}
+}
+
+func NewYahooClient(baseURL string) *YahooClient {
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = DefaultYahooBaseURL
+	}
+	return &YahooClient{
 		BaseURL: strings.TrimRight(baseURL, "/"),
 		HTTPClient: &http.Client{
 			Timeout: 20 * time.Second,
@@ -123,11 +159,38 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 	}
 
 	result := ImportResult{
-		Symbol:      req.Symbol,
-		Interval:    req.Interval,
-		StartTimeMs: req.StartTimeMs,
-		EndTimeMs:   req.EndTimeMs,
+		InstrumentID: req.InstrumentID,
+		DataSource:   req.DataSource,
+		Symbol:       req.Symbol,
+		Interval:     req.Interval,
+		StartTimeMs:  req.StartTimeMs,
+		EndTimeMs:    req.EndTimeMs,
 	}
+	if req.DataSource == DataSourceYahoo {
+		rows, err := s.yahooClient.FetchKLines(ctx, req.Symbol, req.Interval, req.StartTimeMs, req.EndTimeMs)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		stored, err := s.storeKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval, rows)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		result.FetchedBars = len(rows)
+		result.StoredBars = stored
+		if len(rows) > 0 {
+			result.FirstOpenMs = rows[0].OpenTime
+			result.LastOpenMs = rows[len(rows)-1].OpenTime
+		}
+		if req.IncludePrecloseSnapshots {
+			count, err := s.importPrecloseSnapshots(ctx, req)
+			if err != nil {
+				return ImportResult{}, err
+			}
+			result.PrecloseSnapshotCount = count
+		}
+		return result, nil
+	}
+
 	cursor := req.StartTimeMs
 	step := intervalDurations[req.Interval].Milliseconds()
 	if step <= 0 {
@@ -145,7 +208,7 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 		if len(rows) == 0 {
 			break
 		}
-		stored, err := s.storeKLines(ctx, req.Symbol, req.Interval, rows)
+		stored, err := s.storeKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval, rows)
 		if err != nil {
 			return ImportResult{}, err
 		}
@@ -165,17 +228,24 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 			break
 		}
 	}
+	if req.IncludePrecloseSnapshots {
+		count, err := s.importPrecloseSnapshots(ctx, req)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		result.PrecloseSnapshotCount = count
+	}
 
 	return result, nil
 }
 
 func (s *Service) Summaries(ctx context.Context, symbol string, intervals []string) ([]DatasetSummary, error) {
-	symbol = normalizeSymbol(symbol)
-	if symbol == "" {
-		symbol = DefaultSymbol
+	instrument, err := ResolveInstrument("", symbol, "")
+	if err != nil {
+		return nil, err
 	}
 	if len(intervals) == 0 {
-		intervals = SupportedIntervals()
+		intervals = instrument.SupportedIntervals
 	}
 	for i, interval := range intervals {
 		intervals[i] = normalizeInterval(interval)
@@ -183,7 +253,7 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 
 	rows := make([]DatasetSummary, 0, len(intervals))
 	for _, interval := range intervals {
-		if _, ok := intervalDurations[interval]; !ok {
+		if !instrumentSupportsInterval(instrument, interval) {
 			continue
 		}
 		var summary struct {
@@ -195,11 +265,11 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 		if err := s.db.WithContext(ctx).
 			Model(&saasstore.KLine{}).
 			Select("count(*) as count, min(open_time) as first_open_ms, max(open_time) as last_open_ms, max(updated_at) as updated_at").
-			Where("symbol = ? AND interval = ?", symbol, interval).
+			Where("instrument_id = ? AND source = ? AND interval = ?", instrument.ID, instrument.DataSource, interval).
 			Scan(&summary).Error; err != nil {
 			return nil, err
 		}
-		item := DatasetSummary{Symbol: symbol, Interval: interval, Count: summary.Count}
+		item := DatasetSummary{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Interval: interval, Count: summary.Count}
 		if summary.FirstOpenMs != nil {
 			item.FirstOpenMs = *summary.FirstOpenMs
 		}
@@ -209,15 +279,46 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 		if summary.UpdatedAt != nil {
 			item.UpdatedAt = summary.UpdatedAt.UTC().Format(time.RFC3339)
 		}
+		if interval == "1d" {
+			var snapshotSummary struct {
+				Count       int64
+				FirstOpenMs *int64
+				LastOpenMs  *int64
+			}
+			if err := s.db.WithContext(ctx).
+				Model(&saasstore.DailyExecutionSnapshot{}).
+				Select("count(*) as count, min(observed_at_ms) as first_open_ms, max(observed_at_ms) as last_open_ms").
+				Where("instrument_id = ? AND data_source = ? AND snapshot_type = ?", instrument.ID, instrument.DataSource, ExecutionModePreclose10m).
+				Scan(&snapshotSummary).Error; err != nil {
+				return nil, err
+			}
+			item.PrecloseSnapshotCount = snapshotSummary.Count
+			if snapshotSummary.FirstOpenMs != nil {
+				item.FirstPrecloseMs = *snapshotSummary.FirstOpenMs
+			}
+			if snapshotSummary.LastOpenMs != nil {
+				item.LastPrecloseMs = *snapshotSummary.LastOpenMs
+			}
+		}
 		rows = append(rows, item)
 	}
 	return rows, nil
 }
 
 func (s *Service) normalizeImportRequest(req ImportRequest) ImportRequest {
-	req.Symbol = normalizeSymbol(req.Symbol)
-	if req.Symbol == "" {
-		req.Symbol = DefaultSymbol
+	instrument, err := ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	if err == nil {
+		req.InstrumentID = instrument.ID
+		req.Symbol = instrument.Symbol
+		req.DataSource = instrument.DataSource
+	} else {
+		req.Symbol = normalizeSymbol(req.Symbol)
+		req.DataSource = normalizeSource(req.DataSource)
+		if req.Symbol == "" {
+			req.Symbol = DefaultSymbol
+			req.InstrumentID = InstrumentBTCUSDT
+			req.DataSource = DataSourceBinance
+		}
 	}
 	req.Interval = normalizeInterval(req.Interval)
 	if req.Interval == "" {
@@ -263,13 +364,23 @@ func validateImportRequest(req ImportRequest) error {
 	if _, ok := intervalDurations[req.Interval]; !ok {
 		return ErrUnsupportedInterval
 	}
+	instrument, err := ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	if err != nil {
+		return err
+	}
+	if req.DataSource != instrument.DataSource {
+		return ErrUnsupportedSource
+	}
+	if !instrumentSupportsInterval(instrument, req.Interval) {
+		return ErrUnsupportedInterval
+	}
 	if req.StartTimeMs <= 0 || req.EndTimeMs <= 0 || req.StartTimeMs > req.EndTimeMs {
 		return ErrInvalidRange
 	}
 	return nil
 }
 
-func (s *Service) storeKLines(ctx context.Context, symbol string, interval string, rows []BinanceKLine) (int64, error) {
+func (s *Service) storeKLines(ctx context.Context, instrumentID string, source string, symbol string, interval string, rows []BinanceKLine) (int64, error) {
 	if len(rows) == 0 {
 		return 0, nil
 	}
@@ -277,25 +388,170 @@ func (s *Service) storeKLines(ctx context.Context, symbol string, interval strin
 	records := make([]saasstore.KLine, 0, len(rows))
 	for _, row := range rows {
 		records = append(records, saasstore.KLine{
-			CreatedAt: now,
-			UpdatedAt: now,
-			Symbol:    symbol,
-			Interval:  interval,
-			OpenTime:  row.OpenTime,
-			Open:      row.Open,
-			High:      row.High,
-			Low:       row.Low,
-			Close:     row.Close,
-			Volume:    row.Volume,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			InstrumentID: instrumentID,
+			Source:       source,
+			Symbol:       symbol,
+			Interval:     interval,
+			OpenTime:     row.OpenTime,
+			Open:         row.Open,
+			High:         row.High,
+			Low:          row.Low,
+			Close:        row.Close,
+			Volume:       row.Volume,
 		})
 	}
 	tx := s.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "symbol"}, {Name: "interval"}, {Name: "open_time"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"open", "high", "low", "close", "volume", "updated_at",
+			"instrument_id", "source", "open", "high", "low", "close", "volume", "updated_at",
 		}),
 	}).CreateInBatches(records, 1000)
 	return tx.RowsAffected, tx.Error
+}
+
+func (s *Service) importPrecloseSnapshots(ctx context.Context, req ImportRequest) (int64, error) {
+	instrument, err := ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	if err != nil {
+		return 0, err
+	}
+	startTime := req.StartTimeMs
+	if req.DataSource == DataSourceYahoo {
+		limitStart := s.now().AddDate(0, 0, -59).UnixMilli()
+		if startTime < limitStart {
+			startTime = limitStart
+		}
+	}
+	var rows []BinanceKLine
+	if req.DataSource == DataSourceYahoo {
+		rows, err = s.yahooClient.FetchChartRows(ctx, instrument.Symbol, "5m", startTime, req.EndTimeMs)
+	} else {
+		rows, err = s.fetchBinanceKLines(ctx, instrument.Symbol, "5m", startTime, req.EndTimeMs)
+	}
+	if err != nil {
+		return 0, err
+	}
+	snapshots, err := buildPrecloseSnapshots(instrument, rows, s.now())
+	if err != nil {
+		return 0, err
+	}
+	if len(snapshots) == 0 {
+		return 0, nil
+	}
+	tx := s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "instrument_id"},
+			{Name: "data_source"},
+			{Name: "trade_date_ms"},
+			{Name: "snapshot_type"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"symbol", "price", "volume", "observed_at_ms", "updated_at",
+		}),
+	}).CreateInBatches(snapshots, 1000)
+	return tx.RowsAffected, tx.Error
+}
+
+func buildPrecloseSnapshots(instrument ResearchInstrument, rows []BinanceKLine, now time.Time) ([]saasstore.DailyExecutionSnapshot, error) {
+	loc, closeHour, closeMinute := precloseSchedule(instrument.ID)
+	byDate := map[string]BinanceKLine{}
+	for _, row := range rows {
+		if row.Close <= 0 {
+			continue
+		}
+		local := time.UnixMilli(row.OpenTime).In(loc)
+		target := time.Date(local.Year(), local.Month(), local.Day(), closeHour, closeMinute, 0, 0, loc).Add(-10 * time.Minute)
+		if local.After(target.Add(15*time.Minute)) || local.Before(target.Add(-20*time.Minute)) {
+			continue
+		}
+		key := local.Format("2006-01-02")
+		current, ok := byDate[key]
+		if !ok || absDuration(time.UnixMilli(row.OpenTime).In(loc).Sub(target)) < absDuration(time.UnixMilli(current.OpenTime).In(loc).Sub(target)) {
+			byDate[key] = row
+		}
+	}
+	out := make([]saasstore.DailyExecutionSnapshot, 0, len(byDate))
+	for _, row := range byDate {
+		local := time.UnixMilli(row.OpenTime).In(loc)
+		tradeDate := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).UTC()
+		out = append(out, saasstore.DailyExecutionSnapshot{
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			InstrumentID: instrument.ID,
+			DataSource:   instrument.DataSource,
+			Symbol:       instrument.Symbol,
+			TradeDateMs:  tradeDate.UnixMilli(),
+			SnapshotType: ExecutionModePreclose10m,
+			Price:        row.Close,
+			Volume:       row.Volume,
+			ObservedAtMs: row.OpenTime,
+		})
+	}
+	return out, nil
+}
+
+func precloseSchedule(instrumentID string) (*time.Location, int, int) {
+	switch instrumentID {
+	case InstrumentBTCUSDT:
+		return time.UTC, 0, 0
+	case "TWII":
+		loc, err := time.LoadLocation("Asia/Taipei")
+		if err != nil {
+			return time.FixedZone("Asia/Taipei", 8*3600), 13, 30
+		}
+		return loc, 13, 30
+	default:
+		loc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			return time.FixedZone("America/New_York", -5*3600), 16, 0
+		}
+		return loc, 16, 0
+	}
+}
+
+func (s *Service) fetchBinanceKLines(ctx context.Context, symbol string, interval string, startTimeMs int64, endTimeMs int64) ([]BinanceKLine, error) {
+	step := intervalDurations[interval].Milliseconds()
+	if step <= 0 {
+		return nil, ErrUnsupportedInterval
+	}
+	out := make([]BinanceKLine, 0)
+	cursor := startTimeMs
+	for cursor <= endTimeMs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		rows, err := s.client.FetchKLines(ctx, symbol, interval, cursor, endTimeMs, 1000)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) == 0 {
+			break
+		}
+		out = append(out, rows...)
+		next := rows[len(rows)-1].OpenTime + step
+		if next <= cursor || len(rows) < 1000 {
+			break
+		}
+		cursor = next
+	}
+	return out, nil
+}
+
+func absDuration(value time.Duration) time.Duration {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func instrumentSupportsInterval(instrument ResearchInstrument, interval string) bool {
+	for _, supported := range instrument.SupportedIntervals {
+		if supported == interval {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Client) FetchKLines(ctx context.Context, symbol string, interval string, startTime int64, endTime int64, limit int) ([]BinanceKLine, error) {
@@ -343,6 +599,206 @@ func (c *Client) FetchKLines(ctx context.Context, symbol string, interval string
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+func (c *YahooClient) FetchKLines(ctx context.Context, symbol string, interval string, startTime int64, endTime int64) ([]BinanceKLine, error) {
+	if interval != "1d" {
+		return nil, ErrUnsupportedInterval
+	}
+	return c.FetchChartRows(ctx, symbol, "1d", startTime, endTime)
+}
+
+func (c *YahooClient) FetchChartRows(ctx context.Context, symbol string, interval string, startTime int64, endTime int64) ([]BinanceKLine, error) {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			if err := sleepWithContext(ctx, time.Duration(attempt)*1500*time.Millisecond); err != nil {
+				return nil, err
+			}
+		}
+		for _, baseURL := range c.chartBaseURLs() {
+			rows, retryable, err := c.fetchChart(ctx, baseURL, symbol, interval, startTime, endTime)
+			if err == nil {
+				return rows, nil
+			}
+			lastErr = err
+			if !retryable {
+				return nil, err
+			}
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("yahoo chart request failed")
+}
+
+func (c *YahooClient) fetchChart(ctx context.Context, baseURL string, symbol string, interval string, startTime int64, endTime int64) ([]BinanceKLine, bool, error) {
+	if err := c.waitTurn(ctx); err != nil {
+		return nil, false, err
+	}
+	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/") + "/v8/finance/chart/" + url.PathEscape(symbol))
+	if err != nil {
+		return nil, false, err
+	}
+	query := endpoint.Query()
+	query.Set("period1", strconv.FormatInt(startTime/1000, 10))
+	query.Set("period2", strconv.FormatInt(endTime/1000, 10))
+	query.Set("interval", interval)
+	query.Set("events", "history")
+	query.Set("includeAdjustedClose", "true")
+	endpoint.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return nil, false, err
+	}
+	req.Header.Set("User-Agent", yahooUserAgent)
+	req.Header.Set("Accept", "application/json,text/plain,*/*")
+	req.Header.Set("Accept-Language", "zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Referer", "https://finance.yahoo.com/")
+	httpClient := c.HTTPClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, true, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, isRetryableYahooStatus(resp.StatusCode), fmt.Errorf("yahoo chart status %d", resp.StatusCode)
+	}
+	var raw yahooChartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, false, err
+	}
+	if raw.Chart.Error != nil {
+		return nil, false, fmt.Errorf("yahoo chart error: %s", raw.Chart.Error.Description)
+	}
+	if len(raw.Chart.Result) == 0 {
+		return nil, false, nil
+	}
+	result := raw.Chart.Result[0]
+	if len(result.Indicators.Quote) == 0 {
+		return nil, false, nil
+	}
+	quote := result.Indicators.Quote[0]
+	rows := make([]BinanceKLine, 0, len(result.Timestamp))
+	for i, ts := range result.Timestamp {
+		open, ok := yahooFloatAt(quote.Open, i)
+		if !ok {
+			continue
+		}
+		high, ok := yahooFloatAt(quote.High, i)
+		if !ok {
+			continue
+		}
+		low, ok := yahooFloatAt(quote.Low, i)
+		if !ok {
+			continue
+		}
+		closePrice, ok := yahooFloatAt(quote.Close, i)
+		if !ok {
+			continue
+		}
+		volume := 0.0
+		if i < len(quote.Volume) && quote.Volume[i] != nil {
+			volume = float64(*quote.Volume[i])
+		}
+		rows = append(rows, BinanceKLine{
+			OpenTime: ts * 1000,
+			Open:     open,
+			High:     high,
+			Low:      low,
+			Close:    closePrice,
+			Volume:   volume,
+		})
+	}
+	return rows, false, nil
+}
+
+func (c *YahooClient) chartBaseURLs() []string {
+	base := strings.TrimRight(c.BaseURL, "/")
+	if base == "" {
+		base = DefaultYahooBaseURL
+	}
+	out := []string{base}
+	if strings.Contains(base, "query1.finance.yahoo.com") {
+		out = append(out, strings.Replace(base, "query1.finance.yahoo.com", "query2.finance.yahoo.com", 1))
+	}
+	return uniqueStrings(out)
+}
+
+func (c *YahooClient) waitTurn(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.lastAt.IsZero() {
+		wait := c.lastAt.Add(yahooMinRequestInterval).Sub(time.Now())
+		if wait > 0 {
+			if err := sleepWithContext(ctx, wait); err != nil {
+				return err
+			}
+		}
+	}
+	c.lastAt = time.Now()
+	return nil
+}
+
+func isRetryableYahooStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status == http.StatusBadGateway || status == http.StatusServiceUnavailable || status == http.StatusGatewayTimeout
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+type yahooChartResponse struct {
+	Chart struct {
+		Result []struct {
+			Timestamp  []int64 `json:"timestamp"`
+			Indicators struct {
+				Quote []struct {
+					Open   []*float64 `json:"open"`
+					High   []*float64 `json:"high"`
+					Low    []*float64 `json:"low"`
+					Close  []*float64 `json:"close"`
+					Volume []*int64   `json:"volume"`
+				} `json:"quote"`
+			} `json:"indicators"`
+		} `json:"result"`
+		Error *struct {
+			Description string `json:"description"`
+		} `json:"error"`
+	} `json:"chart"`
+}
+
+func yahooFloatAt(values []*float64, index int) (float64, bool) {
+	if index >= len(values) || values[index] == nil {
+		return 0, false
+	}
+	return *values[index], true
 }
 
 func parseKLineRow(item []any) (BinanceKLine, error) {

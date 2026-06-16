@@ -4,6 +4,13 @@ import type { EquitySnapshot } from "./dashboard";
 export type BacktestResult = {
   id: number;
   status: "running" | "completed" | "failed";
+  strategy_id?: string;
+  symbol?: string;
+  instrument_id?: string;
+  data_source?: string;
+  execution_mode?: string;
+  interval?: string;
+  source?: string;
   total_return: number;
   alpha: number;
   max_drawdown: number;

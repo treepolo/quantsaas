@@ -15,6 +15,7 @@ function normalizeStatus(status?: string | null) {
   if (normalized === "pending") return "pending";
   if (normalized === "completed") return "completed";
   if (normalized === "failed") return "failed";
+  if (normalized === "cancelled") return "cancelled";
   return "stopped";
 }
 
@@ -26,7 +27,12 @@ const statusClasses: Record<string, string> = {
   halted: "border-[#f87171]/30 bg-[#f87171]/10 text-[#fecaca] before:bg-[#f87171]",
   pending: "border-[#0ea5e9]/30 bg-[#0ea5e9]/10 text-[#bae6fd] before:bg-[#0ea5e9]",
   completed: "border-[#34d399]/30 bg-[#34d399]/10 text-[#bbf7d0] before:bg-[#34d399]",
-  failed: "border-[#f87171]/30 bg-[#f87171]/10 text-[#fecaca] before:bg-[#f87171]"
+  failed: "border-[#f87171]/30 bg-[#f87171]/10 text-[#fecaca] before:bg-[#f87171]",
+  cancelled: "border-slate-500/30 bg-slate-500/10 text-slate-300 before:bg-slate-400"
+};
+
+const statusLabels: Record<string, string> = {
+  cancelled: "已中止"
 };
 
 export function StatusBadge({ status, className }: StatusBadgeProps) {
@@ -40,7 +46,7 @@ export function StatusBadge({ status, className }: StatusBadgeProps) {
         className
       )}
     >
-      {t(`status.${normalized}`)}
+      {statusLabels[normalized] ?? t(`status.${normalized}`)}
     </span>
   );
 }

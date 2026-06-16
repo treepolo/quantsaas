@@ -29,24 +29,40 @@ func (h *MarketDataHandler) Status(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "此路由僅允許 lab/dev 模式"})
 		return
 	}
-	symbol := c.DefaultQuery("symbol", marketdata.DefaultSymbol)
-	symbol = strings.ToUpper(strings.TrimSpace(symbol))
-	if symbol == "" {
-		symbol = marketdata.DefaultSymbol
+	symbol := strings.TrimSpace(c.Query("symbol"))
+	instrumentID := strings.TrimSpace(c.Query("instrument_id"))
+	instrument, err := marketdata.ResolveInstrument(instrumentID, symbol, c.Query("data_source"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 	var intervals []string
 	if raw := strings.TrimSpace(c.Query("intervals")); raw != "" {
 		intervals = strings.Split(raw, ",")
 	}
-	rows, err := h.service.Summaries(c.Request.Context(), symbol, intervals)
+	rows, err := h.service.Summaries(c.Request.Context(), instrument.Symbol, intervals)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"symbol":              symbol,
-		"supported_intervals": marketdata.SupportedIntervals(),
+		"instrument":          instrument,
+		"symbol":              instrument.Symbol,
+		"instrument_id":       instrument.ID,
+		"data_source":         instrument.DataSource,
+		"supported_intervals": instrument.SupportedIntervals,
 		"datasets":            rows,
+	})
+}
+
+func (h *MarketDataHandler) Instruments(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "此路由僅允許 lab/dev 模式"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"instruments":     marketdata.Instruments(),
+		"execution_modes": marketdata.SupportedExecutionModes(),
 	})
 }
 

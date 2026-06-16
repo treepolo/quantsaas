@@ -21,12 +21,17 @@ export type TraceSnapshot = {
 export type EvolutionTask = {
   id: number;
   strategy_id?: string;
-  status: "pending" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
   progress: number;
   current_generation?: number;
   max_generations?: number;
   pop_size?: number;
   pair?: string;
+  instrument_id?: string;
+  data_source?: string;
+  execution_mode?: string;
+  train_start_ms?: number;
+  train_end_ms?: number;
   interval?: string;
   spawn_mode?: "inherit" | "random_once" | "manual";
   test_mode?: boolean;
@@ -50,7 +55,13 @@ export type EvolutionTask = {
 export type GenomeRecord = {
   id: number;
   role: "candidate" | "champion" | "archived" | "challenger" | "retired";
+  strategy_id?: string;
+  instrument_id?: string;
+  data_source?: string;
+  interval?: string;
+  execution_mode?: string;
   created_at: string;
+  activated_at?: string | null;
   score_total: number;
   max_drawdown: number;
   window_score: Record<string, number>;
@@ -59,7 +70,13 @@ export type GenomeRecord = {
 
 export type CreateTaskInput = {
   strategy_id: string;
+  pair?: string;
+  instrument_id?: string;
+  data_source?: string;
   interval?: string;
+  execution_mode?: string;
+  train_start_ms?: number;
+  train_end_ms?: number;
   pop_size: number;
   max_generations: number;
   spawn_mode: "inherit" | "random_once" | "manual";
@@ -92,6 +109,9 @@ export const evolutionApi = {
   },
   promote(genomeId: number) {
     return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/tasks/${genomeId}/promote`, { method: "POST" });
+  },
+  cancel(taskId: number) {
+    return apiFetch<{ status: string; task_id: number }>(`/evolution/tasks/${taskId}/cancel`, { method: "POST" });
   },
   trace(taskId: number, limit = 500) {
     return apiFetch<TraceSnapshot>(`/evolution/tasks/${taskId}/trace?limit=${limit}`);

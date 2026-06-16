@@ -6,6 +6,7 @@ import { hasFeature, type AppFeature } from "../shared/config/features";
 import { LoginPage } from "../features/auth/LoginPage";
 import { RegisterPage } from "../features/auth/RegisterPage";
 import { ResearchHomePage } from "../features/research/ResearchHomePage";
+import { MarketStatusPage } from "../features/research/MarketStatusPage";
 import { EvolutionPage } from "../features/strategies/EvolutionPage";
 import { BacktestingPage } from "../features/backtesting/BacktestingPage";
 import { MarketDataPage } from "../features/marketdata/MarketDataPage";
@@ -56,6 +57,7 @@ export function AppRouter() {
               </Route>
               <Route element={<FeatureGate feature="backtesting" />}>
                 <Route path="data" element={<MarketDataPage />} />
+                <Route path="status" element={<MarketStatusPage />} />
                 <Route path="backtesting" element={<BacktestingPage />} />
               </Route>
               <Route path="templates" element={<Navigate to="/" replace />} />

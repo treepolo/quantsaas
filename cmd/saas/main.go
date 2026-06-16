@@ -15,6 +15,7 @@ import (
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/instance"
+	"quantsaas/internal/saas/marketdata"
 	"quantsaas/internal/saas/store"
 	"quantsaas/internal/saas/ws"
 
@@ -51,6 +52,7 @@ func main() {
 
 	hub := ws.NewHub(db.DB, authService, logger)
 	instanceManager := instance.NewManager(db.DB, nil, hub, logger)
+	marketDataService := marketdata.NewService(db.DB, nil)
 	genomeStore := ga.NewGormGenomeStore(db.DB)
 	evolutionEngine := ga.NewEvolutionEngine(ga.NewSigmoidDCAEvolvable(), genomeStore)
 	epochService := epoch.NewService(db.DB, evolutionEngine, logger)
@@ -68,7 +70,7 @@ func main() {
 		WSHandler:        hub.HandleConnection,
 	})
 
-	scheduler := saascron.NewScheduler(instanceManager, logger)
+	scheduler := saascron.NewScheduler(instanceManager, marketDataService, logger)
 	if err := scheduler.Start(); err != nil {
 		logger.Fatal("start cron failed", zap.Error(err))
 	}

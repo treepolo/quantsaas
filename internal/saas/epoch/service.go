@@ -11,6 +11,7 @@ import (
 
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/ga"
+	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -19,9 +20,10 @@ import (
 )
 
 const (
-	TaskStatusRunning = "running"
-	TaskStatusDone    = "completed"
-	TaskStatusFailed  = "failed"
+	TaskStatusRunning   = "running"
+	TaskStatusDone      = "completed"
+	TaskStatusFailed    = "failed"
+	TaskStatusCancelled = "cancelled"
 )
 
 type Service struct {
@@ -30,6 +32,7 @@ type Service struct {
 	logger      *zap.Logger
 	mu          sync.Mutex
 	currentTask *saasstore.EvolutionTask
+	cancelFuncs map[uint]context.CancelFunc
 	traceMu     sync.Mutex
 	traces      map[uint]*traceBuffer
 	traceModes  map[uint]ga.TraceMode
@@ -38,6 +41,11 @@ type Service struct {
 type CreateTaskRequest struct {
 	StrategyID     string            `json:"strategy_id"`
 	Pair           string            `json:"pair"`
+	InstrumentID   string            `json:"instrument_id"`
+	DataSource     string            `json:"data_source"`
+	ExecutionMode  string            `json:"execution_mode"`
+	TrainStartMs   int64             `json:"train_start_ms"`
+	TrainEndMs     int64             `json:"train_end_ms"`
 	Interval       string            `json:"interval"`
 	PopSize        int               `json:"pop_size"`
 	MaxGenerations int               `json:"max_generations"`
@@ -52,11 +60,12 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 		logger = zap.NewNop()
 	}
 	return &Service{
-		db:         db,
-		engine:     engine,
-		logger:     logger,
-		traces:     map[uint]*traceBuffer{},
-		traceModes: map[uint]ga.TraceMode{},
+		db:          db,
+		engine:      engine,
+		logger:      logger,
+		cancelFuncs: map[uint]context.CancelFunc{},
+		traces:      map[uint]*traceBuffer{},
+		traceModes:  map[uint]ga.TraceMode{},
 	}
 }
 
@@ -89,21 +98,29 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 	}
 	now := time.Now().UTC()
 	task := &saasstore.EvolutionTask{
-		StrategyID: req.StrategyID,
-		Status:     TaskStatusRunning,
-		Progress:   0,
-		Config:     saasstore.JSONB(configRaw),
-		StartedAt:  &now,
+		StrategyID:    req.StrategyID,
+		InstrumentID:  req.InstrumentID,
+		DataSource:    req.DataSource,
+		Interval:      req.Interval,
+		ExecutionMode: req.ExecutionMode,
+		TrainStartMs:  req.TrainStartMs,
+		TrainEndMs:    req.TrainEndMs,
+		Status:        TaskStatusRunning,
+		Progress:      0,
+		Config:        saasstore.JSONB(configRaw),
+		StartedAt:     &now,
 	}
 	if err := s.db.WithContext(ctx).Create(task).Error; err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
 	s.currentTask = task
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.cancelFuncs[task.ID] = cancel
 	s.initTrace(task.ID, req.TraceMode)
 	s.mu.Unlock()
 
-	go s.runEpoch(task.ID, req, spawn)
+	go s.runEpoch(runCtx, task.ID, req, spawn)
 	return task, nil
 }
 
@@ -121,10 +138,33 @@ func (s *Service) CurrentTask() *saasstore.EvolutionTask {
 	return &latest
 }
 
-func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
-	ctx := context.Background()
+func (s *Service) CancelTask(ctx context.Context, taskID uint) error {
+	s.mu.Lock()
+	cancel := s.cancelFuncs[taskID]
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+		return nil
+	}
+	now := time.Now().UTC()
+	return s.db.WithContext(ctx).
+		Model(&saasstore.EvolutionTask{}).
+		Where("id = ? AND status = ?", taskID, TaskStatusRunning).
+		Updates(map[string]any{
+			"status":        TaskStatusCancelled,
+			"error_message": "使用者已中止任務",
+			"finished_at":   &now,
+		}).Error
+}
+
+func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
 	result, err := s.engine.RunEpoch(ctx, ga.EpochConfig{
 		Pair:               req.Pair,
+		InstrumentID:       req.InstrumentID,
+		DataSource:         req.DataSource,
+		ExecutionMode:      req.ExecutionMode,
+		StartTimeMs:        req.TrainStartMs,
+		EndTimeMs:          req.TrainEndMs,
 		Interval:           req.Interval,
 		PopSize:            req.PopSize,
 		MaxGenerations:     req.MaxGenerations,
@@ -164,8 +204,13 @@ func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.Spaw
 	}
 	if err != nil {
 		s.logger.Warn("epoch failed", zap.Error(err))
-		updates["status"] = TaskStatusFailed
-		updates["error_message"] = err.Error()
+		if errors.Is(err, context.Canceled) {
+			updates["status"] = TaskStatusCancelled
+			updates["error_message"] = "使用者已中止任務"
+		} else {
+			updates["status"] = TaskStatusFailed
+			updates["error_message"] = err.Error()
+		}
 	} else {
 		paramPack := json.RawMessage(result.ParamPack)
 		if !json.Valid(paramPack) {
@@ -191,6 +236,7 @@ func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.Spaw
 
 	s.mu.Lock()
 	s.currentTask = nil
+	delete(s.cancelFuncs, taskID)
 	s.mu.Unlock()
 }
 
@@ -255,7 +301,7 @@ func (s *Service) traceModeGetter(taskID uint) func() ga.TraceMode {
 func (s *Service) resolveSpawnPoint(ctx context.Context, req CreateTaskRequest) (*quant.SpawnPoint, error) {
 	switch req.SpawnMode {
 	case "inherit":
-		spawn, err := s.loadChampionSpawn(ctx, req.StrategyID)
+		spawn, err := s.loadChampionSpawn(ctx, req)
 		if err == nil {
 			return spawn, nil
 		}
@@ -273,10 +319,11 @@ func (s *Service) resolveSpawnPoint(ctx context.Context, req CreateTaskRequest) 
 	}
 }
 
-func (s *Service) loadChampionSpawn(ctx context.Context, strategyID string) (*quant.SpawnPoint, error) {
+func (s *Service) loadChampionSpawn(ctx context.Context, req CreateTaskRequest) (*quant.SpawnPoint, error) {
 	var record saasstore.GeneRecord
 	if err := s.db.WithContext(ctx).
-		Where("strategy_id = ? AND role = ?", strategyID, saasstore.GeneRoleChampion).
+		Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
+			req.StrategyID, req.InstrumentID, req.DataSource, req.Interval, req.ExecutionMode, saasstore.GeneRoleChampion).
 		Order("activated_at DESC NULLS LAST, created_at DESC").
 		First(&record).Error; err != nil {
 		return nil, err
@@ -290,11 +337,18 @@ func normalizeRequest(req CreateTaskRequest) CreateTaskRequest {
 		req.StrategyID = sigmoiddca.StrategyID
 	}
 	if req.Pair == "" {
-		req.Pair = "BTCUSDT"
+		req.Pair = marketdata.DefaultSymbol
+	}
+	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Pair, req.DataSource)
+	if err == nil {
+		req.InstrumentID = instrument.ID
+		req.Pair = instrument.Symbol
+		req.DataSource = instrument.DataSource
 	}
 	if req.Interval == "" {
 		req.Interval = "1d"
 	}
+	req.ExecutionMode = marketdata.NormalizeExecutionMode(req.ExecutionMode)
 	if req.SpawnMode == "" {
 		req.SpawnMode = "inherit"
 	}
@@ -316,6 +370,22 @@ func normalizeRequest(req CreateTaskRequest) CreateTaskRequest {
 }
 
 func validateRequest(req CreateTaskRequest) error {
+	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Pair, req.DataSource)
+	if err != nil {
+		return err
+	}
+	if req.DataSource != instrument.DataSource {
+		return fmt.Errorf("unsupported data source: %s", req.DataSource)
+	}
+	if !supportsInterval(instrument.SupportedIntervals, req.Interval) {
+		return fmt.Errorf("unsupported interval for %s: %s", instrument.ID, req.Interval)
+	}
+	if !marketdata.IsSupportedExecutionMode(req.ExecutionMode) {
+		return fmt.Errorf("unsupported execution mode: %s", req.ExecutionMode)
+	}
+	if req.TrainStartMs > 0 && req.TrainEndMs > 0 && req.TrainStartMs > req.TrainEndMs {
+		return errors.New("train_start_ms must be earlier than train_end_ms")
+	}
 	if req.StrategyID != sigmoiddca.StrategyID {
 		return fmt.Errorf("尚不支援的策略: %s", req.StrategyID)
 	}
@@ -337,6 +407,15 @@ func validateRequest(req CreateTaskRequest) error {
 		return errors.New("max_generations 必須介於 5 到 50")
 	}
 	return nil
+}
+
+func supportsInterval(supported []string, interval string) bool {
+	for _, item := range supported {
+		if item == interval {
+			return true
+		}
+	}
+	return false
 }
 
 func defaultSpawnPoint() *quant.SpawnPoint {

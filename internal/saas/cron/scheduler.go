@@ -2,27 +2,31 @@ package cron
 
 import (
 	"context"
+	"time"
 
 	"quantsaas/internal/saas/instance"
+	"quantsaas/internal/saas/marketdata"
 
 	robfigcron "github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
 
 type Scheduler struct {
-	cron    *robfigcron.Cron
-	manager *instance.Manager
-	logger  *zap.Logger
+	cron       *robfigcron.Cron
+	manager    *instance.Manager
+	marketData *marketdata.Service
+	logger     *zap.Logger
 }
 
-func NewScheduler(manager *instance.Manager, logger *zap.Logger) *Scheduler {
+func NewScheduler(manager *instance.Manager, marketData *marketdata.Service, logger *zap.Logger) *Scheduler {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Scheduler{
-		cron:    robfigcron.New(robfigcron.WithSeconds()),
-		manager: manager,
-		logger:  logger,
+		cron:       robfigcron.New(robfigcron.WithSeconds()),
+		manager:    manager,
+		marketData: marketData,
+		logger:     logger,
 	}
 }
 
@@ -30,6 +34,12 @@ func (s *Scheduler) Start() error {
 	_, err := s.cron.AddFunc("0 * * * * *", s.scanRunningInstances)
 	if err != nil {
 		return err
+	}
+	if s.marketData != nil {
+		if _, err := s.cron.AddFunc("0 15 */6 * * *", s.updateDailyMarketData); err != nil {
+			return err
+		}
+		go s.updateDailyMarketData()
 	}
 	s.cron.Start()
 	return nil
@@ -42,6 +52,38 @@ func (s *Scheduler) Stop(ctx context.Context) {
 	case <-ctx.Done():
 		s.logger.Warn("cron shutdown timed out", zap.Error(ctx.Err()))
 	}
+}
+
+func (s *Scheduler) updateDailyMarketData() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	end := time.Now().UTC()
+	start := end.AddDate(0, 0, -14)
+	for _, instrument := range marketdata.Instruments() {
+		if !supportsInterval(instrument.SupportedIntervals, "1d") {
+			continue
+		}
+		_, err := s.marketData.Import(ctx, marketdata.ImportRequest{
+			InstrumentID: instrument.ID,
+			DataSource:   instrument.DataSource,
+			Symbol:       instrument.Symbol,
+			Interval:     "1d",
+			StartTimeMs:  start.UnixMilli(),
+			EndTimeMs:    end.UnixMilli(),
+		})
+		if err != nil {
+			s.logger.Warn("daily market data update failed", zap.String("instrument_id", instrument.ID), zap.Error(err))
+		}
+	}
+}
+
+func supportsInterval(items []string, interval string) bool {
+	for _, item := range items {
+		if item == interval {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scheduler) scanRunningInstances() {

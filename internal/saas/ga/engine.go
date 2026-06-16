@@ -13,9 +13,26 @@ import (
 )
 
 type GenomeStore interface {
-	LoadEliteGenes(ctx context.Context, strategyID string, limit int) ([][]byte, error)
-	SaveChallenger(ctx context.Context, strategyID string, paramPack []byte, result FitnessResult) (uint, error)
-	LoadKLines(ctx context.Context, symbol string, interval string) ([]quant.Bar, error)
+	LoadEliteGenes(ctx context.Context, scope GeneScope, limit int) ([][]byte, error)
+	SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult) (uint, error)
+	LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error)
+}
+
+type GeneScope struct {
+	StrategyID    string
+	InstrumentID  string
+	DataSource    string
+	Interval      string
+	ExecutionMode string
+}
+
+type DatasetScope struct {
+	InstrumentID string
+	DataSource   string
+	Symbol       string
+	Interval     string
+	StartTimeMs  int64
+	EndTimeMs    int64
 }
 
 type EvolutionEngine struct {
@@ -37,6 +54,11 @@ type EvolutionEngine struct {
 
 type EpochConfig struct {
 	Pair               string
+	InstrumentID       string
+	DataSource         string
+	ExecutionMode      string
+	StartTimeMs        int64
+	EndTimeMs          int64
 	Interval           string
 	PopSize            int
 	MaxGenerations     int
@@ -94,7 +116,10 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	e.trace(cfg, TraceModeSummary, "evolution", "epoch.start", "epoch started", map[string]any{
 		"pair":            cfg.Pair,
+		"instrument_id":   cfg.InstrumentID,
+		"data_source":     cfg.DataSource,
 		"interval":        cfg.Interval,
+		"execution_mode":  cfg.ExecutionMode,
 		"population":      e.popSize(cfg),
 		"max_generations": e.maxGenerations(cfg),
 		"trace_mode":      cfg.TraceMode,
@@ -193,7 +218,13 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	if err != nil {
 		return EpochResult{}, err
 	}
-	id, err := e.store.SaveChallenger(ctx, e.evolvable.StrategyID(), paramPack, best.Fitness)
+	id, err := e.store.SaveChallenger(ctx, GeneScope{
+		StrategyID:    e.evolvable.StrategyID(),
+		InstrumentID:  cfg.InstrumentID,
+		DataSource:    cfg.DataSource,
+		Interval:      cfg.Interval,
+		ExecutionMode: cfg.ExecutionMode,
+	}, paramPack, best.Fitness)
 	if err != nil {
 		return EpochResult{}, err
 	}
@@ -212,10 +243,21 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 
 func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfig) (EvaluablePlan, error) {
 	e.trace(cfg, TraceModeSummary, "market_data", "klines.load", "loading historical bars", map[string]any{
-		"pair":     cfg.Pair,
-		"interval": cfg.Interval,
+		"pair":          cfg.Pair,
+		"instrument_id": cfg.InstrumentID,
+		"data_source":   cfg.DataSource,
+		"interval":      cfg.Interval,
+		"start_time_ms": cfg.StartTimeMs,
+		"end_time_ms":   cfg.EndTimeMs,
 	})
-	bars, err := e.store.LoadKLines(ctx, cfg.Pair, cfg.Interval)
+	bars, err := e.store.LoadKLines(ctx, DatasetScope{
+		InstrumentID: cfg.InstrumentID,
+		DataSource:   cfg.DataSource,
+		Symbol:       cfg.Pair,
+		Interval:     cfg.Interval,
+		StartTimeMs:  cfg.StartTimeMs,
+		EndTimeMs:    cfg.EndTimeMs,
+	})
 	if err != nil {
 		return EvaluablePlan{}, err
 	}
@@ -279,7 +321,13 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 
 func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochConfig, rng RandomSource) ([]individual, error) {
 	popSize := e.popSize(cfg)
-	elitesRaw, err := e.store.LoadEliteGenes(ctx, e.evolvable.StrategyID(), popSize)
+	elitesRaw, err := e.store.LoadEliteGenes(ctx, GeneScope{
+		StrategyID:    e.evolvable.StrategyID(),
+		InstrumentID:  cfg.InstrumentID,
+		DataSource:    cfg.DataSource,
+		Interval:      cfg.Interval,
+		ExecutionMode: cfg.ExecutionMode,
+	}, popSize)
 	if err != nil {
 		return nil, err
 	}

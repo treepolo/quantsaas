@@ -75,18 +75,22 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	}
 	bt := NewBacktestHandler(deps.Config.AppRole, deps.DB)
 	md := NewMarketDataHandler(deps.Config.AppRole, deps.DB)
+	research := NewResearchStatusHandler(deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.GET("/evolution/tasks", ev.ListTasks)
 	lab.GET("/evolution/tasks/:taskID/trace", ev.GetTrace)
 	lab.PATCH("/evolution/tasks/:taskID/trace-mode", ev.SetTraceMode)
+	lab.POST("/evolution/tasks/:taskID/cancel", ev.CancelTask)
 	lab.POST("/evolution/tasks/:taskID/promote", ev.Promote)
 	lab.GET("/evolution/genomes", listGenomesHandler(deps))
 	lab.GET("/genome/champion", ev.GetChampion)
 	lab.GET("/genome/challengers", listChallengersHandler(deps))
 	lab.POST("/backtests", bt.Create)
 	lab.GET("/backtests/:id", bt.Get)
+	lab.GET("/market-data/instruments", md.Instruments)
 	lab.GET("/market-data/klines/status", md.Status)
 	lab.POST("/market-data/klines/import", md.Import)
+	lab.GET("/research/status", research.Status)
 
 	if deps.WSHandler != nil {
 		router.GET("/ws/agent", deps.WSHandler)
@@ -578,7 +582,7 @@ func agentStatusHandler(deps RouterDeps) gin.HandlerFunc {
 func listChallengersHandler(deps RouterDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var rows []saasstore.GeneRecord
-		if err := deps.DB.Where("role = ?", saasstore.GeneRoleChallenger).Order("created_at DESC").Find(&rows).Error; err != nil {
+		if err := deps.DB.Scopes(geneScopeFromQuery(c)).Where("role = ?", saasstore.GeneRoleChallenger).Order("created_at DESC").Find(&rows).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -589,7 +593,7 @@ func listChallengersHandler(deps RouterDeps) gin.HandlerFunc {
 func listGenomesHandler(deps RouterDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var rows []saasstore.GeneRecord
-		if err := deps.DB.Order("created_at DESC").Find(&rows).Error; err != nil {
+		if err := deps.DB.Scopes(geneScopeFromQuery(c)).Order("created_at DESC").Find(&rows).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
@@ -600,13 +604,19 @@ func listGenomesHandler(deps RouterDeps) gin.HandlerFunc {
 				role = "candidate"
 			}
 			response = append(response, gin.H{
-				"id":           row.ID,
-				"role":         role,
-				"created_at":   row.CreatedAt.Format(time.RFC3339),
-				"score_total":  row.ScoreTotal,
-				"max_drawdown": row.MaxDrawdown,
-				"window_score": parseWindowScores(row.WindowScore),
-				"param_pack":   parseRawJSON(json.RawMessage(row.ParamPack)),
+				"id":             row.ID,
+				"role":           role,
+				"strategy_id":    row.StrategyID,
+				"instrument_id":  row.InstrumentID,
+				"data_source":    row.DataSource,
+				"interval":       row.Interval,
+				"execution_mode": row.ExecutionMode,
+				"created_at":     row.CreatedAt.Format(time.RFC3339),
+				"activated_at":   formatOptionalTime(row.ActivatedAt),
+				"score_total":    row.ScoreTotal,
+				"max_drawdown":   row.MaxDrawdown,
+				"window_score":   parseWindowScores(row.WindowScore),
+				"param_pack":     parseRawJSON(json.RawMessage(row.ParamPack)),
 			})
 		}
 		c.JSON(http.StatusOK, response)

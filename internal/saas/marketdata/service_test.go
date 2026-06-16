@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestClientFetchKLinesParsesBinanceResponse(t *testing.T) {
@@ -46,5 +47,54 @@ func TestValidateImportRequestRejectsUnsupportedInterval(t *testing.T) {
 	})
 	if err != ErrUnsupportedInterval {
 		t.Fatalf("expected ErrUnsupportedInterval, got %v", err)
+	}
+}
+
+func TestYahooClientRetries429AndParsesChartResponse(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if r.Header.Get("User-Agent") == "" || r.Header.Get("Referer") == "" {
+			t.Fatalf("missing browser-like yahoo headers")
+		}
+		if got := r.URL.Query().Get("interval"); got != "1d" {
+			t.Fatalf("interval = %s", got)
+		}
+		if attempts == 1 {
+			http.Error(w, "rate limited", http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"chart": {
+				"result": [{
+					"timestamp": [1719878400],
+					"indicators": {
+						"quote": [{
+							"open": [23000.0],
+							"high": [23100.0],
+							"low": [22900.0],
+							"close": [23050.0],
+							"volume": [123456]
+						}]
+					}
+				}],
+				"error": null
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewYahooClient(server.URL)
+	client.lastAt = time.Now().Add(-yahooMinRequestInterval)
+	rows, err := client.FetchKLines(context.Background(), "^TWII", "1d", 1719878400000, 1719964800000)
+	if err != nil {
+		t.Fatalf("FetchKLines failed: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if len(rows) != 1 || rows[0].Close != 23050.0 || rows[0].Volume != 123456 {
+		t.Fatalf("unexpected rows: %+v", rows)
 	}
 }

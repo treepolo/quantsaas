@@ -32,6 +32,12 @@ const (
 	BacktestStatusRunning   = "running"
 	BacktestStatusCompleted = "completed"
 	BacktestStatusFailed    = "failed"
+
+	TaskStatusCancelled = "cancelled"
+
+	ExecutionModeCloseSameBar  = "close_same_bar"
+	ExecutionModeCloseNextOpen = "close_next_open"
+	ExecutionModePreclose10m   = "preclose_10m"
 )
 
 type User struct {
@@ -155,63 +161,94 @@ type AuditLog struct {
 }
 
 type GeneRecord struct {
-	ID          uint `gorm:"primaryKey"`
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
-	StrategyID  string  `gorm:"size:80;not null;index"`
-	Role        string  `gorm:"size:24;not null;index"`
-	ParamPack   JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ScoreTotal  float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	MaxDrawdown float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	WindowScore JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ActivatedAt *time.Time
+	ID            uint `gorm:"primaryKey"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	StrategyID    string  `gorm:"size:80;not null;index"`
+	InstrumentID  string  `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource    string  `gorm:"size:32;not null;index;default:binance"`
+	Interval      string  `gorm:"size:16;not null;index;default:1d"`
+	ExecutionMode string  `gorm:"size:32;not null;index;default:close_same_bar"`
+	Role          string  `gorm:"size:24;not null;index"`
+	ParamPack     JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ScoreTotal    float64 `gorm:"type:numeric(30,10);not null;default:0"`
+	MaxDrawdown   float64 `gorm:"type:numeric(30,10);not null;default:0"`
+	WindowScore   JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ActivatedAt   *time.Time
 }
 
 type EvolutionTask struct {
-	ID           uint `gorm:"primaryKey"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	StrategyID   string  `gorm:"size:80;not null;index"`
-	Status       string  `gorm:"size:32;not null;index"`
-	Progress     float64 `gorm:"type:numeric(10,6);not null;default:0"`
-	Config       JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	Result       JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ErrorMessage string  `gorm:"type:text"`
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
+	ID            uint `gorm:"primaryKey"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	StrategyID    string  `gorm:"size:80;not null;index"`
+	InstrumentID  string  `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource    string  `gorm:"size:32;not null;index;default:binance"`
+	Interval      string  `gorm:"size:16;not null;index;default:1d"`
+	ExecutionMode string  `gorm:"size:32;not null;index;default:close_same_bar"`
+	TrainStartMs  int64   `gorm:"not null;default:0"`
+	TrainEndMs    int64   `gorm:"not null;default:0"`
+	Status        string  `gorm:"size:32;not null;index"`
+	Progress      float64 `gorm:"type:numeric(10,6);not null;default:0"`
+	Config        JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	Result        JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ErrorMessage  string  `gorm:"type:text"`
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
 }
 
 type BacktestRun struct {
-	ID           uint `gorm:"primaryKey"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	UserID       uint   `gorm:"not null;index"`
-	StrategyID   string `gorm:"size:80;not null;index"`
-	InstanceID   *uint  `gorm:"index"`
-	Symbol       string `gorm:"size:32;not null;index"`
-	Interval     string `gorm:"size:16;not null;index"`
-	Source       string `gorm:"size:32;not null;index"`
-	Status       string `gorm:"size:32;not null;index"`
-	Request      JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	Result       JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ErrorMessage string `gorm:"type:text"`
-	StartedAt    *time.Time
-	FinishedAt   *time.Time
+	ID            uint `gorm:"primaryKey"`
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	UserID        uint   `gorm:"not null;index"`
+	StrategyID    string `gorm:"size:80;not null;index"`
+	InstanceID    *uint  `gorm:"index"`
+	InstrumentID  string `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource    string `gorm:"size:32;not null;index;default:binance"`
+	ExecutionMode string `gorm:"size:32;not null;index;default:close_same_bar"`
+	StartTimeMs   int64  `gorm:"not null;default:0"`
+	EndTimeMs     int64  `gorm:"not null;default:0"`
+	Symbol        string `gorm:"size:32;not null;index"`
+	Interval      string `gorm:"size:16;not null;index"`
+	Source        string `gorm:"size:32;not null;index"`
+	Status        string `gorm:"size:32;not null;index"`
+	Request       JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	Result        JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ErrorMessage  string `gorm:"type:text"`
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
 
 	User     User              `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 	Instance *StrategyInstance `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
 }
 
 type KLine struct {
-	ID        uint `gorm:"primaryKey"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
-	Symbol    string  `gorm:"size:32;not null;uniqueIndex:idx_klines_symbol_interval_open_time"`
-	Interval  string  `gorm:"size:16;not null;uniqueIndex:idx_klines_symbol_interval_open_time"`
-	OpenTime  int64   `gorm:"not null;uniqueIndex:idx_klines_symbol_interval_open_time"`
-	Open      float64 `gorm:"type:numeric(30,10);not null"`
-	High      float64 `gorm:"type:numeric(30,10);not null"`
-	Low       float64 `gorm:"type:numeric(30,10);not null"`
-	Close     float64 `gorm:"type:numeric(30,10);not null"`
-	Volume    float64 `gorm:"type:numeric(30,10);not null"`
+	ID           uint `gorm:"primaryKey"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	InstrumentID string  `gorm:"size:32;not null;index;default:BTCUSDT"`
+	Source       string  `gorm:"size:32;not null;index;default:binance;uniqueIndex:idx_klines_source_symbol_interval_open_time"`
+	Symbol       string  `gorm:"size:32;not null;uniqueIndex:idx_klines_symbol_interval_open_time;uniqueIndex:idx_klines_source_symbol_interval_open_time"`
+	Interval     string  `gorm:"size:16;not null;uniqueIndex:idx_klines_symbol_interval_open_time;uniqueIndex:idx_klines_source_symbol_interval_open_time"`
+	OpenTime     int64   `gorm:"not null;uniqueIndex:idx_klines_symbol_interval_open_time;uniqueIndex:idx_klines_source_symbol_interval_open_time"`
+	Open         float64 `gorm:"type:numeric(30,10);not null"`
+	High         float64 `gorm:"type:numeric(30,10);not null"`
+	Low          float64 `gorm:"type:numeric(30,10);not null"`
+	Close        float64 `gorm:"type:numeric(30,10);not null"`
+	Volume       float64 `gorm:"type:numeric(30,10);not null"`
+}
+
+type DailyExecutionSnapshot struct {
+	ID           uint `gorm:"primaryKey"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	InstrumentID string  `gorm:"size:32;not null;index;uniqueIndex:idx_daily_execution_snapshots_identity"`
+	DataSource   string  `gorm:"size:32;not null;index;uniqueIndex:idx_daily_execution_snapshots_identity"`
+	Symbol       string  `gorm:"size:32;not null;index"`
+	TradeDateMs  int64   `gorm:"not null;index;uniqueIndex:idx_daily_execution_snapshots_identity"`
+	SnapshotType string  `gorm:"size:32;not null;index;uniqueIndex:idx_daily_execution_snapshots_identity"`
+	Price        float64 `gorm:"type:numeric(30,10);not null"`
+	Volume       float64 `gorm:"type:numeric(30,10);not null;default:0"`
+	ObservedAtMs int64   `gorm:"not null;index"`
 }
