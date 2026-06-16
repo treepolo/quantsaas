@@ -18,7 +18,7 @@ func TestNextGenerationKeepsElites(t *testing.T) {
 	}
 
 	rng := cyclingRNG{}
-	next := engine.nextGeneration(pop, 0, 0, &rng)
+	next := engine.nextGeneration(pop, 0, 0, &rng, EpochConfig{}, 1)
 	if next[0].Gene != "best" || next[1].Gene != "second" {
 		t.Fatalf("elites not preserved: %+v", next[:2])
 	}

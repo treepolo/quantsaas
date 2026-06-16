@@ -43,12 +43,18 @@ type EpochConfig struct {
 	LotStepSize        float64
 	LotMinQty          float64
 	OnProgress         func(EpochProgress)
+	OnTrace            func(TraceEvent)
+	TraceMode          TraceMode
+	TraceModeFunc      func() TraceMode
 	SpawnPointOverride *quant.SpawnPoint
 }
 
 type EpochProgress struct {
 	Generation          int
 	BestFitness         float64
+	BestMaxDrawdown     float64
+	BestWindows         []quant.CrucibleResult
+	BestParamPack       []byte
 	MutationProbability float64
 	MutationScale       float64
 }
@@ -84,17 +90,34 @@ func NewEvolutionEngine(evolvable EvolvableStrategy, store GenomeStore) *Evoluti
 }
 
 func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochResult, error) {
+	cfg.TraceMode = NormalizeTraceMode(cfg.TraceMode)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	e.trace(cfg, TraceModeSummary, "evolution", "epoch.start", "epoch started", map[string]any{
+		"pair":            cfg.Pair,
+		"interval":        cfg.Interval,
+		"population":      e.popSize(cfg),
+		"max_generations": e.maxGenerations(cfg),
+		"trace_mode":      cfg.TraceMode,
+	})
 	plan, err := e.buildEvaluablePlan(ctx, cfg)
 	if err != nil {
+		e.trace(cfg, TraceModeSummary, "evolution", "epoch.failed", "failed to build evaluable plan", map[string]any{
+			"error": err.Error(),
+		})
 		return EpochResult{}, err
 	}
+	plan.Trace = cfg.OnTrace
+	plan.TraceMode = cfg.TraceMode
+	plan.TraceModeFunc = cfg.TraceModeFunc
 
 	population, err := e.initializePopulation(ctx, cfg, rng)
 	if err != nil {
+		e.trace(cfg, TraceModeSummary, "evolution", "epoch.failed", "failed to initialize population", map[string]any{
+			"error": err.Error(),
+		})
 		return EpochResult{}, err
 	}
-	population = e.evaluatePopulation(ctx, population, plan)
+	population = e.evaluatePopulation(ctx, population, plan, 0, cfg)
 
 	best := bestIndividual(population)
 	bestScore := best.Fitness.ScoreTotal
@@ -120,24 +143,45 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		if patience >= e.EarlyStopPatience {
 			nextProb, nextScale := e.rampMutation(mutProb, mutScale)
 			if nextProb == mutProb && nextScale == mutScale {
+				e.trace(cfg, TraceModeSummary, "evolution", "epoch.early_stop", "mutation ramp reached limit", map[string]any{
+					"generation":           generation,
+					"mutation_probability": mutProb,
+					"mutation_scale":       mutScale,
+				})
 				break
 			}
 			mutProb = nextProb
 			mutScale = nextScale
 			patience = 0
+			e.trace(cfg, TraceModeSummary, "evolution", "mutation.ramp", "mutation parameters ramped", map[string]any{
+				"generation":           generation,
+				"mutation_probability": mutProb,
+				"mutation_scale":       mutScale,
+			})
 		}
 
 		if cfg.OnProgress != nil {
+			paramPack, _ := e.evolvable.EncodeResult(best.Gene, plan.Spawn)
 			cfg.OnProgress(EpochProgress{
 				Generation:          generation,
 				BestFitness:         bestScore,
+				BestMaxDrawdown:     best.Fitness.MaxDrawdown,
+				BestWindows:         best.Fitness.Windows,
+				BestParamPack:       paramPack,
 				MutationProbability: mutProb,
 				MutationScale:       mutScale,
 			})
 		}
+		e.trace(cfg, TraceModeSummary, "evolution", "generation.completed", "generation completed", map[string]any{
+			"generation":           generation + 1,
+			"best_score":           bestScore,
+			"max_drawdown":         best.Fitness.MaxDrawdown,
+			"mutation_probability": mutProb,
+			"mutation_scale":       mutScale,
+		})
 
-		population = e.nextGeneration(population, mutProb, mutScale, rng)
-		population = e.evaluatePopulation(ctx, population, plan)
+		population = e.nextGeneration(population, mutProb, mutScale, rng, cfg, generation+1)
+		population = e.evaluatePopulation(ctx, population, plan, generation+1, cfg)
 	}
 
 	sortPopulation(population)
@@ -153,6 +197,11 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	if err != nil {
 		return EpochResult{}, err
 	}
+	e.trace(cfg, TraceModeSummary, "evolution", "epoch.completed", "epoch completed", map[string]any{
+		"gene_record_id": id,
+		"best_score":     best.Fitness.ScoreTotal,
+		"max_drawdown":   best.Fitness.MaxDrawdown,
+	})
 	return EpochResult{
 		GeneRecordID: id,
 		BestGene:     best.Gene,
@@ -162,10 +211,19 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 }
 
 func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfig) (EvaluablePlan, error) {
+	e.trace(cfg, TraceModeSummary, "market_data", "klines.load", "loading historical bars", map[string]any{
+		"pair":     cfg.Pair,
+		"interval": cfg.Interval,
+	})
 	bars, err := e.store.LoadKLines(ctx, cfg.Pair, cfg.Interval)
 	if err != nil {
 		return EvaluablePlan{}, err
 	}
+	e.trace(cfg, TraceModeSummary, "market_data", "klines.loaded", "historical bars loaded", map[string]any{
+		"pair":     cfg.Pair,
+		"interval": cfg.Interval,
+		"bars":     len(bars),
+	})
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	spawn := cfg.SpawnPointOverride
 	if spawn == nil {
@@ -194,6 +252,15 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 			TotalInjected: dca.TotalInjected,
 			MaxDrawdown:   dca.MaxDrawdown,
 			ROI:           dca.ROI,
+		})
+		e.trace(cfg, TraceModeDetailed, "evolution", "window.prepared", "evaluation window prepared", map[string]any{
+			"window":                window.Label,
+			"bars":                  len(window.Bars),
+			"weight":                window.Weight,
+			"baseline_roi":          dca.ROI,
+			"baseline_max_drawdown": dca.MaxDrawdown,
+			"baseline_final_equity": dca.FinalEquity,
+			"baseline_total_inject": dca.TotalInjected,
 		})
 	}
 
@@ -239,10 +306,14 @@ func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochCon
 	for len(population) < popSize {
 		population = append(population, individual{Gene: e.evolvable.Sample(rng)})
 	}
+	e.trace(cfg, TraceModeSummary, "evolution", "population.initialized", "initial population initialized", map[string]any{
+		"population":  len(population),
+		"elite_count": len(elitesRaw),
+	})
 	return population, nil
 }
 
-func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []individual, plan EvaluablePlan) []individual {
+func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []individual, plan EvaluablePlan, generation int, cfg EpochConfig) []individual {
 	workers := runtime.NumCPU()
 	if workers > len(population) {
 		workers = len(population)
@@ -250,6 +321,11 @@ func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []i
 	if workers < 1 {
 		workers = 1
 	}
+	e.trace(cfg, TraceModeSummary, "evolution", "population.evaluate", "population evaluation started", map[string]any{
+		"generation": generation,
+		"population": len(population),
+		"workers":    workers,
+	})
 
 	type task struct {
 		index int
@@ -261,22 +337,47 @@ func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []i
 
 	for worker := 0; worker < workers; worker++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
 			for task := range tasks {
 				fingerprint := e.evolvable.Fingerprint(task.gene)
 				if cached, ok := cache.Load(fingerprint); ok {
 					population[task.index].Fitness = cached.(FitnessResult)
+					e.trace(cfg, TraceModeDetailed, "evolution", "individual.cache_hit", "cached fitness reused", map[string]any{
+						"generation":  generation,
+						"individual":  task.index,
+						"worker":      workerID,
+						"fingerprint": fingerprint,
+					})
 					continue
 				}
-				fitness, err := e.evolvable.Evaluate(ctx, task.gene, plan)
+				e.trace(cfg, TraceModeDetailed, "evolution", "individual.evaluate.start", "individual evaluation started", map[string]any{
+					"generation":  generation,
+					"individual":  task.index,
+					"worker":      workerID,
+					"fingerprint": fingerprint,
+				})
+				evalPlan := plan
+				evalPlan.Generation = generation
+				evalPlan.Individual = task.index
+				evalPlan.Worker = workerID
+				fitness, err := e.evolvable.Evaluate(ctx, task.gene, evalPlan)
 				if err != nil {
 					fitness = FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}
 				}
 				cache.Store(fingerprint, fitness)
 				population[task.index].Fitness = fitness
+				e.trace(cfg, TraceModeDetailed, "evolution", "individual.evaluate.done", "individual evaluation completed", map[string]any{
+					"generation":   generation,
+					"individual":   task.index,
+					"worker":       workerID,
+					"fingerprint":  fingerprint,
+					"score":        fitness.ScoreTotal,
+					"max_drawdown": fitness.MaxDrawdown,
+					"fatal":        fitness.Fatal,
+				})
 			}
-		}()
+		}(worker)
 	}
 
 	for i, item := range population {
@@ -284,10 +385,14 @@ func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []i
 	}
 	close(tasks)
 	wg.Wait()
+	e.trace(cfg, TraceModeSummary, "evolution", "population.evaluated", "population evaluation completed", map[string]any{
+		"generation": generation,
+		"population": len(population),
+	})
 	return population
 }
 
-func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float64, mutScale float64, rng RandomSource) []individual {
+func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float64, mutScale float64, rng RandomSource, cfg EpochConfig, generation int) []individual {
 	sortPopulation(population)
 	popSize := len(population)
 	eliteCount := e.EliteCount
@@ -301,8 +406,21 @@ func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float6
 		p2 := e.tournamentSelect(population, rng)
 		child := e.evolvable.Crossover(p1.Gene, p2.Gene, rng)
 		child = e.evolvable.Mutate(child, mutProb, mutScale, rng)
+		e.trace(cfg, TraceModeDetailed, "evolution", "offspring.created", "offspring generated", map[string]any{
+			"generation":           generation,
+			"child":                len(next),
+			"parent_a_score":       p1.Fitness.ScoreTotal,
+			"parent_b_score":       p2.Fitness.ScoreTotal,
+			"mutation_probability": mutProb,
+			"mutation_scale":       mutScale,
+		})
 		next = append(next, individual{Gene: child})
 	}
+	e.trace(cfg, TraceModeSummary, "evolution", "generation.spawned", "next generation spawned", map[string]any{
+		"generation":  generation,
+		"population":  len(next),
+		"elite_count": eliteCount,
+	})
 	return next
 }
 
@@ -385,4 +503,25 @@ func bestIndividual(population []individual) individual {
 		return individual{Fitness: FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}}
 	}
 	return population[0]
+}
+
+func (e *EvolutionEngine) trace(cfg EpochConfig, required TraceMode, source string, scope string, message string, fields map[string]any) {
+	if cfg.OnTrace == nil || !TraceEnabled(activeTraceMode(cfg.TraceMode, cfg.TraceModeFunc), required) {
+		return
+	}
+	cfg.OnTrace(TraceEvent{
+		RequiredMode: required,
+		Level:        "trace",
+		Source:       source,
+		Scope:        scope,
+		Message:      message,
+		Fields:       fields,
+	})
+}
+
+func activeTraceMode(fallback TraceMode, fn func() TraceMode) TraceMode {
+	if fn != nil {
+		return NormalizeTraceMode(fn())
+	}
+	return NormalizeTraceMode(fallback)
 }

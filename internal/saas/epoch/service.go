@@ -30,6 +30,9 @@ type Service struct {
 	logger      *zap.Logger
 	mu          sync.Mutex
 	currentTask *saasstore.EvolutionTask
+	traceMu     sync.Mutex
+	traces      map[uint]*traceBuffer
+	traceModes  map[uint]ga.TraceMode
 }
 
 type CreateTaskRequest struct {
@@ -41,13 +44,20 @@ type CreateTaskRequest struct {
 	SpawnMode      string            `json:"spawn_mode"`
 	SpawnPoint     *quant.SpawnPoint `json:"spawn_point"`
 	TestMode       bool              `json:"test_mode"`
+	TraceMode      ga.TraceMode      `json:"trace_mode"`
 }
 
 func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Service {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Service{db: db, engine: engine, logger: logger}
+	return &Service{
+		db:         db,
+		engine:     engine,
+		logger:     logger,
+		traces:     map[uint]*traceBuffer{},
+		traceModes: map[uint]ga.TraceMode{},
+	}
 }
 
 func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (*saasstore.EvolutionTask, error) {
@@ -90,6 +100,7 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 		return nil, err
 	}
 	s.currentTask = task
+	s.initTrace(task.ID, req.TraceMode)
 	s.mu.Unlock()
 
 	go s.runEpoch(task.ID, req, spawn)
@@ -120,10 +131,20 @@ func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.Spaw
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
 		SpawnPointOverride: spawn,
+		TraceMode:          req.TraceMode,
+		TraceModeFunc:      s.traceModeGetter(taskID),
+		OnTrace:            s.traceSink(taskID),
 		OnProgress: func(progress ga.EpochProgress) {
+			bestParamPack := json.RawMessage(progress.BestParamPack)
+			if !json.Valid(bestParamPack) {
+				bestParamPack = json.RawMessage(`null`)
+			}
 			raw, _ := json.Marshal(map[string]any{
 				"current_generation":   progress.Generation + 1,
 				"best_score":           progress.BestFitness,
+				"max_drawdown":         progress.BestMaxDrawdown,
+				"window_scores":        progress.BestWindows,
+				"best_param_pack":      bestParamPack,
 				"mutation_probability": progress.MutationProbability,
 				"mutation_scale":       progress.MutationScale,
 				"updated_at":           time.Now().UTC().Format(time.RFC3339),
@@ -146,7 +167,22 @@ func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.Spaw
 		updates["status"] = TaskStatusFailed
 		updates["error_message"] = err.Error()
 	} else {
-		raw, _ := json.Marshal(result)
+		paramPack := json.RawMessage(result.ParamPack)
+		if !json.Valid(paramPack) {
+			paramPack = json.RawMessage(`null`)
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"current_generation":   req.MaxGenerations,
+			"best_score":           result.Fitness.ScoreTotal,
+			"max_drawdown":         result.Fitness.MaxDrawdown,
+			"window_scores":        result.Fitness.Windows,
+			"best_param_pack":      paramPack,
+			"gene_record_id":       result.GeneRecordID,
+			"mutation_probability": s.engine.MutationProbability,
+			"mutation_scale":       s.engine.MutationScale,
+			"updated_at":           finished.Format(time.RFC3339),
+			"Fitness":              result.Fitness,
+		})
 		updates["status"] = TaskStatusDone
 		updates["progress"] = 1.0
 		updates["result"] = saasstore.JSONB(raw)
@@ -156,6 +192,64 @@ func (s *Service) runEpoch(taskID uint, req CreateTaskRequest, spawn *quant.Spaw
 	s.mu.Lock()
 	s.currentTask = nil
 	s.mu.Unlock()
+}
+
+func (s *Service) TraceSnapshot(taskID uint, afterID uint64, limit int) TraceSnapshot {
+	s.traceMu.Lock()
+	buffer := s.traces[taskID]
+	mode := s.traceModes[taskID]
+	s.traceMu.Unlock()
+	if buffer == nil {
+		return TraceSnapshot{TaskID: taskID, Mode: ga.TraceModeOff, Events: []TraceEvent{}}
+	}
+	return TraceSnapshot{
+		TaskID: taskID,
+		Mode:   mode,
+		Events: buffer.snapshot(afterID, limit),
+	}
+}
+
+func (s *Service) SetTraceMode(taskID uint, mode ga.TraceMode) ga.TraceMode {
+	mode = ga.NormalizeTraceMode(mode)
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	if s.traces[taskID] == nil {
+		s.traces[taskID] = newTraceBuffer(TraceBufferLimit)
+	}
+	s.traceModes[taskID] = mode
+	return mode
+}
+
+func (s *Service) initTrace(taskID uint, mode ga.TraceMode) {
+	mode = ga.NormalizeTraceMode(mode)
+	if mode == ga.TraceModeOff {
+		mode = ga.TraceModeDetailed
+	}
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	s.traces[taskID] = newTraceBuffer(TraceBufferLimit)
+	s.traceModes[taskID] = mode
+}
+
+func (s *Service) traceSink(taskID uint) func(ga.TraceEvent) {
+	return func(event ga.TraceEvent) {
+		s.traceMu.Lock()
+		mode := s.traceModes[taskID]
+		buffer := s.traces[taskID]
+		s.traceMu.Unlock()
+		if buffer == nil || !ga.TraceEnabled(mode, event.RequiredMode) {
+			return
+		}
+		buffer.add(event)
+	}
+}
+
+func (s *Service) traceModeGetter(taskID uint) func() ga.TraceMode {
+	return func() ga.TraceMode {
+		s.traceMu.Lock()
+		defer s.traceMu.Unlock()
+		return s.traceModes[taskID]
+	}
 }
 
 func (s *Service) resolveSpawnPoint(ctx context.Context, req CreateTaskRequest) (*quant.SpawnPoint, error) {
@@ -203,6 +297,10 @@ func normalizeRequest(req CreateTaskRequest) CreateTaskRequest {
 	}
 	if req.SpawnMode == "" {
 		req.SpawnMode = "inherit"
+	}
+	req.TraceMode = ga.NormalizeTraceMode(req.TraceMode)
+	if req.TraceMode == ga.TraceModeOff {
+		req.TraceMode = ga.TraceModeDetailed
 	}
 	if req.TestMode {
 		req.PopSize = 10

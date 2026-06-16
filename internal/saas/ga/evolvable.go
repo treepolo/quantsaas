@@ -27,6 +27,12 @@ type EvaluablePlan struct {
 	Windows        []quant.CrucibleWindow
 	DCABaselines   []DCABaseline
 	AggregateCache map[string]any
+	Trace          func(TraceEvent)
+	TraceMode      TraceMode
+	TraceModeFunc  func() TraceMode
+	Generation     int
+	Individual     int
+	Worker         int
 }
 
 type FitnessResult struct {
@@ -59,4 +65,45 @@ type RandomSource interface {
 	Float64() float64
 	NormFloat64() float64
 	Intn(n int) int
+}
+
+type TraceMode string
+
+const (
+	TraceModeOff      TraceMode = "off"
+	TraceModeSummary  TraceMode = "summary"
+	TraceModeDetailed TraceMode = "detailed"
+	TraceModeFull     TraceMode = "full"
+)
+
+type TraceEvent struct {
+	RequiredMode TraceMode      `json:"-"`
+	Level        string         `json:"level"`
+	Source       string         `json:"source"`
+	Scope        string         `json:"scope"`
+	Message      string         `json:"message"`
+	Fields       map[string]any `json:"fields,omitempty"`
+}
+
+func NormalizeTraceMode(mode TraceMode) TraceMode {
+	switch mode {
+	case TraceModeSummary, TraceModeDetailed, TraceModeFull:
+		return mode
+	default:
+		return TraceModeOff
+	}
+}
+
+func TraceEnabled(active TraceMode, required TraceMode) bool {
+	active = NormalizeTraceMode(active)
+	required = NormalizeTraceMode(required)
+	if active == TraceModeOff || required == TraceModeOff {
+		return false
+	}
+	rank := map[TraceMode]int{
+		TraceModeSummary:  1,
+		TraceModeDetailed: 2,
+		TraceModeFull:     3,
+	}
+	return rank[active] >= rank[required]
 }

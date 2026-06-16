@@ -123,7 +123,22 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 		if err := ctx.Err(); err != nil {
 			return FitnessResult{}, err
 		}
-		metrics := RunSigmoidDCASingleBacktest(window.Bars, window.EvalStartMs, plan.Interval, c, plan.Spawn)
+		trace(plan, TraceModeDetailed, "strategy", "window.evaluate.start", "evaluation window started", map[string]any{
+			"generation": plan.Generation,
+			"individual": plan.Individual,
+			"worker":     plan.Worker,
+			"window":     window.Label,
+			"bars":       len(window.Bars),
+		})
+		metrics := RunSigmoidDCASingleBacktestWithTrace(window.Bars, window.EvalStartMs, plan.Interval, c, plan.Spawn, PathTraceConfig{
+			Trace:         plan.Trace,
+			Mode:          plan.TraceMode,
+			TraceModeFunc: plan.TraceModeFunc,
+			Generation:    plan.Generation,
+			Individual:    plan.Individual,
+			Worker:        plan.Worker,
+			Window:        window.Label,
+		})
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown)
@@ -143,9 +158,36 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 		}
 		if result.Fatal {
 			result.ScoreTotal = FatalFitnessScore
+			trace(plan, TraceModeDetailed, "strategy", "window.evaluate.fatal", "window triggered fatal fitness", map[string]any{
+				"generation":      plan.Generation,
+				"individual":      plan.Individual,
+				"worker":          plan.Worker,
+				"window":          window.Label,
+				"score":           score,
+				"roi":             metrics.ROI,
+				"alpha":           alpha,
+				"max_drawdown":    metrics.MaxDrawdown,
+				"baseline_roi":    baseline.ROI,
+				"baseline_max_dd": baseline.MaxDrawdown,
+			})
 			return result, nil
 		}
 		result.ScoreTotal += window.Weight * score
+		trace(plan, TraceModeDetailed, "strategy", "window.evaluate.done", "evaluation window completed", map[string]any{
+			"generation":      plan.Generation,
+			"individual":      plan.Individual,
+			"worker":          plan.Worker,
+			"window":          window.Label,
+			"score":           score,
+			"weighted_score":  window.Weight * score,
+			"roi":             metrics.ROI,
+			"alpha":           alpha,
+			"max_drawdown":    metrics.MaxDrawdown,
+			"baseline_roi":    baseline.ROI,
+			"baseline_max_dd": baseline.MaxDrawdown,
+			"final_equity":    metrics.FinalEquity,
+			"total_injected":  metrics.TotalInjected,
+		})
 	}
 	return result, nil
 }
@@ -178,7 +220,25 @@ func RunSigmoidDCASingleBacktest(bars []quant.Bar, evalStartMs int64, interval s
 	return RunSigmoidDCAPathBacktest(bars, evalStartMs, interval, chromosome, spawn).Metrics
 }
 
+type PathTraceConfig struct {
+	Trace         func(TraceEvent)
+	Mode          TraceMode
+	TraceModeFunc func() TraceMode
+	Generation    int
+	Individual    int
+	Worker        int
+	Window        string
+}
+
+func RunSigmoidDCASingleBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) BacktestMetrics {
+	return RunSigmoidDCAPathBacktestWithTrace(bars, evalStartMs, interval, chromosome, spawn, traceCfg).Metrics
+}
+
 func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) SigmoidDCAPathResult {
+	return RunSigmoidDCAPathBacktestWithTrace(bars, evalStartMs, interval, chromosome, spawn, PathTraceConfig{})
+}
+
+func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
 	if len(bars) == 0 || bars[0].Close <= 0 {
 		return SigmoidDCAPathResult{}
 	}
@@ -239,6 +299,25 @@ func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, interval str
 		portfolio = applyBacktestOutput(portfolio, output, bar.Close)
 
 		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
+		if TraceEnabled(activePathTraceMode(traceCfg), TraceModeFull) {
+			tracePath(traceCfg, TraceModeFull, "strategy", "step.computed", "strategy step computed", map[string]any{
+				"generation":      traceCfg.Generation,
+				"individual":      traceCfg.Individual,
+				"worker":          traceCfg.Worker,
+				"window":          traceCfg.Window,
+				"bar_index":       i,
+				"open_time":       bar.OpenTime,
+				"close":           bar.Close,
+				"total_equity":    equity,
+				"usdt_balance":    portfolio.USDTBalance,
+				"dead_btc":        portfolio.DeadBTC,
+				"float_btc":       portfolio.FloatBTC,
+				"cold_sealed_btc": portfolio.ColdSealedBTC,
+				"intents":         len(output.Intents),
+				"lot_transfers":   len(output.LotTransfers),
+				"diagnostics":     output.Diagnostics,
+			})
+		}
 		if bar.OpenTime >= evalStartMs {
 			if len(nav) == 0 {
 				evalInitial = equity
@@ -263,6 +342,48 @@ func RunSigmoidDCAPathBacktest(bars []quant.Bar, evalStartMs int64, interval str
 		Metrics: metrics,
 		NAV:     points,
 	}
+}
+
+func trace(plan EvaluablePlan, required TraceMode, source string, scope string, message string, fields map[string]any) {
+	if plan.Trace == nil || !TraceEnabled(activePlanTraceMode(plan), required) {
+		return
+	}
+	plan.Trace(TraceEvent{
+		RequiredMode: required,
+		Level:        "trace",
+		Source:       source,
+		Scope:        scope,
+		Message:      message,
+		Fields:       fields,
+	})
+}
+
+func tracePath(traceCfg PathTraceConfig, required TraceMode, source string, scope string, message string, fields map[string]any) {
+	if traceCfg.Trace == nil || !TraceEnabled(activePathTraceMode(traceCfg), required) {
+		return
+	}
+	traceCfg.Trace(TraceEvent{
+		RequiredMode: required,
+		Level:        "trace",
+		Source:       source,
+		Scope:        scope,
+		Message:      message,
+		Fields:       fields,
+	})
+}
+
+func activePlanTraceMode(plan EvaluablePlan) TraceMode {
+	if plan.TraceModeFunc != nil {
+		return NormalizeTraceMode(plan.TraceModeFunc())
+	}
+	return NormalizeTraceMode(plan.TraceMode)
+}
+
+func activePathTraceMode(traceCfg PathTraceConfig) TraceMode {
+	if traceCfg.TraceModeFunc != nil {
+		return NormalizeTraceMode(traceCfg.TraceModeFunc())
+	}
+	return NormalizeTraceMode(traceCfg.Mode)
 }
 
 func lastBacktestPointTime(points []BacktestPoint) int64 {

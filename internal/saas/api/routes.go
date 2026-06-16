@@ -77,6 +77,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	md := NewMarketDataHandler(deps.Config.AppRole, deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.GET("/evolution/tasks", ev.ListTasks)
+	lab.GET("/evolution/tasks/:taskID/trace", ev.GetTrace)
+	lab.PATCH("/evolution/tasks/:taskID/trace-mode", ev.SetTraceMode)
 	lab.POST("/evolution/tasks/:taskID/promote", ev.Promote)
 	lab.GET("/evolution/genomes", listGenomesHandler(deps))
 	lab.GET("/genome/champion", ev.GetChampion)
@@ -604,6 +606,7 @@ func listGenomesHandler(deps RouterDeps) gin.HandlerFunc {
 				"score_total":  row.ScoreTotal,
 				"max_drawdown": row.MaxDrawdown,
 				"window_score": parseWindowScores(row.WindowScore),
+				"param_pack":   parseRawJSON(json.RawMessage(row.ParamPack)),
 			})
 		}
 		c.JSON(http.StatusOK, response)

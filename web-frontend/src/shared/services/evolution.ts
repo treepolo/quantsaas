@@ -1,5 +1,23 @@
 import { apiFetch } from "./client";
 
+export type TraceMode = "off" | "summary" | "detailed" | "full";
+
+export type TraceEvent = {
+  id: number;
+  time: string;
+  level: string;
+  source: string;
+  scope: string;
+  message: string;
+  fields?: Record<string, unknown>;
+};
+
+export type TraceSnapshot = {
+  task_id: number;
+  mode: TraceMode;
+  events: TraceEvent[];
+};
+
 export type EvolutionTask = {
   id: number;
   strategy_id?: string;
@@ -12,8 +30,12 @@ export type EvolutionTask = {
   interval?: string;
   spawn_mode?: "inherit" | "random_once" | "manual";
   test_mode?: boolean;
+  trace_mode?: TraceMode;
   best_score?: number;
   max_drawdown?: number;
+  window_score?: Record<string, number>;
+  best_param_pack?: Record<string, unknown> | null;
+  gene_record_id?: number;
   mutation_probability?: number;
   mutation_scale?: number;
   evaluated_individuals?: number;
@@ -32,6 +54,7 @@ export type GenomeRecord = {
   score_total: number;
   max_drawdown: number;
   window_score: Record<string, number>;
+  param_pack?: Record<string, unknown> | null;
 };
 
 export type CreateTaskInput = {
@@ -42,6 +65,7 @@ export type CreateTaskInput = {
   spawn_mode: "inherit" | "random_once" | "manual";
   spawn_point?: Record<string, unknown>;
   test_mode?: boolean;
+  trace_mode?: TraceMode;
 };
 
 export type EvolutionOverview = {
@@ -68,5 +92,14 @@ export const evolutionApi = {
   },
   promote(genomeId: number) {
     return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/tasks/${genomeId}/promote`, { method: "POST" });
+  },
+  trace(taskId: number, limit = 500) {
+    return apiFetch<TraceSnapshot>(`/evolution/tasks/${taskId}/trace?limit=${limit}`);
+  },
+  setTraceMode(taskId: number, traceMode: TraceMode) {
+    return apiFetch<{ task_id: number; mode: TraceMode }>(`/evolution/tasks/${taskId}/trace-mode`, {
+      method: "PATCH",
+      body: JSON.stringify({ trace_mode: traceMode })
+    });
   }
 };

@@ -12,6 +12,7 @@ import (
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/config"
 	"quantsaas/internal/saas/epoch"
+	"quantsaas/internal/saas/ga"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -118,6 +119,43 @@ func (h *EvolutionHandler) ListTasks(c *gin.Context) {
 	})
 }
 
+func (h *EvolutionHandler) GetTrace(c *gin.Context) {
+	if h.service == nil {
+		c.JSON(http.StatusOK, gin.H{"task_id": 0, "mode": ga.TraceModeOff, "events": []any{}})
+		return
+	}
+	taskID, ok := parseUintParam(c, "taskID")
+	if !ok {
+		return
+	}
+	afterID, _ := strconv.ParseUint(c.DefaultQuery("after_id", "0"), 10, 64)
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "500"))
+	if limit <= 0 || limit > epoch.TraceBufferLimit {
+		limit = 500
+	}
+	c.JSON(http.StatusOK, h.service.TraceSnapshot(uint(taskID), afterID, limit))
+}
+
+func (h *EvolutionHandler) SetTraceMode(c *gin.Context) {
+	if h.service == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "trace service unavailable"})
+		return
+	}
+	taskID, ok := parseUintParam(c, "taskID")
+	if !ok {
+		return
+	}
+	var req struct {
+		TraceMode ga.TraceMode `json:"trace_mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	mode := h.service.SetTraceMode(uint(taskID), req.TraceMode)
+	c.JSON(http.StatusOK, gin.H{"task_id": taskID, "mode": mode})
+}
+
 func (h *EvolutionHandler) Promote(c *gin.Context) {
 	if !h.canUseLab() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "此功能僅允許 lab/dev 模式"})
@@ -199,6 +237,7 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		MaxGenerations int    `json:"max_generations"`
 		SpawnMode      string `json:"spawn_mode"`
 		TestMode       bool   `json:"test_mode"`
+		TraceMode      string `json:"trace_mode"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -206,11 +245,15 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		currentGeneration = int(math.Round(task.Progress * float64(cfg.MaxGenerations)))
 	}
 	var result struct {
-		CurrentGeneration   int     `json:"current_generation"`
-		BestScore           float64 `json:"best_score"`
-		MutationProbability float64 `json:"mutation_probability"`
-		MutationScale       float64 `json:"mutation_scale"`
-		UpdatedAt           string  `json:"updated_at"`
+		CurrentGeneration   int                    `json:"current_generation"`
+		BestScore           float64                `json:"best_score"`
+		MaxDrawdown         float64                `json:"max_drawdown"`
+		MutationProbability float64                `json:"mutation_probability"`
+		MutationScale       float64                `json:"mutation_scale"`
+		UpdatedAt           string                 `json:"updated_at"`
+		WindowScores        []quant.CrucibleResult `json:"window_scores"`
+		BestParamPack       json.RawMessage        `json:"best_param_pack"`
+		GeneRecordID        uint                   `json:"gene_record_id"`
 		Fitness             struct {
 			ScoreTotal  float64 `json:"ScoreTotal"`
 			MaxDrawdown float64 `json:"MaxDrawdown"`
@@ -223,6 +266,10 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	bestScore := result.BestScore
 	if bestScore == 0 {
 		bestScore = result.Fitness.ScoreTotal
+	}
+	maxDrawdown := result.MaxDrawdown
+	if maxDrawdown == 0 {
+		maxDrawdown = result.Fitness.MaxDrawdown
 	}
 	totalEvaluations := currentGeneration * cfg.PopSize
 	totalPlannedEvaluations := cfg.PopSize * cfg.MaxGenerations
@@ -238,8 +285,12 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"interval":              cfg.Interval,
 		"spawn_mode":            cfg.SpawnMode,
 		"test_mode":             cfg.TestMode,
+		"trace_mode":            cfg.TraceMode,
 		"best_score":            bestScore,
-		"max_drawdown":          result.Fitness.MaxDrawdown,
+		"max_drawdown":          maxDrawdown,
+		"window_score":          crucibleScores(result.WindowScores),
+		"best_param_pack":       parseRawJSON(result.BestParamPack),
+		"gene_record_id":        result.GeneRecordID,
 		"mutation_probability":  result.MutationProbability,
 		"mutation_scale":        result.MutationScale,
 		"evaluated_individuals": totalEvaluations,
@@ -267,6 +318,7 @@ func geneResponse(record saasstore.GeneRecord) gin.H {
 		"score_total":  record.ScoreTotal,
 		"max_drawdown": record.MaxDrawdown,
 		"window_score": parseWindowScores(record.WindowScore),
+		"param_pack":   parseRawJSON(json.RawMessage(record.ParamPack)),
 	}
 }
 
@@ -297,4 +349,32 @@ func formatOptionalTime(t *time.Time) any {
 		return nil
 	}
 	return t.Format(time.RFC3339)
+}
+
+func parseRawJSON(raw json.RawMessage) any {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	var out any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func crucibleScores(windows []quant.CrucibleResult) map[string]float64 {
+	out := make(map[string]float64, len(windows))
+	for _, window := range windows {
+		out[window.Window] = window.Score
+	}
+	return out
+}
+
+func parseUintParam(c *gin.Context, name string) (uint64, bool) {
+	id, err := strconv.ParseUint(c.Param(name), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return 0, false
+	}
+	return id, true
 }

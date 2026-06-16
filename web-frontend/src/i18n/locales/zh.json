@@ -156,7 +156,7 @@
   },
   "evolution": {
     "title": "優化實驗室",
-    "subtitle": "建立候選參數並審核是否晉升為目前最優。",
+    "subtitle": "建立優化任務、觀察運算追蹤，並審核候選參數是否成為已採用參數。",
     "optimize": "參數優化",
     "library": "參數庫",
     "selectInstance": "選擇實例",
@@ -184,15 +184,15 @@
     "maxDrawdown": "最大回撤",
     "terminate": "終止任務",
     "queue": "任務隊列",
-    "champion": "目前最優參數",
+    "champion": "已採用參數",
     "applyToInstance": "套用到實例",
     "candidate": "候選參數",
     "archived": "歷史歸檔",
-    "promote": "晉升為最優",
+    "promote": "設為已採用",
     "viewBacktest": "查看回測",
     "noInstance": "尚未建立可研究的策略實例。",
     "noTasks": "尚無優化任務。",
-    "noChampion": "尚無已晉升的最優參數。",
+    "noChampion": "尚無已採用參數。",
     "noGenomes": "尚無候選參數。"
   },
   "agents": {
