@@ -172,6 +172,11 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [generations, setGenerations] = useState(25);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>("detailed");
+  const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">("");
+  const [continuousIterations, setContinuousIterations] = useState(3);
+  const [continuousUnlimited, setContinuousUnlimited] = useState(false);
+  const [standardStartDate, setStandardStartDate] = useState(startDate);
+  const [standardEndDate, setStandardEndDate] = useState(endDate);
   const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 2_000 });
   const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
   const createMutation = useMutation({
@@ -188,7 +193,12 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
         pop_size: population,
         max_generations: generations,
         spawn_mode: spawnMode,
-        trace_mode: traceMode
+        trace_mode: traceMode,
+        continuous_mode: continuousMode,
+        continuous_iterations: continuousIterations,
+        continuous_unlimited: continuousUnlimited,
+        standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
+        standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined
       }),
     onSuccess: () => {
       setExpanded(false);
@@ -235,10 +245,12 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
               <div className="mb-3 flex items-center gap-2 text-sm font-semibold text-[#99f6e4]"><Activity className="h-4 w-4" />運算監控</div>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <Metric label="任務 ID" value={`#${running.id}`} />
+                {running.continuous_mode ? <Metric label="連續輪次" value={running.continuous_unlimited ? `${running.current_iteration ?? 0} / 無上限` : `${running.current_iteration ?? 0} / ${running.continuous_iterations ?? 0}`} /> : null}
                 <Metric label="資料範圍" value={`${msToDateInput(running.train_start_ms) || "-"} ~ ${msToDateInput(running.train_end_ms) || "-"}`} />
                 <Metric label="進度" value={`${progressPct}%`} />
                 <Metric label="已評估" value={planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")} />
                 <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
+                {running.standard_champion_gene_id ? <Metric label="標準化冠軍" value={`#${running.standard_champion_gene_id} / ${(running.standard_champion_score ?? 0).toFixed(4)}`} /> : null}
                 <Metric label="最大回撤" value={running.max_drawdown !== undefined ? formatPercent(running.max_drawdown) : "等待回報"} danger />
                 <Metric label="變異機率" value={running.mutation_probability !== undefined ? formatPercent(running.mutation_probability) : "等待回報"} />
                 <Metric label="最後更新" value={monitorValue(running.monitor_updated_at ? shortDateTime(running.monitor_updated_at) : undefined).toString()} />
@@ -278,6 +290,19 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
           <NumberInput label="族群數" min={10} max={500} value={population} onChange={setPopulation} />
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
+          <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
+          {!continuousUnlimited ? <NumberInput label="連續輪數" min={1} max={100} value={continuousIterations} onChange={setContinuousIterations} /> : <div />}
+          <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
+            <input type="checkbox" checked={continuousUnlimited} onChange={(event) => setContinuousUnlimited(event.target.checked)} />
+            無上限，直到手動中止
+          </label>
+          {continuousMode === "standardized_best" ? (
+            <>
+              <label><span className="mb-2 block text-sm text-slate-300">標準化開始日</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={standardStartDate} onChange={(event) => setStandardStartDate(event.target.value)} /></label>
+              <label><span className="mb-2 block text-sm text-slate-300">標準化結束日</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={standardEndDate} onChange={(event) => setStandardEndDate(event.target.value)} /></label>
+              <div className="md:col-span-2 text-xs text-slate-500">每輪結束後會用這段區間比較該標的參數庫，下一輪接續標準化綜合評分最高的參數。</div>
+            </>
+          ) : null}
           <div className="md:col-span-2">
             <div className="mb-2 text-sm text-slate-300">原始追蹤模式</div>
             <div className="grid gap-2 md:grid-cols-4">

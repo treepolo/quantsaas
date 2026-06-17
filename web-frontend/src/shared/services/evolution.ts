@@ -36,6 +36,14 @@ export type EvolutionTask = {
   spawn_mode?: "inherit" | "random_once" | "manual";
   test_mode?: boolean;
   trace_mode?: TraceMode;
+  continuous_mode?: "" | "standardized_best" | "random";
+  current_iteration?: number;
+  continuous_iterations?: number;
+  continuous_unlimited?: boolean;
+  standard_start_ms?: number;
+  standard_end_ms?: number;
+  standard_champion_gene_id?: number;
+  standard_champion_score?: number;
   best_score?: number;
   max_drawdown?: number;
   window_score?: Record<string, number>;
@@ -99,6 +107,11 @@ export type CreateTaskInput = {
   spawn_point?: Record<string, unknown>;
   test_mode?: boolean;
   trace_mode?: TraceMode;
+  continuous_mode?: "" | "standardized_best" | "random";
+  continuous_iterations?: number;
+  continuous_unlimited?: boolean;
+  standard_start_ms?: number;
+  standard_end_ms?: number;
 };
 
 export type EvolutionOverview = {

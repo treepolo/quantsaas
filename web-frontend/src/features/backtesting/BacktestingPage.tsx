@@ -19,11 +19,14 @@ type ChartPoint = {
   label: string;
   time_ms: number;
   time: string;
-  total_assets: number;
+  strategy?: number;
   benchmark?: number;
   strategy_value?: number;
   benchmark_value?: number;
+  [key: string]: string | number | undefined;
 };
+type ComparisonResult = { genome: GenomeRecord; result: BacktestResult; color: string };
+type SeriesDef = { key: string; dataKey: string; name: string; color: string };
 
 const executionModes = [
   ["close_same_bar", "收盤同根"],
@@ -41,6 +44,7 @@ const intervalLabels: Record<string, string> = {
 };
 
 const dayMs = 24 * 60 * 60 * 1000;
+const comparisonColors = ["#2dd4bf", "#f59e0b", "#a78bfa", "#38bdf8", "#f472b6", "#84cc16", "#fb7185", "#e2e8f0"];
 
 function roleLabel(role: GenomeRecord["role"]) {
   if (role === "champion") return "已採用";
@@ -71,6 +75,42 @@ function formatTick(value: number | string, mode: "year" | "month" | "day") {
 function genomeLabel(genome: GenomeRecord, instrumentNames: Record<string, string>) {
   const instrument = instrumentNames[genome.instrument_id ?? ""] ?? genome.instrument_id ?? "未知標的";
   return `#${genome.id} - ${roleLabel(genome.role)} - ${instrument} - ${genome.score_total.toFixed(3)}`;
+}
+
+function shortGenomeLabel(genome: GenomeRecord) {
+  return genome.name?.trim() || `#${genome.id}`;
+}
+
+function buildSingleChartData(result: BacktestResult | null): ChartPoint[] {
+  return (result?.nav ?? []).map((item) => ({
+    label: formatAxisTime(item.time),
+    time_ms: new Date(item.time).getTime(),
+    time: item.time,
+    strategy: item.total_assets,
+    benchmark: item.benchmark ?? item.total_assets
+  }));
+}
+
+function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
+  const points = new Map<number, ChartPoint>();
+  for (const comparison of items) {
+    const key = `series_${comparison.genome.id}`;
+    for (const item of comparison.result.nav ?? []) {
+      const timeMs = new Date(item.time).getTime();
+      const point =
+        points.get(timeMs) ??
+        ({
+          label: formatAxisTime(item.time),
+          time_ms: timeMs,
+          time: item.time,
+          benchmark: item.benchmark ?? item.total_assets
+        } satisfies ChartPoint);
+      point[key] = item.total_assets;
+      if (point.benchmark === undefined) point.benchmark = item.benchmark ?? item.total_assets;
+      points.set(timeMs, point);
+    }
+  }
+  return Array.from(points.values()).sort((a, b) => a.time_ms - b.time_ms);
 }
 
 function clampRangeBySize(start: number, size: number, length: number): ChartRange {
@@ -180,12 +220,14 @@ export function BacktestingPage() {
   const selectedInstrument = instruments.find((item) => item.id === instrumentId);
   const [interval, setInterval] = useState("1d");
   const [executionMode, setExecutionMode] = useState("close_same_bar");
-  const [source, setSource] = useState<"champion" | "candidate" | "custom">("champion");
+  const [source, setSource] = useState<"champion" | "candidate" | "custom">(initialGenome ? "candidate" : "champion");
   const [candidateId, setCandidateId] = useState(initialGenome);
+  const [selectedGenomeIds, setSelectedGenomeIds] = useState<number[]>(initialGenome ? [initialGenome] : []);
   const [customJson, setCustomJson] = useState("{\n  \n}");
   const [backtestStart, setBacktestStart] = useState("");
   const [backtestEnd, setBacktestEnd] = useState("");
   const [result, setResult] = useState<BacktestResult | null>(null);
+  const [comparisonResults, setComparisonResults] = useState<ComparisonResult[]>([]);
   const [range, setRange] = useState<ChartRange | null>(null);
   const [scaleMode, setScaleMode] = useState<ScaleMode>("absolute");
   const [valueMode, setValueMode] = useState<ValueMode>("nav");
@@ -196,12 +238,13 @@ export function BacktestingPage() {
   const [isPanning, setIsPanning] = useState(false);
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
-  const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes[0];
-  const isCrossInstrument = source === "candidate" && selectedGenome?.instrument_id && selectedGenome.instrument_id !== instrumentId;
+  const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];
+  const selectedGenomes = selectableGenomes.filter((genome) => selectedGenomeIds.includes(genome.id));
+  const crossInstrumentCount = selectedGenomes.filter((genome) => genome.instrument_id && genome.instrument_id !== instrumentId).length;
 
   const startMutation = useMutation({
     mutationFn: async () => {
-      const payload = {
+      const basePayload = {
         instrument_id: instrumentId,
         data_source: selectedInstrument?.data_source,
         symbol: selectedInstrument?.symbol ?? instrumentId,
@@ -209,23 +252,46 @@ export function BacktestingPage() {
         execution_mode: executionMode,
         start_time_ms: dateStartMs(backtestStart),
         end_time_ms: dateEndMs(backtestEnd),
-        source,
-        candidate_id: source === "candidate" ? selectedGenome?.id : undefined,
-        custom_params: source === "custom" ? JSON.parse(customJson || "{}") : undefined
+        source
       };
-      return backtestsApi.create(payload);
+      if (source === "candidate") {
+        const targets = selectedGenomes.length > 0 ? selectedGenomes : selectedGenome ? [selectedGenome] : [];
+        const responses = await Promise.all(
+          targets.map((genome, index) =>
+            backtestsApi
+              .create({ ...basePayload, candidate_id: genome.id })
+              .then((result) => ({ genome, result, color: comparisonColors[index % comparisonColors.length] }))
+          )
+        );
+        return { primary: responses[0]?.result ?? null, comparisons: responses };
+      }
+      const primary = await backtestsApi.create({
+        ...basePayload,
+        custom_params: source === "custom" ? JSON.parse(customJson || "{}") : undefined
+      });
+      return { primary, comparisons: [] as ComparisonResult[] };
     },
-    onSuccess: setResult
+    onSuccess: ({ primary, comparisons }) => {
+      setResult(primary);
+      setComparisonResults(comparisons);
+    }
   });
 
-  const chartData = useMemo(
+  const seriesDefs = useMemo<SeriesDef[]>(
     () =>
-      (result?.nav ?? []).map((item) => ({
-        ...item,
-        label: formatAxisTime(item.time),
-        time_ms: new Date(item.time).getTime()
-      })),
-    [result]
+      comparisonResults.length > 0
+        ? comparisonResults.map((item) => ({
+            key: `series_${item.genome.id}`,
+            dataKey: `value_series_${item.genome.id}`,
+            name: shortGenomeLabel(item.genome),
+            color: item.color
+          }))
+        : [{ key: "strategy", dataKey: "strategy_value", name: "策略結果", color: "#2dd4bf" }],
+    [comparisonResults]
+  );
+  const chartData = useMemo(
+    () => (comparisonResults.length > 0 ? buildComparisonChartData(comparisonResults) : buildSingleChartData(result)),
+    [comparisonResults, result]
   );
 
   useEffect(() => {
@@ -246,18 +312,21 @@ export function BacktestingPage() {
   }, [chartData, range]);
   const visibleChartData = useMemo(() => {
     if (visibleRawChartData.length === 0) return [];
-    const baseStrategy = Math.max(1, visibleRawChartData[0].total_assets);
-    const baseBenchmark = Math.max(1, visibleRawChartData[0].benchmark ?? visibleRawChartData[0].total_assets);
+    const bases = Object.fromEntries(seriesDefs.map((series) => [series.key, Math.max(1, Number(visibleRawChartData[0][series.key]) || 1)]));
+    const baseBenchmark = Math.max(1, Number(visibleRawChartData[0].benchmark) || 1);
     return visibleRawChartData.map((item) => {
-      const strategyRaw = valueMode === "relative" ? (item.total_assets / baseStrategy) * 100 : item.total_assets;
-      const benchmarkRaw = valueMode === "relative" ? ((item.benchmark ?? item.total_assets) / baseBenchmark) * 100 : item.benchmark ?? item.total_assets;
-      return {
-        ...item,
-        strategy_value: toChartValue(strategyRaw, scaleMode),
-        benchmark_value: toChartValue(benchmarkRaw, scaleMode)
-      };
+      const next: ChartPoint = { ...item };
+      for (const series of seriesDefs) {
+        const rawValue = Number(item[series.key]) || 0;
+        const seriesRaw = valueMode === "relative" ? (rawValue / bases[series.key]) * 100 : rawValue;
+        next[series.dataKey] = toChartValue(seriesRaw, scaleMode);
+      }
+      const benchmarkRawValue = Number(item.benchmark) || 0;
+      const benchmarkRaw = valueMode === "relative" ? (benchmarkRawValue / baseBenchmark) * 100 : benchmarkRawValue;
+      next.benchmark_value = toChartValue(benchmarkRaw, scaleMode);
+      return next;
     });
-  }, [visibleRawChartData, scaleMode, valueMode]);
+  }, [visibleRawChartData, scaleMode, valueMode, seriesDefs]);
   const axisTicks = useMemo(() => buildAxisTicks(visibleChartData), [visibleChartData]);
 
   useEffect(() => {
@@ -384,17 +453,32 @@ export function BacktestingPage() {
           <DateInput label="回測結束日" value={backtestEnd} onChange={setBacktestEnd} />
 
           {source === "candidate" ? (
-            <label className="md:col-span-2">
-              <span className="mb-2 block text-sm text-slate-300">參數包</span>
-              <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={selectedGenome?.id ?? ""} onChange={(event) => setCandidateId(Number(event.target.value))}>
-                {selectableGenomes.map((genome) => (
-                  <option key={genome.id} value={genome.id}>
-                    {genomeLabel(genome, instrumentNames)}
-                  </option>
-                ))}
-              </select>
-              {isCrossInstrument ? <div className="mt-2 text-xs text-[#fde68a]">跨商品回測：此參數來自 {instrumentNames[selectedGenome.instrument_id ?? ""] ?? selectedGenome.instrument_id}，目前套用到 {selectedInstrument?.display_name ?? instrumentId}。</div> : null}
-            </label>
+            <div className="md:col-span-2">
+              <div className="mb-2 text-sm text-slate-300">參數包</div>
+              <div className="max-h-72 space-y-2 overflow-auto rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+                {selectableGenomes.map((genome) => {
+                  const checked = selectedGenomeIds.includes(genome.id);
+                  return (
+                    <label key={genome.id} className={cn("flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 text-sm transition", checked ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-slate-100" : "border-white/[0.04] text-slate-400 hover:text-slate-200")}>
+                      <input
+                        className="mt-1"
+                        type="checkbox"
+                        checked={checked}
+                        onChange={(event) => {
+                          setCandidateId(genome.id);
+                          setSelectedGenomeIds((current) => (event.target.checked ? Array.from(new Set([...current, genome.id])) : current.filter((id) => id !== genome.id)));
+                        }}
+                      />
+                      <span>
+                        <span className="block font-mono">{genomeLabel(genome, instrumentNames)}</span>
+                        {genome.name ? <span className="mt-1 block text-xs text-slate-500">{genome.name}</span> : null}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {crossInstrumentCount > 0 ? <div className="mt-2 text-xs text-[#fde68a]">跨商品回測：已選 {crossInstrumentCount.toLocaleString("zh-TW")} 個非本商品來源參數，目前套用到 {selectedInstrument?.display_name ?? instrumentId}。</div> : null}
+            </div>
           ) : null}
 
           {source === "custom" ? (
@@ -404,10 +488,11 @@ export function BacktestingPage() {
           {executionMode === "preclose_10m" ? <div className="text-xs text-[#fde68a] md:col-span-2">此模式需要已匯入收盤前 10 分鐘快照。若資料不足，請先到資料頁匯入包含快照的日 K 資料。</div> : null}
 
           <div className="md:col-span-2">
-            <Button icon={PlayCircle} loading={startMutation.isPending} type="submit" disabled={source === "candidate" && selectableGenomes.length === 0}>
+            <Button icon={PlayCircle} loading={startMutation.isPending} type="submit" disabled={source === "candidate" && selectedGenomeIds.length === 0}>
               開始回測
             </Button>
             {source === "candidate" && selectableGenomes.length === 0 ? <div className="mt-2 text-sm text-slate-500">尚無可回測的參數。</div> : null}
+            {source === "candidate" && selectableGenomes.length > 0 && selectedGenomeIds.length === 0 ? <div className="mt-2 text-sm text-slate-500">請至少勾選一個參數。</div> : null}
             {startMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(startMutation.error.message)}</div> : null}
           </div>
         </form>
@@ -428,6 +513,27 @@ export function BacktestingPage() {
               </Card>
             ))}
           </div>
+
+          {comparisonResults.length > 1 ? (
+            <Card className="p-4">
+              <div className="mb-3 text-sm font-semibold text-slate-300">多參數比較</div>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {comparisonResults.map((item) => (
+                  <div key={item.genome.id} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+                    <div className="flex items-center gap-2">
+                      <span className="h-3 w-3 rounded-full" style={{ backgroundColor: item.color }} />
+                      <span className="font-mono text-sm text-slate-200">{shortGenomeLabel(item.genome)}</span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                      <div><div className="text-slate-500">總報酬</div><div className="font-mono text-slate-100">{formatPercent(item.result.total_return)}</div></div>
+                      <div><div className="text-slate-500">超額</div><div className="font-mono text-slate-100">{formatPercent(item.result.alpha)}</div></div>
+                      <div><div className="text-slate-500">回撤</div><div className="font-mono text-[#fecaca]">{formatPercent(item.result.max_drawdown)}</div></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          ) : null}
 
           <Card>
             <CardHeader className="items-center">
@@ -471,10 +577,12 @@ export function BacktestingPage() {
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={visibleChartData} margin={{ left: 0, right: 10, top: 10, bottom: 30 }}>
                   <defs>
-                    <linearGradient id="backtestFill" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="5%" stopColor="#2dd4bf" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0.02} />
-                    </linearGradient>
+                    {seriesDefs.map((series) => (
+                      <linearGradient key={series.dataKey} id={`${series.dataKey}Fill`} x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="5%" stopColor={series.color} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={series.color} stopOpacity={0.02} />
+                      </linearGradient>
+                    ))}
                   </defs>
                   <CartesianGrid stroke="rgba(148,163,184,0.08)" vertical={false} />
                   <XAxis dataKey="time_ms" ticks={axisTicks.ticks} tickFormatter={axisTicks.formatter} stroke="#64748b" tickLine={false} axisLine={false} fontSize={11} interval={0} minTickGap={24} />
@@ -485,7 +593,9 @@ export function BacktestingPage() {
                     labelFormatter={(value) => formatFullAxisTime(value)}
                   />
                   <Legend />
-                  <Area name="策略結果" type="monotone" dataKey="strategy_value" stroke="#2dd4bf" strokeWidth={2} fill="url(#backtestFill)" isAnimationActive={false} />
+                  {seriesDefs.map((series) => (
+                    <Area key={series.dataKey} name={series.name} type="monotone" dataKey={series.dataKey} stroke={series.color} strokeWidth={2} fill={seriesDefs.length === 1 ? `url(#${series.dataKey}Fill)` : "transparent"} isAnimationActive={false} connectNulls />
+                  ))}
                   <Area name="基準" type="monotone" dataKey="benchmark_value" stroke="#64748b" strokeDasharray="5 5" fill="transparent" isAnimationActive={false} />
                 </AreaChart>
               </ResponsiveContainer>

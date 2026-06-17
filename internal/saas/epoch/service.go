@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,20 +40,31 @@ type Service struct {
 }
 
 type CreateTaskRequest struct {
-	StrategyID     string            `json:"strategy_id"`
-	Pair           string            `json:"pair"`
-	InstrumentID   string            `json:"instrument_id"`
-	DataSource     string            `json:"data_source"`
-	ExecutionMode  string            `json:"execution_mode"`
-	TrainStartMs   int64             `json:"train_start_ms"`
-	TrainEndMs     int64             `json:"train_end_ms"`
-	Interval       string            `json:"interval"`
-	PopSize        int               `json:"pop_size"`
-	MaxGenerations int               `json:"max_generations"`
-	SpawnMode      string            `json:"spawn_mode"`
-	SpawnPoint     *quant.SpawnPoint `json:"spawn_point"`
-	TestMode       bool              `json:"test_mode"`
-	TraceMode      ga.TraceMode      `json:"trace_mode"`
+	StrategyID           string            `json:"strategy_id"`
+	Pair                 string            `json:"pair"`
+	InstrumentID         string            `json:"instrument_id"`
+	DataSource           string            `json:"data_source"`
+	ExecutionMode        string            `json:"execution_mode"`
+	TrainStartMs         int64             `json:"train_start_ms"`
+	TrainEndMs           int64             `json:"train_end_ms"`
+	Interval             string            `json:"interval"`
+	PopSize              int               `json:"pop_size"`
+	MaxGenerations       int               `json:"max_generations"`
+	SpawnMode            string            `json:"spawn_mode"`
+	SpawnPoint           *quant.SpawnPoint `json:"spawn_point"`
+	TestMode             bool              `json:"test_mode"`
+	TraceMode            ga.TraceMode      `json:"trace_mode"`
+	ContinuousMode       string            `json:"continuous_mode"`
+	ContinuousIterations int               `json:"continuous_iterations"`
+	ContinuousUnlimited  bool              `json:"continuous_unlimited"`
+	StandardStartMs      int64             `json:"standard_start_ms"`
+	StandardEndMs        int64             `json:"standard_end_ms"`
+}
+
+type standardizedChampion struct {
+	GeneRecordID uint
+	Score        float64
+	ParamPack    []byte
 }
 
 func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Service {
@@ -158,6 +170,10 @@ func (s *Service) CancelTask(ctx context.Context, taskID uint) error {
 }
 
 func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
+	if req.ContinuousMode != "" {
+		s.runContinuousEpochs(ctx, taskID, req, spawn)
+		return
+	}
 	result, err := s.engine.RunEpoch(ctx, ga.EpochConfig{
 		Pair:               req.Pair,
 		InstrumentID:       req.InstrumentID,
@@ -239,6 +255,228 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 	s.currentTask = nil
 	delete(s.cancelFuncs, taskID)
 	s.mu.Unlock()
+}
+
+func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
+	var champion *standardizedChampion
+	var lastResult ga.EpochResult
+	var lastErr error
+	iteration := 0
+
+	for {
+		if err := ctx.Err(); err != nil {
+			lastErr = err
+			break
+		}
+		if !req.ContinuousUnlimited && iteration >= req.ContinuousIterations {
+			break
+		}
+		iteration++
+		cfg := s.epochConfig(req, spawn, taskID)
+		cfg.RandomPopulation = req.ContinuousMode == "random"
+		if req.ContinuousMode == "standardized_best" && champion != nil {
+			cfg.SeedParamPack = champion.ParamPack
+		}
+		cfg.OnProgress = s.epochProgressUpdater(taskID, req, iteration)
+
+		result, err := s.engine.RunEpoch(ctx, cfg)
+		if err != nil {
+			lastErr = err
+			break
+		}
+		lastResult = result
+
+		if req.ContinuousMode == "standardized_best" {
+			nextChampion, err := s.refreshStandardizedChampion(ctx, req, result.GeneRecordID, champion)
+			if err != nil {
+				lastErr = err
+				break
+			}
+			champion = nextChampion
+			s.writeContinuousSnapshot(taskID, req, iteration, result, champion, false)
+		} else {
+			s.writeContinuousSnapshot(taskID, req, iteration, result, nil, false)
+		}
+	}
+
+	finished := time.Now().UTC()
+	updates := map[string]any{"finished_at": &finished}
+	if lastErr != nil {
+		s.logger.Warn("continuous epoch failed", zap.Error(lastErr))
+		if errors.Is(lastErr, context.Canceled) {
+			updates["status"] = TaskStatusCancelled
+			updates["error_message"] = "使用者已中止任務"
+		} else {
+			updates["status"] = TaskStatusFailed
+			updates["error_message"] = lastErr.Error()
+		}
+	} else {
+		updates["status"] = TaskStatusDone
+		updates["progress"] = 1.0
+		s.writeContinuousSnapshot(taskID, req, iteration, lastResult, champion, true)
+	}
+	_ = s.db.Model(&saasstore.EvolutionTask{}).Where("id = ?", taskID).Updates(updates).Error
+
+	s.mu.Lock()
+	s.currentTask = nil
+	delete(s.cancelFuncs, taskID)
+	s.mu.Unlock()
+}
+
+func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, taskID uint) ga.EpochConfig {
+	return ga.EpochConfig{
+		Pair:               req.Pair,
+		InstrumentID:       req.InstrumentID,
+		DataSource:         req.DataSource,
+		ExecutionMode:      req.ExecutionMode,
+		StartTimeMs:        req.TrainStartMs,
+		EndTimeMs:          req.TrainEndMs,
+		Interval:           req.Interval,
+		PopSize:            req.PopSize,
+		MaxGenerations:     req.MaxGenerations,
+		SpawnMode:          req.SpawnMode,
+		LotStepSize:        spawn.Risk.LotStep,
+		LotMinQty:          spawn.Risk.LotMin,
+		SpawnPointOverride: spawn,
+		TraceMode:          req.TraceMode,
+		TraceModeFunc:      s.traceModeGetter(taskID),
+		OnTrace:            s.traceSink(taskID),
+	}
+}
+
+func (s *Service) epochProgressUpdater(taskID uint, req CreateTaskRequest, iteration int) func(ga.EpochProgress) {
+	return func(progress ga.EpochProgress) {
+		bestParamPack := json.RawMessage(progress.BestParamPack)
+		if !json.Valid(bestParamPack) {
+			bestParamPack = json.RawMessage(`null`)
+		}
+		totalIterations := req.ContinuousIterations
+		overallProgress := float64(progress.Generation+1) / float64(max(1, req.MaxGenerations))
+		if req.ContinuousMode != "" && !req.ContinuousUnlimited {
+			overallProgress = (float64(iteration-1) + overallProgress) / float64(max(1, totalIterations))
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"current_generation":    progress.Generation + 1,
+			"best_score":            progress.BestFitness,
+			"max_drawdown":          progress.BestMaxDrawdown,
+			"window_scores":         progress.BestWindows,
+			"best_param_pack":       bestParamPack,
+			"mutation_probability":  progress.MutationProbability,
+			"mutation_scale":        progress.MutationScale,
+			"updated_at":            time.Now().UTC().Format(time.RFC3339),
+			"continuous_mode":       req.ContinuousMode,
+			"current_iteration":     iteration,
+			"continuous_iterations": req.ContinuousIterations,
+			"continuous_unlimited":  req.ContinuousUnlimited,
+			"standard_start_ms":     req.StandardStartMs,
+			"standard_end_ms":       req.StandardEndMs,
+		})
+		_ = s.db.Model(&saasstore.EvolutionTask{}).
+			Where("id = ?", taskID).
+			Updates(map[string]any{
+				"progress": overallProgress,
+				"result":   saasstore.JSONB(raw),
+			}).Error
+	}
+}
+
+func (s *Service) writeContinuousSnapshot(taskID uint, req CreateTaskRequest, iteration int, result ga.EpochResult, champion *standardizedChampion, final bool) {
+	paramPack := json.RawMessage(result.ParamPack)
+	if !json.Valid(paramPack) {
+		paramPack = json.RawMessage(`null`)
+	}
+	payload := map[string]any{
+		"current_generation":    req.MaxGenerations,
+		"best_score":            result.Fitness.ScoreTotal,
+		"max_drawdown":          result.Fitness.MaxDrawdown,
+		"window_scores":         result.Fitness.Windows,
+		"best_param_pack":       paramPack,
+		"gene_record_id":        result.GeneRecordID,
+		"mutation_probability":  s.engine.MutationProbability,
+		"mutation_scale":        s.engine.MutationScale,
+		"updated_at":            time.Now().UTC().Format(time.RFC3339),
+		"Fitness":               result.Fitness,
+		"continuous_mode":       req.ContinuousMode,
+		"current_iteration":     iteration,
+		"continuous_iterations": req.ContinuousIterations,
+		"continuous_unlimited":  req.ContinuousUnlimited,
+		"standard_start_ms":     req.StandardStartMs,
+		"standard_end_ms":       req.StandardEndMs,
+		"final":                 final,
+	}
+	if champion != nil {
+		payload["standard_champion_gene_id"] = champion.GeneRecordID
+		payload["standard_champion_score"] = champion.Score
+	}
+	raw, _ := json.Marshal(payload)
+	_ = s.db.Model(&saasstore.EvolutionTask{}).
+		Where("id = ?", taskID).
+		Update("result", saasstore.JSONB(raw)).Error
+}
+
+func (s *Service) refreshStandardizedChampion(ctx context.Context, req CreateTaskRequest, newGeneID uint, current *standardizedChampion) (*standardizedChampion, error) {
+	if current == nil {
+		var records []saasstore.GeneRecord
+		if err := s.db.WithContext(ctx).
+			Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role IN ?",
+				req.StrategyID, req.InstrumentID, req.DataSource, req.Interval, req.ExecutionMode,
+				[]string{saasstore.GeneRoleChallenger, saasstore.GeneRoleChampion, saasstore.GeneRoleRetired}).
+			Order("created_at DESC").
+			Find(&records).Error; err != nil {
+			return nil, err
+		}
+		var best *standardizedChampion
+		for _, record := range records {
+			candidate, err := s.evaluateStandardizedRecord(ctx, req, record)
+			if err != nil {
+				return nil, err
+			}
+			if best == nil || candidate.Score > best.Score {
+				best = candidate
+			}
+		}
+		return best, nil
+	}
+	var record saasstore.GeneRecord
+	if err := s.db.WithContext(ctx).First(&record, newGeneID).Error; err != nil {
+		return current, err
+	}
+	candidate, err := s.evaluateStandardizedRecord(ctx, req, record)
+	if err != nil {
+		return current, err
+	}
+	if candidate.Score > current.Score {
+		return candidate, nil
+	}
+	return current, nil
+}
+
+func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTaskRequest, record saasstore.GeneRecord) (*standardizedChampion, error) {
+	params := sigmoiddca.ParseParamsFromParamPack([]byte(record.ParamPack))
+	spawn := params.Spawn
+	if err := validateSpawnPoint(&spawn); err != nil {
+		return nil, err
+	}
+	fitness, err := s.engine.EvaluateParamPack(ctx, ga.EpochConfig{
+		Pair:               req.Pair,
+		InstrumentID:       req.InstrumentID,
+		DataSource:         req.DataSource,
+		ExecutionMode:      req.ExecutionMode,
+		StartTimeMs:        req.StandardStartMs,
+		EndTimeMs:          req.StandardEndMs,
+		Interval:           req.Interval,
+		PopSize:            req.PopSize,
+		MaxGenerations:     req.MaxGenerations,
+		SpawnMode:          req.SpawnMode,
+		LotStepSize:        spawn.Risk.LotStep,
+		LotMinQty:          spawn.Risk.LotMin,
+		SpawnPointOverride: &spawn,
+		TraceMode:          ga.TraceModeSummary,
+	}, []byte(record.ParamPack))
+	if err != nil {
+		return nil, err
+	}
+	return &standardizedChampion{GeneRecordID: record.ID, Score: fitness.ScoreTotal, ParamPack: []byte(record.ParamPack)}, nil
 }
 
 func (s *Service) TraceSnapshot(taskID uint, afterID uint64, limit int) TraceSnapshot {
@@ -353,6 +591,10 @@ func normalizeRequest(req CreateTaskRequest) CreateTaskRequest {
 	if req.SpawnMode == "" {
 		req.SpawnMode = "inherit"
 	}
+	req.ContinuousMode = strings.ToLower(strings.TrimSpace(req.ContinuousMode))
+	if req.ContinuousMode != "" && req.ContinuousIterations == 0 && !req.ContinuousUnlimited {
+		req.ContinuousIterations = 2
+	}
 	req.TraceMode = ga.NormalizeTraceMode(req.TraceMode)
 	if req.TraceMode == ga.TraceModeOff {
 		req.TraceMode = ga.TraceModeDetailed
@@ -389,6 +631,24 @@ func validateRequest(req CreateTaskRequest) error {
 	}
 	if req.TrainStartMs > 0 && req.TrainEndMs > 0 && req.TrainStartMs > req.TrainEndMs {
 		return errors.New("train_start_ms must be earlier than train_end_ms")
+	}
+	switch req.ContinuousMode {
+	case "", "standardized_best", "random":
+	default:
+		return fmt.Errorf("unsupported continuous_mode: %s", req.ContinuousMode)
+	}
+	if req.ContinuousMode != "" {
+		if !req.ContinuousUnlimited && (req.ContinuousIterations < 1 || req.ContinuousIterations > 100) {
+			return errors.New("continuous_iterations must be between 1 and 100")
+		}
+		if req.ContinuousMode == "standardized_best" {
+			if req.StandardStartMs == 0 || req.StandardEndMs == 0 {
+				return errors.New("standard_start_ms and standard_end_ms are required")
+			}
+			if req.StandardStartMs > req.StandardEndMs {
+				return errors.New("standard_start_ms must be earlier than standard_end_ms")
+			}
+		}
 	}
 	if req.StrategyID != sigmoiddca.StrategyID {
 		return fmt.Errorf("尚不支援的策略: %s", req.StrategyID)
