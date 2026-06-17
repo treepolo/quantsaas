@@ -174,6 +174,9 @@ func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, 
 	previousNAV := 0.0
 	latestTargetWeight := 0.0
 	previousTargetWeight := 0.0
+	latestActualWeight := 0.0
+	previousActualWeight := 0.0
+	latestContribution := 0.0
 	latestMs := int64(0)
 	startedAtMs := int64(0)
 
@@ -187,6 +190,7 @@ func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, 
 			continue
 		}
 		year, month := time.UnixMilli(row.OpenTime).UTC().Year(), time.UnixMilli(row.OpenTime).UTC().Month()
+		contribution := 0.0
 		if !started {
 			started = true
 			cash = settings.InitialCapital
@@ -197,6 +201,7 @@ func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, 
 		} else if (year != lastYear || month != lastMonth) && settings.MonthlyDCA > 0 {
 			cash += settings.MonthlyDCA
 			invested += settings.MonthlyDCA
+			contribution = settings.MonthlyDCA
 			lastYear = year
 			lastMonth = month
 		}
@@ -235,8 +240,11 @@ func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, 
 
 		previousNAV = latestNAV
 		previousTargetWeight = latestTargetWeight
+		previousActualWeight = latestActualWeight
 		latestNAV = cash + assetQty*row.Close
 		latestTargetWeight = targetWeight
+		latestActualWeight = currentWeight(assetQty, row.Close, latestNAV)
+		latestContribution = contribution
 		latestMs = row.OpenTime
 		points++
 	}
@@ -246,7 +254,7 @@ func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, 
 	}
 	navChangePct := 0.0
 	if previousNAV > 0 {
-		navChangePct = latestNAV/previousNAV - 1
+		navChangePct = (latestNAV-latestContribution)/previousNAV - 1
 	}
 	targetDelta := 0.0
 	if points > 1 {
@@ -262,9 +270,12 @@ func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, 
 		"latest_nav":             latestNAV,
 		"previous_nav":           previousNAV,
 		"nav_change_pct":         navChangePct,
+		"latest_contribution":    latestContribution,
 		"latest_target_weight":   latestTargetWeight,
 		"previous_target_weight": previousTargetWeight,
 		"target_weight_delta":    targetDelta,
+		"latest_actual_weight":   latestActualWeight,
+		"previous_actual_weight": previousActualWeight,
 		"cash_balance":           cash,
 		"asset_quantity":         assetQty,
 		"points":                 points,

@@ -12,9 +12,9 @@ const diagLabels: Record<string, string> = {
   total_equity: "估算總資產",
   reserve_floor: "保留現金",
   spendable_usdt: "可配置資金",
-  current_weight: "目前權重",
-  target_weight: "目標權重",
-  delta_weight: "權重差",
+  current_weight: "空倉參考目前權重",
+  target_weight: "空倉參考目標權重",
+  delta_weight: "空倉參考權重差",
   signal: "綜合訊號",
   volatility_ratio: "波動比",
   market_beta: "市場 Beta 倍率",
@@ -96,7 +96,7 @@ function StatusCard({ item }: { item: ResearchStatusItem }) {
         <div className="space-y-4">
           <div className="grid gap-3 md:grid-cols-3">
             <Metric label="市場狀態" value={stateLabel(item.market_state)} />
-            <Metric label="目標權重" value={item.target_weight !== undefined ? formatPercent(item.target_weight) : "-"} highlight />
+            <Metric label="空倉參考目標權重" value={item.target_weight !== undefined ? formatPercent(item.target_weight) : "-"} highlight />
             <Metric label="最新完成日 K" value={item.latest_bar ? `${shortDateTime(item.latest_bar.time)} · ${formatNumber(item.latest_bar.close)}` : "-"} />
           </div>
 
@@ -104,8 +104,14 @@ function StatusCard({ item }: { item: ResearchStatusItem }) {
             <div className="grid gap-3 md:grid-cols-4">
               <Metric label="模擬倉淨值" value={formatMoney(simulation.latest_nav, "USD")} highlight />
               <Metric label="淨值日變化" value={signedPercent(simulation.nav_change_pct)} danger={(simulation.nav_change_pct ?? 0) < 0} />
-              <Metric label="目標權重日變化" value={signedPercent(simulation.target_weight_delta)} />
+              <Metric label="現金" value={formatMoney(simulation.cash_balance, "USD")} />
               <Metric label="投入本金" value={formatMoney(simulation.invested_capital, "USD")} />
+              <Metric label="昨日實際持倉權重" value={formatPercent(simulation.previous_actual_weight)} />
+              <Metric label="今日實際持倉權重" value={formatPercent(simulation.latest_actual_weight)} />
+              <Metric label="昨日目標權重" value={formatPercent(simulation.previous_target_weight)} />
+              <Metric label="今日目標權重" value={formatPercent(simulation.latest_target_weight)} />
+              <Metric label="目標權重變化" value={signedPercent(simulation.target_weight_delta)} />
+              <Metric label="當日入金" value={formatMoney(simulation.latest_contribution, "USD")} />
             </div>
           ) : (
             <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm text-slate-500">
@@ -114,7 +120,7 @@ function StatusCard({ item }: { item: ResearchStatusItem }) {
           )}
 
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-xs leading-relaxed text-slate-500">
-            市場狀態只使用已完成的日 K 收盤價計算，一天最多更新一次。即時價格若未來顯示，會獨立列出，不會參與此判斷。
+            市場狀態只使用已完成的日 K 收盤價計算，一天最多更新一次。空倉參考目標權重是假設帳戶全現金時的參考值；模擬倉權重則依照你的起始資金、定投入金與歷史一路重放後的持倉狀態計算。
           </div>
 
           <div>
@@ -186,7 +192,7 @@ export function MarketStatusPage() {
     <section className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold text-slate-100">市場狀態</h1>
-        <p className="mt-1 text-sm text-slate-400">套用各標的目前已採用參數，觀察最新完成日 K 的狀態判斷、目標權重與模擬倉變化。</p>
+        <p className="mt-1 text-sm text-slate-400">套用各標的目前已採用參數，觀察最新完成日 K 的狀態判斷、空倉參考與模擬倉變化。</p>
       </div>
 
       <Card className="p-4">

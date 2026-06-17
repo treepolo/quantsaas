@@ -36,9 +36,12 @@ export type PositionSimulationSummary = {
   latest_nav: number;
   previous_nav: number;
   nav_change_pct: number;
+  latest_contribution: number;
   latest_target_weight: number;
   previous_target_weight: number;
   target_weight_delta: number;
+  latest_actual_weight: number;
+  previous_actual_weight: number;
   cash_balance: number;
   asset_quantity: number;
   points: number;
