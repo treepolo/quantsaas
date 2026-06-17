@@ -168,6 +168,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		Interval:           req.Interval,
 		PopSize:            req.PopSize,
 		MaxGenerations:     req.MaxGenerations,
+		SpawnMode:          req.SpawnMode,
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
 		SpawnPointOverride: spawn,

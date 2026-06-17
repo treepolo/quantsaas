@@ -60,6 +60,22 @@ export type GenomeRecord = {
   data_source?: string;
   interval?: string;
   execution_mode?: string;
+  name?: string;
+  notes?: string;
+  tags?: string[];
+  search_config?: {
+    strategy_id?: string;
+    symbol?: string;
+    instrument_id?: string;
+    data_source?: string;
+    interval?: string;
+    execution_mode?: string;
+    train_start_ms?: number;
+    train_end_ms?: number;
+    spawn_mode?: string;
+    population?: number;
+    generations?: number;
+  } | null;
   created_at: string;
   activated_at?: string | null;
   score_total: number;
@@ -106,6 +122,15 @@ export const evolutionApi = {
   },
   listGenomes() {
     return apiFetch<GenomeRecord[]>("/evolution/genomes");
+  },
+  updateGenome(genomeId: number, input: { name?: string; notes?: string; tags?: string[] }) {
+    return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/genomes/${genomeId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    });
+  },
+  deleteGenome(genomeId: number) {
+    return apiFetch<{ status: string; id: number }>(`/evolution/genomes/${genomeId}`, { method: "DELETE" });
   },
   promote(genomeId: number) {
     return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/tasks/${genomeId}/promote`, { method: "POST" });

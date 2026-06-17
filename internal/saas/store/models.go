@@ -164,16 +164,21 @@ type GeneRecord struct {
 	ID            uint `gorm:"primaryKey"`
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	StrategyID    string  `gorm:"size:80;not null;index"`
-	InstrumentID  string  `gorm:"size:32;not null;index;default:BTCUSDT"`
-	DataSource    string  `gorm:"size:32;not null;index;default:binance"`
-	Interval      string  `gorm:"size:16;not null;index;default:1d"`
-	ExecutionMode string  `gorm:"size:32;not null;index;default:close_same_bar"`
-	Role          string  `gorm:"size:24;not null;index"`
-	ParamPack     JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ScoreTotal    float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	MaxDrawdown   float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	WindowScore   JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	DeletedAt     gorm.DeletedAt `gorm:"index"`
+	StrategyID    string         `gorm:"size:80;not null;index"`
+	InstrumentID  string         `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource    string         `gorm:"size:32;not null;index;default:binance"`
+	Interval      string         `gorm:"size:16;not null;index;default:1d"`
+	ExecutionMode string         `gorm:"size:32;not null;index;default:close_same_bar"`
+	Role          string         `gorm:"size:24;not null;index"`
+	Name          string         `gorm:"size:160"`
+	Notes         string         `gorm:"type:text"`
+	Tags          JSONB          `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	SearchConfig  JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ParamPack     JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ScoreTotal    float64        `gorm:"type:numeric(30,10);not null;default:0"`
+	MaxDrawdown   float64        `gorm:"type:numeric(30,10);not null;default:0"`
+	WindowScore   JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
 	ActivatedAt   *time.Time
 }
 

@@ -216,6 +216,86 @@ func (h *EvolutionHandler) Promote(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "promoted", "genome": geneResponse(promoted)})
 }
 
+func (h *EvolutionHandler) UpdateGenome(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "此功能僅允許 lab/dev 模式"})
+		return
+	}
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Name  *string  `json:"name"`
+		Notes *string  `json:"notes"`
+		Tags  []string `json:"tags"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	updates := map[string]any{}
+	if req.Name != nil {
+		updates["name"] = strings.TrimSpace(*req.Name)
+	}
+	if req.Notes != nil {
+		updates["notes"] = strings.TrimSpace(*req.Notes)
+	}
+	if req.Tags != nil {
+		raw, err := json.Marshal(cleanTags(req.Tags))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		updates["tags"] = saasstore.JSONB(raw)
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "沒有可更新的欄位"})
+		return
+	}
+	var record saasstore.GeneRecord
+	if err := h.db.WithContext(c.Request.Context()).First(&record, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "找不到參數"})
+		return
+	}
+	if err := h.db.WithContext(c.Request.Context()).Model(&record).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.db.WithContext(c.Request.Context()).First(&record, id).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if h.redis != nil && record.Role == saasstore.GeneRoleChampion {
+		_ = h.redis.Del(context.Background(), championCacheKey(record.StrategyID))
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "updated", "genome": geneResponse(record)})
+}
+
+func (h *EvolutionHandler) DeleteGenome(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "此功能僅允許 lab/dev 模式"})
+		return
+	}
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	var record saasstore.GeneRecord
+	if err := h.db.WithContext(c.Request.Context()).First(&record, id).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "找不到參數"})
+		return
+	}
+	if err := h.db.WithContext(c.Request.Context()).Delete(&record).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if h.redis != nil && record.Role == saasstore.GeneRoleChampion {
+		_ = h.redis.Del(context.Background(), championCacheKey(record.StrategyID))
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted", "id": id})
+}
+
 func (h *EvolutionHandler) GetChampion(c *gin.Context) {
 	strategyID := c.Query("strategy_id")
 	if strategyID == "" {
@@ -353,12 +433,42 @@ func geneResponse(record saasstore.GeneRecord) gin.H {
 		"data_source":    record.DataSource,
 		"interval":       record.Interval,
 		"execution_mode": record.ExecutionMode,
+		"name":           record.Name,
+		"notes":          record.Notes,
+		"tags":           parseStringSlice(record.Tags),
+		"search_config":  parseRawJSON(json.RawMessage(record.SearchConfig)),
 		"created_at":     record.CreatedAt.Format(time.RFC3339),
+		"activated_at":   formatOptionalTime(record.ActivatedAt),
 		"score_total":    record.ScoreTotal,
 		"max_drawdown":   record.MaxDrawdown,
 		"window_score":   parseWindowScores(record.WindowScore),
 		"param_pack":     parseRawJSON(json.RawMessage(record.ParamPack)),
 	}
+}
+
+func cleanTags(tags []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, tag)
+		if len(out) >= 24 {
+			break
+		}
+	}
+	return out
+}
+
+func parseStringSlice(raw saasstore.JSONB) []string {
+	var tags []string
+	if err := json.Unmarshal([]byte(raw), &tags); err != nil {
+		return []string{}
+	}
+	return cleanTags(tags)
 }
 
 func geneScopeFromQuery(c *gin.Context) func(*gorm.DB) *gorm.DB {

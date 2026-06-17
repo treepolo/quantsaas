@@ -2,6 +2,7 @@ package ga
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"math/rand"
 	"runtime"
@@ -14,7 +15,7 @@ import (
 
 type GenomeStore interface {
 	LoadEliteGenes(ctx context.Context, scope GeneScope, limit int) ([][]byte, error)
-	SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult) (uint, error)
+	SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult, searchConfig []byte) (uint, error)
 	LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error)
 }
 
@@ -62,6 +63,7 @@ type EpochConfig struct {
 	Interval           string
 	PopSize            int
 	MaxGenerations     int
+	SpawnMode          string
 	LotStepSize        float64
 	LotMinQty          float64
 	OnProgress         func(EpochProgress)
@@ -69,6 +71,8 @@ type EpochConfig struct {
 	TraceMode          TraceMode
 	TraceModeFunc      func() TraceMode
 	SpawnPointOverride *quant.SpawnPoint
+	SeedParamPack      []byte
+	RandomPopulation   bool
 }
 
 type EpochProgress struct {
@@ -218,13 +222,14 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	if err != nil {
 		return EpochResult{}, err
 	}
+	searchConfig := e.searchConfig(cfg)
 	id, err := e.store.SaveChallenger(ctx, GeneScope{
 		StrategyID:    e.evolvable.StrategyID(),
 		InstrumentID:  cfg.InstrumentID,
 		DataSource:    cfg.DataSource,
 		Interval:      cfg.Interval,
 		ExecutionMode: cfg.ExecutionMode,
-	}, paramPack, best.Fitness)
+	}, paramPack, best.Fitness, searchConfig)
 	if err != nil {
 		return EpochResult{}, err
 	}
@@ -239,6 +244,43 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		Fitness:      best.Fitness,
 		ParamPack:    paramPack,
 	}, nil
+}
+
+func (e *EvolutionEngine) EvaluateParamPack(ctx context.Context, cfg EpochConfig, paramPack []byte) (FitnessResult, error) {
+	cfg.TraceMode = NormalizeTraceMode(cfg.TraceMode)
+	plan, err := e.buildEvaluablePlan(ctx, cfg)
+	if err != nil {
+		return FitnessResult{}, err
+	}
+	plan.Trace = cfg.OnTrace
+	plan.TraceMode = cfg.TraceMode
+	plan.TraceModeFunc = cfg.TraceModeFunc
+	gene := e.evolvable.DecodeElite(paramPack)
+	return e.evolvable.Evaluate(ctx, gene, plan)
+}
+
+func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
+	spawnMode := cfg.SpawnMode
+	if spawnMode == "" {
+		spawnMode = "inherit"
+	}
+	raw, err := json.Marshal(map[string]any{
+		"strategy_id":    e.evolvable.StrategyID(),
+		"symbol":         cfg.Pair,
+		"instrument_id":  cfg.InstrumentID,
+		"data_source":    cfg.DataSource,
+		"interval":       cfg.Interval,
+		"execution_mode": cfg.ExecutionMode,
+		"train_start_ms": cfg.StartTimeMs,
+		"train_end_ms":   cfg.EndTimeMs,
+		"spawn_mode":     spawnMode,
+		"population":     e.popSize(cfg),
+		"generations":    e.maxGenerations(cfg),
+	})
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return raw
 }
 
 func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfig) (EvaluablePlan, error) {
@@ -323,15 +365,22 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 
 func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochConfig, rng RandomSource) ([]individual, error) {
 	popSize := e.popSize(cfg)
-	elitesRaw, err := e.store.LoadEliteGenes(ctx, GeneScope{
-		StrategyID:    e.evolvable.StrategyID(),
-		InstrumentID:  cfg.InstrumentID,
-		DataSource:    cfg.DataSource,
-		Interval:      cfg.Interval,
-		ExecutionMode: cfg.ExecutionMode,
-	}, popSize)
-	if err != nil {
-		return nil, err
+	elitesRaw := [][]byte{}
+	if len(cfg.SeedParamPack) > 0 {
+		elitesRaw = append(elitesRaw, cfg.SeedParamPack)
+	}
+	if !cfg.RandomPopulation {
+		loaded, err := e.store.LoadEliteGenes(ctx, GeneScope{
+			StrategyID:    e.evolvable.StrategyID(),
+			InstrumentID:  cfg.InstrumentID,
+			DataSource:    cfg.DataSource,
+			Interval:      cfg.Interval,
+			ExecutionMode: cfg.ExecutionMode,
+		}, popSize)
+		if err != nil {
+			return nil, err
+		}
+		elitesRaw = append(elitesRaw, loaded...)
 	}
 
 	population := make([]individual, 0, popSize)
@@ -349,7 +398,7 @@ func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochCon
 			base := e.evolvable.DecodeElite(elitesRaw[i%len(elitesRaw)])
 			population = append(population, individual{Gene: e.evolvable.Mutate(base, 0.15, 1.5, rng)})
 		}
-	} else {
+	} else if !cfg.RandomPopulation {
 		population = append(population, individual{Gene: quant.DefaultSeedChromosome})
 	}
 

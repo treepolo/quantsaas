@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, CheckCircle2, FlaskConical, Square, TerminalSquare } from "lucide-react";
+import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
 import { evolutionApi, type EvolutionTask, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
@@ -363,7 +363,7 @@ function ChampionCard({ champion, instrumentNames }: { champion?: GenomeRecord; 
   );
 }
 
-function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; instrumentNames: Record<string, string> }) {
+function LegacyGenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; instrumentNames: Record<string, string> }) {
   const [confirmPromote, setConfirmPromote] = useState<number | null>(null);
   const queryClient = useQueryClient();
   const promoteMutation = useMutation({
@@ -396,6 +396,184 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
           </Card>
         );
       })}
+    </div>
+  );
+}
+
+function parseTagInput(value: string) {
+  return Array.from(new Set(value.split(",").map((item) => item.trim()).filter(Boolean)));
+}
+
+function formatSearchDate(value?: number) {
+  return value ? new Date(value).toLocaleDateString("zh-TW") : "未記錄";
+}
+
+function roleTitle(role: GenomeRecord["role"]) {
+  if (role === "champion") return "已採用參數";
+  if (role === "retired" || role === "archived") return "歷史參數";
+  return "候選參數";
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md bg-slate-950/40 px-3 py-2">
+      <span className="text-slate-500">{label}</span>
+      <span className="text-right font-mono text-slate-200">{value}</span>
+    </div>
+  );
+}
+
+function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; instrumentNames: Record<string, string> }) {
+  const [confirmPromote, setConfirmPromote] = useState<number | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [draftNotes, setDraftNotes] = useState("");
+  const [draftTags, setDraftTags] = useState("");
+  const [instrumentFilterMode, setInstrumentFilterMode] = useState<"all" | "include" | "exclude">("all");
+  const [selectedInstruments, setSelectedInstruments] = useState<string[]>([]);
+  const [tagFilter, setTagFilter] = useState("");
+  const queryClient = useQueryClient();
+  const promoteMutation = useMutation({
+    mutationFn: (id: number) => evolutionApi.promote(id),
+    onSuccess: () => {
+      setConfirmPromote(null);
+      queryClient.invalidateQueries({ queryKey: ["genomes"] });
+      queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
+    }
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ id, name, notes, tags }: { id: number; name: string; notes: string; tags: string[] }) => evolutionApi.updateGenome(id, { name, notes, tags }),
+    onSuccess: () => {
+      setEditingId(null);
+      queryClient.invalidateQueries({ queryKey: ["genomes"] });
+      queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
+    }
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => evolutionApi.deleteGenome(id),
+    onSuccess: () => {
+      setConfirmDelete(null);
+      queryClient.invalidateQueries({ queryKey: ["genomes"] });
+      queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
+    }
+  });
+  const availableInstruments = useMemo(() => Array.from(new Set(genomes.map((item) => item.instrument_id).filter(Boolean))) as string[], [genomes]);
+  const tagFilters = parseTagInput(tagFilter).map((item) => item.toLowerCase());
+  const filteredGenomes = genomes.filter((genome) => {
+    const instrument = genome.instrument_id ?? "";
+    if (instrumentFilterMode === "include" && selectedInstruments.length > 0 && !selectedInstruments.includes(instrument)) return false;
+    if (instrumentFilterMode === "exclude" && selectedInstruments.includes(instrument)) return false;
+    if (tagFilters.length > 0) {
+      const tags = (genome.tags ?? []).map((item) => item.toLowerCase());
+      if (!tagFilters.some((tag) => tags.includes(tag))) return false;
+    }
+    return true;
+  });
+
+  function toggleInstrument(id: string) {
+    setSelectedInstruments((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+  }
+
+  function startEdit(genome: GenomeRecord) {
+    setEditingId(genome.id);
+    setDraftName(genome.name ?? "");
+    setDraftNotes(genome.notes ?? "");
+    setDraftTags((genome.tags ?? []).join(", "));
+  }
+
+  function saveEdit(id: number) {
+    updateMutation.mutate({ id, name: draftName, notes: draftNotes, tags: parseTagInput(draftTags) });
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="p-4">
+        <div className="grid gap-4 lg:grid-cols-[12rem_1fr_16rem]">
+          <Select label="標的篩選" value={instrumentFilterMode} onChange={(value) => setInstrumentFilterMode(value as typeof instrumentFilterMode)} options={[["all", "全部顯示"], ["include", "只顯示勾選標的"], ["exclude", "排除勾選標的"]]} />
+          <div>
+            <div className="mb-2 text-sm text-slate-300">標的</div>
+            <div className="flex flex-wrap gap-2">
+              {availableInstruments.map((id) => (
+                <button key={id} type="button" className={cn("rounded-lg border px-3 py-2 text-sm transition", selectedInstruments.includes(id) ? "border-[#2dd4bf]/40 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-white/[0.06] text-slate-400 hover:text-slate-200")} onClick={() => toggleInstrument(id)}>
+                  {labelForInstrument(id, instrumentNames)}
+                </button>
+              ))}
+              {availableInstruments.length === 0 ? <span className="text-sm text-slate-500">尚無標的可篩選</span> : null}
+            </div>
+          </div>
+          <label>
+            <span className="mb-2 block text-sm text-slate-300">標籤篩選</span>
+            <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={tagFilter} onChange={(event) => setTagFilter(event.target.value)} placeholder="例如：穩健, SOXL" />
+          </label>
+        </div>
+      </Card>
+
+      {filteredGenomes.length === 0 ? <Card className="p-4 text-sm text-slate-500">沒有符合篩選條件的參數。</Card> : null}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {filteredGenomes.map((genome) => {
+          const isChampion = genome.role === "champion";
+          const canPromote = genome.role === "candidate" || genome.role === "challenger" || genome.role === "retired" || genome.role === "archived";
+          const searchConfig = genome.search_config ?? {};
+          const isEditing = editingId === genome.id;
+          return (
+            <Card key={genome.id} className={cn(isChampion ? "border-[#2dd4bf]/30" : "")}>
+              <CardHeader>
+                <div>
+                  <CardTitle>{genome.name?.trim() || roleTitle(genome.role)}</CardTitle>
+                  <CardDescription>#{genome.id} · {labelForInstrument(genome.instrument_id, instrumentNames)} · {relativeTime(genome.created_at)}</CardDescription>
+                </div>
+                <span className="font-mono text-lg font-semibold text-slate-100">{genome.score_total.toFixed(3)}</span>
+              </CardHeader>
+              <div className="space-y-4">
+                {isEditing ? (
+                  <div className="space-y-3 rounded-lg border border-white/[0.06] bg-slate-950/40 p-3">
+                    <label><span className="mb-2 block text-sm text-slate-300">名稱</span><input className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={draftName} onChange={(event) => setDraftName(event.target.value)} /></label>
+                    <label><span className="mb-2 block text-sm text-slate-300">標籤</span><input className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={draftTags} onChange={(event) => setDraftTags(event.target.value)} placeholder="用逗號分隔" /></label>
+                    <label><span className="mb-2 block text-sm text-slate-300">備註</span><textarea className="min-h-24 w-full rounded-lg border border-slate-700 bg-slate-900/80 p-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={draftNotes} onChange={(event) => setDraftNotes(event.target.value)} /></label>
+                    <div className="flex flex-wrap gap-2"><Button icon={Save} loading={updateMutation.isPending} onClick={() => saveEdit(genome.id)}>儲存</Button><Button icon={X} variant="secondary" onClick={() => setEditingId(null)}>取消</Button></div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-2">
+                      {(genome.tags ?? []).map((tag) => <span key={tag} className="rounded-md border border-[#2dd4bf]/20 bg-[#2dd4bf]/10 px-2 py-1 text-xs text-[#99f6e4]">{tag}</span>)}
+                      {(genome.tags ?? []).length === 0 ? <span className="text-xs text-slate-500">尚未設定標籤</span> : null}
+                    </div>
+                    {genome.notes ? <p className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm text-slate-300">{genome.notes}</p> : null}
+                  </>
+                )}
+
+                <div className="grid grid-cols-2 gap-3">
+                  <Metric label="最大回撤" value={formatPercent(genome.max_drawdown)} danger />
+                  <Metric label="資料週期" value={intervalLabels[genome.interval ?? "1d"] ?? genome.interval ?? "-"} />
+                </div>
+
+                <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+                  <div className="mb-3 text-sm font-semibold text-slate-300">搜尋條件</div>
+                  <div className="grid gap-2 text-sm md:grid-cols-2">
+                    <InfoRow label="研究標的" value={labelForInstrument(searchConfig.instrument_id ?? genome.instrument_id, instrumentNames)} />
+                    <InfoRow label="資料週期" value={searchConfig.interval ?? genome.interval ?? "未記錄"} />
+                    <InfoRow label="開始日期" value={formatSearchDate(searchConfig.train_start_ms)} />
+                    <InfoRow label="結束日期" value={formatSearchDate(searchConfig.train_end_ms)} />
+                    <InfoRow label="執行假設" value={searchConfig.execution_mode ?? genome.execution_mode ?? "未記錄"} />
+                    <InfoRow label="起始方式" value={searchConfig.spawn_mode ?? "未記錄"} />
+                    <InfoRow label="族群數" value={searchConfig.population?.toLocaleString("zh-TW") ?? "未記錄"} />
+                    <InfoRow label="世代數" value={searchConfig.generations?.toLocaleString("zh-TW") ?? "未記錄"} />
+                  </div>
+                </div>
+
+                <details className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-semibold text-slate-300">參數 JSON</summary><div className="mt-3"><JsonPreview value={genome.param_pack} /></div></details>
+                <div className="flex flex-wrap gap-2">
+                  {canPromote && !isChampion ? (confirmPromote === genome.id ? <Button loading={promoteMutation.isPending} onClick={() => promoteMutation.mutate(genome.id)}>確認採用</Button> : <Button onClick={() => setConfirmPromote(genome.id)}>設為採用</Button>) : null}
+                  <Button variant="secondary" onClick={() => startEdit(genome)}>編輯資料</Button>
+                  <Link to={`/backtesting?genome=${genome.id}`}><Button variant="secondary">回測</Button></Link>
+                  {confirmDelete === genome.id ? <Button icon={Trash2} variant="danger" loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(genome.id)}>確認刪除</Button> : <Button icon={Trash2} variant="danger" onClick={() => setConfirmDelete(genome.id)}>刪除</Button>}
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

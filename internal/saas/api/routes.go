@@ -83,6 +83,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/evolution/tasks/:taskID/cancel", ev.CancelTask)
 	lab.POST("/evolution/tasks/:taskID/promote", ev.Promote)
 	lab.GET("/evolution/genomes", listGenomesHandler(deps))
+	lab.PATCH("/evolution/genomes/:id", ev.UpdateGenome)
+	lab.DELETE("/evolution/genomes/:id", ev.DeleteGenome)
 	lab.GET("/genome/champion", ev.GetChampion)
 	lab.GET("/genome/challengers", listChallengersHandler(deps))
 	lab.POST("/backtests", bt.Create)
@@ -593,34 +595,77 @@ func listChallengersHandler(deps RouterDeps) gin.HandlerFunc {
 func listGenomesHandler(deps RouterDeps) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var rows []saasstore.GeneRecord
-		if err := deps.DB.Scopes(geneScopeFromQuery(c)).Order("created_at DESC").Find(&rows).Error; err != nil {
+		includeInstruments := normalizeQueryList(c, "instrument_id", "instrument_ids")
+		excludeInstruments := normalizeQueryList(c, "exclude_instrument_id", "exclude_instrument_ids")
+		tagFilters := normalizeQueryList(c, "tag", "tags")
+		query := deps.DB.Scopes(geneScopeFromQuery(c))
+		if len(includeInstruments) > 0 {
+			query = query.Where("instrument_id IN ?", includeInstruments)
+		}
+		if len(excludeInstruments) > 0 {
+			query = query.Where("instrument_id NOT IN ?", excludeInstruments)
+		}
+		if err := query.Order("created_at DESC").Find(&rows).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		response := make([]gin.H, 0, len(rows))
 		for _, row := range rows {
+			if len(tagFilters) > 0 && !hasAnyTag(row.Tags, tagFilters) {
+				continue
+			}
 			role := row.Role
 			if role == saasstore.GeneRoleChallenger {
 				role = "candidate"
 			}
-			response = append(response, gin.H{
-				"id":             row.ID,
-				"role":           role,
-				"strategy_id":    row.StrategyID,
-				"instrument_id":  row.InstrumentID,
-				"data_source":    row.DataSource,
-				"interval":       row.Interval,
-				"execution_mode": row.ExecutionMode,
-				"created_at":     row.CreatedAt.Format(time.RFC3339),
-				"activated_at":   formatOptionalTime(row.ActivatedAt),
-				"score_total":    row.ScoreTotal,
-				"max_drawdown":   row.MaxDrawdown,
-				"window_score":   parseWindowScores(row.WindowScore),
-				"param_pack":     parseRawJSON(json.RawMessage(row.ParamPack)),
-			})
+			item := geneResponse(row)
+			item["role"] = role
+			response = append(response, item)
 		}
 		c.JSON(http.StatusOK, response)
 	}
+}
+
+func normalizeQueryList(c *gin.Context, keys ...string) []string {
+	values := []string{}
+	for _, key := range keys {
+		for _, value := range c.QueryArray(key) {
+			for _, part := range strings.Split(value, ",") {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				values = append(values, strings.ToUpper(part))
+			}
+		}
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func hasAnyTag(raw saasstore.JSONB, filters []string) bool {
+	tags := parseStringSlice(raw)
+	if len(tags) == 0 {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, filter := range filters {
+		allowed[strings.ToUpper(filter)] = true
+	}
+	for _, tag := range tags {
+		if allowed[strings.ToUpper(tag)] {
+			return true
+		}
+	}
+	return false
 }
 
 func currentUserID(c *gin.Context) uint {

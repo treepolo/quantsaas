@@ -41,10 +41,13 @@ func (s *GormGenomeStore) LoadEliteGenes(ctx context.Context, scope GeneScope, l
 	return raw, nil
 }
 
-func (s *GormGenomeStore) SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult) (uint, error) {
+func (s *GormGenomeStore) SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult, searchConfig []byte) (uint, error) {
 	windowScore, err := json.Marshal(result.Windows)
 	if err != nil {
 		return 0, err
+	}
+	if !json.Valid(searchConfig) {
+		searchConfig = []byte(`{}`)
 	}
 	record := saasstore.GeneRecord{
 		StrategyID:    scope.StrategyID,
@@ -53,6 +56,8 @@ func (s *GormGenomeStore) SaveChallenger(ctx context.Context, scope GeneScope, p
 		Interval:      scope.Interval,
 		ExecutionMode: scope.ExecutionMode,
 		Role:          saasstore.GeneRoleChallenger,
+		Tags:          saasstore.JSONB(`[]`),
+		SearchConfig:  saasstore.JSONB(searchConfig),
 		ParamPack:     saasstore.JSONB(paramPack),
 		ScoreTotal:    result.ScoreTotal,
 		MaxDrawdown:   result.MaxDrawdown,
