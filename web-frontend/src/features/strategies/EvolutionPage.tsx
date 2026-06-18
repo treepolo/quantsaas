@@ -10,7 +10,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Ca
 import { StatusBadge } from "../../shared/ui/StatusBadge";
 import { cn } from "../../shared/lib/cn";
 
-const intervalLabels: Record<string, string> = { "1d": "日 K", "1h": "1 小時", "15m": "15 分鐘", "5m": "5 分鐘", "1m": "1 分鐘", "1s": "1 秒" };
+const intervalLabels: Record<string, string> = { "1d": "日 K", "1h": "1 小時", "15m": "15 分鐘", "5m": "5 分鐘", "1m": "1 分鐘", "1s": "1 秒", "1w": "週 K", "1M": "月 K" };
 const executionModes = [
   ["close_same_bar", "收盤同根", "用當根收盤價作為研究判斷基準"],
   ["close_next_open", "隔日開盤", "用收盤訊號，假設下一根開盤才調整"],

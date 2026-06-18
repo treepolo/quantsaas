@@ -228,6 +228,21 @@ type BacktestRun struct {
 	Instance *StrategyInstance `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
 }
 
+type ResearchInstrument struct {
+	ID                  string `gorm:"size:32;primaryKey"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	Symbol              string `gorm:"size:64;not null;uniqueIndex"`
+	DisplayName         string `gorm:"size:160;not null"`
+	DataSource          string `gorm:"size:32;not null;index"`
+	SupportedIntervals  JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	Market              string `gorm:"size:32;not null;default:global;index"`
+	SortOrder           int    `gorm:"not null;default:1000;index"`
+	Enabled             bool   `gorm:"not null;default:true;index"`
+	LastAutoUpdateAt    *time.Time
+	LastAutoUpdateError string `gorm:"type:text"`
+}
+
 type KLine struct {
 	ID           uint `gorm:"primaryKey"`
 	CreatedAt    time.Time

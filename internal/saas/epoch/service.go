@@ -30,6 +30,7 @@ const (
 type Service struct {
 	db          *gorm.DB
 	engine      *ga.EvolutionEngine
+	instruments *marketdata.InstrumentStore
 	logger      *zap.Logger
 	mu          sync.Mutex
 	currentTask *saasstore.EvolutionTask
@@ -74,6 +75,7 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 	return &Service{
 		db:          db,
 		engine:      engine,
+		instruments: marketdata.NewInstrumentStore(db),
 		logger:      logger,
 		cancelFuncs: map[uint]context.CancelFunc{},
 		traces:      map[uint]*traceBuffer{},
@@ -88,8 +90,8 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 		return nil, errors.New("已有進化任務正在執行")
 	}
 
-	req = normalizeRequest(req)
-	if err := validateRequest(req); err != nil {
+	req = s.normalizeRequest(ctx, req)
+	if err := s.validateRequest(ctx, req); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -571,14 +573,14 @@ func (s *Service) loadChampionSpawn(ctx context.Context, req CreateTaskRequest) 
 	return &params.Spawn, nil
 }
 
-func normalizeRequest(req CreateTaskRequest) CreateTaskRequest {
+func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) CreateTaskRequest {
 	if req.StrategyID == "" {
 		req.StrategyID = sigmoiddca.StrategyID
 	}
 	if req.Pair == "" {
 		req.Pair = marketdata.DefaultSymbol
 	}
-	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Pair, req.DataSource)
+	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Pair, req.DataSource)
 	if err == nil {
 		req.InstrumentID = instrument.ID
 		req.Pair = instrument.Symbol
@@ -612,8 +614,8 @@ func normalizeRequest(req CreateTaskRequest) CreateTaskRequest {
 	return req
 }
 
-func validateRequest(req CreateTaskRequest) error {
-	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Pair, req.DataSource)
+func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) error {
+	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Pair, req.DataSource)
 	if err != nil {
 		return err
 	}

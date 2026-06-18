@@ -55,35 +55,18 @@ func (s *Scheduler) Stop(ctx context.Context) {
 }
 
 func (s *Scheduler) updateDailyMarketData() {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
-	end := time.Now().UTC()
-	start := end.AddDate(0, 0, -14)
-	for _, instrument := range marketdata.Instruments() {
-		if !supportsInterval(instrument.SupportedIntervals, "1d") {
-			continue
-		}
-		_, err := s.marketData.Import(ctx, marketdata.ImportRequest{
-			InstrumentID: instrument.ID,
-			DataSource:   instrument.DataSource,
-			Symbol:       instrument.Symbol,
-			Interval:     "1d",
-			StartTimeMs:  start.UnixMilli(),
-			EndTimeMs:    end.UnixMilli(),
-		})
-		if err != nil {
-			s.logger.Warn("daily market data update failed", zap.String("instrument_id", instrument.ID), zap.Error(err))
+	results, err := s.marketData.UpdateLatest(ctx)
+	if err != nil {
+		s.logger.Warn("market data update failed", zap.Error(err))
+		return
+	}
+	for _, result := range results {
+		if result.Error != "" {
+			s.logger.Warn("market data interval update failed", zap.String("instrument_id", result.InstrumentID), zap.String("interval", result.Interval), zap.String("error", result.Error))
 		}
 	}
-}
-
-func supportsInterval(items []string, interval string) bool {
-	for _, item := range items {
-		if item == interval {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Scheduler) scanRunningInstances() {

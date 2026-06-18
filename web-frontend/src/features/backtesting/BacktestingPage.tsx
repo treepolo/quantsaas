@@ -51,7 +51,9 @@ const intervalLabels: Record<string, string> = {
   "15m": "15 分鐘",
   "5m": "5 分鐘",
   "1m": "1 分鐘",
-  "1s": "1 秒"
+  "1s": "1 秒",
+  "1w": "週 K",
+  "1M": "月 K"
 };
 
 const dayMs = 24 * 60 * 60 * 1000;

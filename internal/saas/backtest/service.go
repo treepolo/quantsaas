@@ -27,7 +27,8 @@ const (
 var ErrNotFound = errors.New("找不到回測紀錄")
 
 type Service struct {
-	db *gorm.DB
+	db          *gorm.DB
+	instruments *marketdata.InstrumentStore
 }
 
 type CreateRequest struct {
@@ -100,12 +101,12 @@ type instanceConfig struct {
 }
 
 func NewService(db *gorm.DB) *Service {
-	return &Service{db: db}
+	return &Service{db: db, instruments: marketdata.NewInstrumentStore(db)}
 }
 
 func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*Response, error) {
-	req = normalizeRequest(req)
-	if err := validateBasicRequest(req); err != nil {
+	req = s.normalizeRequest(ctx, req)
+	if err := s.validateBasicRequest(ctx, req); err != nil {
 		return nil, err
 	}
 
@@ -356,14 +357,14 @@ func (s *Service) loadBars(ctx context.Context, req CreateRequest) ([]quant.Bar,
 	return bars, nil
 }
 
-func normalizeRequest(req CreateRequest) CreateRequest {
+func (s *Service) normalizeRequest(ctx context.Context, req CreateRequest) CreateRequest {
 	if req.StrategyID == "" {
 		req.StrategyID = sigmoiddca.StrategyID
 	}
 	if req.Symbol == "" {
 		req.Symbol = req.Pair
 	}
-	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Symbol, req.DataSource)
 	if err == nil {
 		req.InstrumentID = instrument.ID
 		req.Symbol = instrument.Symbol
@@ -386,8 +387,8 @@ func normalizeRequest(req CreateRequest) CreateRequest {
 	return req
 }
 
-func validateBasicRequest(req CreateRequest) error {
-	instrument, err := marketdata.ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+func (s *Service) validateBasicRequest(ctx context.Context, req CreateRequest) error {
+	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Symbol, req.DataSource)
 	if err != nil {
 		return err
 	}

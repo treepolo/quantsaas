@@ -44,6 +44,7 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		&GeneRecord{},
 		&EvolutionTask{},
 		&BacktestRun{},
+		&ResearchInstrument{},
 		&KLine{},
 		&DailyExecutionSnapshot{},
 	); err != nil {

@@ -24,14 +24,68 @@ func NewMarketDataHandler(appRole string, db *gorm.DB) *MarketDataHandler {
 	}
 }
 
+func (h *MarketDataHandler) Instruments(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	instruments, err := h.service.Instruments(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"instruments":     instruments,
+		"execution_modes": marketdata.SupportedExecutionModes(),
+	})
+}
+
+func (h *MarketDataHandler) UpsertInstrument(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	var req marketdata.UpsertInstrumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	instrument, err := h.service.UpsertInstrument(c.Request.Context(), req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, marketdata.ErrUnsupportedInstrument) || errors.Is(err, marketdata.ErrUnsupportedSource) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, instrument)
+}
+
+func (h *MarketDataHandler) DeleteInstrument(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	if err := h.service.DisableInstrument(c.Request.Context(), c.Param("id")); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, marketdata.ErrUnsupportedInstrument) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
 func (h *MarketDataHandler) Status(c *gin.Context) {
 	if !h.canUseLab() {
-		c.JSON(http.StatusForbidden, gin.H{"error": "此路由僅允許 lab/dev 模式"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
 		return
 	}
 	symbol := strings.TrimSpace(c.Query("symbol"))
 	instrumentID := strings.TrimSpace(c.Query("instrument_id"))
-	instrument, err := marketdata.ResolveInstrument(instrumentID, symbol, c.Query("data_source"))
+	instrument, err := h.service.ResolveInstrument(c.Request.Context(), instrumentID, symbol, c.Query("data_source"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -55,20 +109,35 @@ func (h *MarketDataHandler) Status(c *gin.Context) {
 	})
 }
 
-func (h *MarketDataHandler) Instruments(c *gin.Context) {
+func (h *MarketDataHandler) Overview(c *gin.Context) {
 	if !h.canUseLab() {
-		c.JSON(http.StatusForbidden, gin.H{"error": "此路由僅允許 lab/dev 模式"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"instruments":     marketdata.Instruments(),
-		"execution_modes": marketdata.SupportedExecutionModes(),
-	})
+	rows, err := h.service.AllSummaries(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": rows})
+}
+
+func (h *MarketDataHandler) UpdateLatest(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	rows, err := h.service.UpdateLatest(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": rows})
 }
 
 func (h *MarketDataHandler) Import(c *gin.Context) {
 	if !h.canUseLab() {
-		c.JSON(http.StatusForbidden, gin.H{"error": "此路由僅允許 lab/dev 模式"})
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
 		return
 	}
 	var req marketdata.ImportRequest

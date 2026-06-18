@@ -90,8 +90,12 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/backtests", bt.Create)
 	lab.GET("/backtests/:id", bt.Get)
 	lab.GET("/market-data/instruments", md.Instruments)
+	lab.POST("/market-data/instruments", md.UpsertInstrument)
+	lab.DELETE("/market-data/instruments/:id", md.DeleteInstrument)
 	lab.GET("/market-data/klines/status", md.Status)
+	lab.GET("/market-data/klines/overview", md.Overview)
 	lab.POST("/market-data/klines/import", md.Import)
+	lab.POST("/market-data/klines/update-latest", md.UpdateLatest)
 	lab.GET("/research/status", research.Status)
 
 	if deps.WSHandler != nil {

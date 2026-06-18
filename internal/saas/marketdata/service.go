@@ -76,6 +76,7 @@ type Service struct {
 	db          *gorm.DB
 	client      *Client
 	yahooClient *YahooClient
+	instruments *InstrumentStore
 	now         func() time.Time
 }
 
@@ -103,10 +104,20 @@ type ImportResult struct {
 	LastOpenMs            int64  `json:"last_open_ms,omitempty"`
 }
 
+type AutoUpdateResult struct {
+	InstrumentID string `json:"instrument_id"`
+	DataSource   string `json:"data_source"`
+	Symbol       string `json:"symbol"`
+	Interval     string `json:"interval"`
+	StoredBars   int64  `json:"stored_bars"`
+	Error        string `json:"error,omitempty"`
+}
+
 type DatasetSummary struct {
 	InstrumentID          string `json:"instrument_id"`
 	DataSource            string `json:"data_source"`
 	Symbol                string `json:"symbol"`
+	Market                string `json:"market"`
 	Interval              string `json:"interval"`
 	Count                 int64  `json:"count"`
 	PrecloseSnapshotCount int64  `json:"preclose_snapshot_count"`
@@ -114,6 +125,8 @@ type DatasetSummary struct {
 	LastPrecloseMs        int64  `json:"last_preclose_ms,omitempty"`
 	FirstOpenMs           int64  `json:"first_open_ms,omitempty"`
 	LastOpenMs            int64  `json:"last_open_ms,omitempty"`
+	ExpectedLatestOpenMs  int64  `json:"expected_latest_open_ms,omitempty"`
+	IsFresh               bool   `json:"is_fresh"`
 	UpdatedAt             string `json:"updated_at,omitempty"`
 }
 
@@ -121,7 +134,7 @@ func NewService(db *gorm.DB, client *Client) *Service {
 	if client == nil {
 		client = NewClient(DefaultBaseURL)
 	}
-	return &Service{db: db, client: client, yahooClient: NewYahooClient(DefaultYahooBaseURL), now: func() time.Time { return time.Now().UTC() }}
+	return &Service{db: db, client: client, yahooClient: NewYahooClient(DefaultYahooBaseURL), instruments: NewInstrumentStore(db), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func NewClient(baseURL string) *Client {
@@ -149,12 +162,28 @@ func NewYahooClient(baseURL string) *YahooClient {
 }
 
 func SupportedIntervals() []string {
-	return []string{"1d", "1h", "15m", "5m", "1m", "1s"}
+	return []string{"1d", "1h", "15m", "5m", "1m", "1s", "1w", "1M"}
+}
+
+func (s *Service) Instruments(ctx context.Context) ([]ResearchInstrument, error) {
+	return s.instruments.Instruments(ctx)
+}
+
+func (s *Service) ResolveInstrument(ctx context.Context, instrumentID string, symbol string, source string) (ResearchInstrument, error) {
+	return s.instruments.ResolveInstrument(ctx, instrumentID, symbol, source)
+}
+
+func (s *Service) UpsertInstrument(ctx context.Context, req UpsertInstrumentRequest) (ResearchInstrument, error) {
+	return s.instruments.Upsert(ctx, req)
+}
+
+func (s *Service) DisableInstrument(ctx context.Context, id string) error {
+	return s.instruments.Disable(ctx, id)
 }
 
 func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, error) {
 	req = s.normalizeImportRequest(req)
-	if err := validateImportRequest(req); err != nil {
+	if err := s.validateImportRequest(ctx, req); err != nil {
 		return ImportResult{}, err
 	}
 
@@ -240,7 +269,7 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 }
 
 func (s *Service) Summaries(ctx context.Context, symbol string, intervals []string) ([]DatasetSummary, error) {
-	instrument, err := ResolveInstrument("", symbol, "")
+	instrument, err := s.instruments.ResolveInstrument(ctx, "", symbol, "")
 	if err != nil {
 		return nil, err
 	}
@@ -269,7 +298,7 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 			Scan(&summary).Error; err != nil {
 			return nil, err
 		}
-		item := DatasetSummary{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Interval: interval, Count: summary.Count}
+		item := DatasetSummary{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Market: instrument.Market, Interval: interval, Count: summary.Count}
 		if summary.FirstOpenMs != nil {
 			item.FirstOpenMs = *summary.FirstOpenMs
 		}
@@ -300,13 +329,71 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 				item.LastPrecloseMs = *snapshotSummary.LastOpenMs
 			}
 		}
+		s.enrichFreshness(instrument, &item)
 		rows = append(rows, item)
 	}
 	return rows, nil
 }
 
+func (s *Service) AllSummaries(ctx context.Context) ([]InstrumentSummary, error) {
+	instruments, err := s.Instruments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]InstrumentSummary, 0, len(instruments))
+	for _, instrument := range instruments {
+		rows, err := s.Summaries(ctx, instrument.Symbol, nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, InstrumentSummary{Instrument: instrument, Datasets: rows})
+	}
+	return out, nil
+}
+
+type InstrumentSummary struct {
+	Instrument ResearchInstrument `json:"instrument"`
+	Datasets   []DatasetSummary   `json:"datasets"`
+}
+
+func (s *Service) UpdateLatest(ctx context.Context) ([]AutoUpdateResult, error) {
+	instruments, err := s.Instruments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AutoUpdateResult, 0)
+	for _, instrument := range instruments {
+		var instrumentErr string
+		for _, interval := range instrument.SupportedIntervals {
+			req := ImportRequest{
+				InstrumentID: instrument.ID,
+				DataSource:   instrument.DataSource,
+				Symbol:       instrument.Symbol,
+				Interval:     interval,
+				StartTimeMs:  s.latestUpdateStart(instrument, interval),
+				EndTimeMs:    s.now().UnixMilli(),
+			}
+			item := AutoUpdateResult{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Interval: interval}
+			if req.StartTimeMs > req.EndTimeMs {
+				results = append(results, item)
+				continue
+			}
+			imported, err := s.Import(ctx, req)
+			if err != nil {
+				item.Error = err.Error()
+				instrumentErr = err.Error()
+			} else {
+				item.StoredBars = imported.StoredBars
+			}
+			results = append(results, item)
+		}
+		s.recordAutoUpdate(ctx, instrument.ID, instrumentErr)
+	}
+	return results, nil
+}
+
 func (s *Service) normalizeImportRequest(req ImportRequest) ImportRequest {
-	instrument, err := ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	instrument, err := s.instruments.ResolveInstrument(context.Background(), req.InstrumentID, req.Symbol, req.DataSource)
 	if err == nil {
 		req.InstrumentID = instrument.ID
 		req.Symbol = instrument.Symbol
@@ -337,10 +424,12 @@ func (s *Service) defaultStartTime(symbol string, interval string) int64 {
 	var latest struct {
 		LastOpenMs *int64
 	}
-	_ = s.db.Model(&saasstore.KLine{}).
-		Select("max(open_time) as last_open_ms").
-		Where("symbol = ? AND interval = ?", symbol, interval).
-		Scan(&latest).Error
+	if s.db != nil {
+		_ = s.db.Model(&saasstore.KLine{}).
+			Select("max(open_time) as last_open_ms").
+			Where("symbol = ? AND interval = ?", symbol, interval).
+			Scan(&latest).Error
+	}
 	if latest.LastOpenMs != nil {
 		if d, ok := intervalDurations[interval]; ok {
 			return *latest.LastOpenMs + d.Milliseconds()
@@ -360,11 +449,126 @@ func (s *Service) defaultStartTime(symbol string, interval string) int64 {
 	return s.now().AddDate(-10, 0, 0).UnixMilli()
 }
 
-func validateImportRequest(req ImportRequest) error {
+func (s *Service) latestUpdateStart(instrument ResearchInstrument, interval string) int64 {
+	var latest struct {
+		LastOpenMs *int64
+	}
+	if s.db != nil {
+		_ = s.db.Model(&saasstore.KLine{}).
+			Select("max(open_time) as last_open_ms").
+			Where("instrument_id = ? AND source = ? AND interval = ?", instrument.ID, instrument.DataSource, interval).
+			Scan(&latest).Error
+	}
+	if latest.LastOpenMs != nil {
+		if d, ok := intervalDurations[interval]; ok {
+			return *latest.LastOpenMs + d.Milliseconds()
+		}
+	}
+	now := s.now()
+	switch interval {
+	case "1s":
+		return now.Add(-24 * time.Hour).UnixMilli()
+	case "1m":
+		return now.AddDate(0, 0, -7).UnixMilli()
+	case "5m", "15m", "30m":
+		return now.AddDate(0, 0, -14).UnixMilli()
+	case "1h":
+		return now.AddDate(0, -2, 0).UnixMilli()
+	case "1w":
+		return now.AddDate(-2, 0, 0).UnixMilli()
+	case "1M":
+		return now.AddDate(-5, 0, 0).UnixMilli()
+	default:
+		return now.AddDate(0, 0, -45).UnixMilli()
+	}
+}
+
+func (s *Service) recordAutoUpdate(ctx context.Context, instrumentID string, errMessage string) {
+	if s.db == nil {
+		return
+	}
+	updates := map[string]any{
+		"last_auto_update_at":    s.now(),
+		"last_auto_update_error": errMessage,
+	}
+	_ = s.db.WithContext(ctx).Model(&saasstore.ResearchInstrument{}).Where("id = ?", instrumentID).Updates(updates).Error
+}
+
+func (s *Service) enrichFreshness(instrument ResearchInstrument, item *DatasetSummary) {
+	expected := expectedLatestOpenMs(instrument, item.Interval, s.now())
+	item.ExpectedLatestOpenMs = expected
+	if expected == 0 {
+		item.IsFresh = item.Count > 0
+		return
+	}
+	item.IsFresh = item.Count > 0 && item.LastOpenMs >= expected
+}
+
+func expectedLatestOpenMs(instrument ResearchInstrument, interval string, now time.Time) int64 {
+	interval = normalizeInterval(interval)
+	switch interval {
+	case "1d":
+		return expectedDailyOpenMs(instrument, now)
+	case "1w":
+		return expectedWeeklyOpenMs(now)
+	case "1M":
+		return expectedMonthlyOpenMs(now)
+	}
+	duration, ok := intervalDurations[interval]
+	if !ok || duration <= 0 {
+		return 0
+	}
+	return now.Add(-duration).Truncate(duration).UnixMilli()
+}
+
+func expectedDailyOpenMs(instrument ResearchInstrument, now time.Time) int64 {
+	if instrument.Market == "crypto" || instrument.ID == InstrumentBTCUSDT {
+		utc := now.UTC()
+		date := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+		if utc.Before(date.Add(24 * time.Hour)) {
+			date = date.AddDate(0, 0, -1)
+		}
+		return date.UnixMilli()
+	}
+	loc, closeHour, closeMinute := precloseSchedule(instrument.ID)
+	localNow := now.In(loc)
+	closeAt := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), closeHour, closeMinute, 0, 0, loc)
+	target := localNow
+	if localNow.Before(closeAt.Add(90 * time.Minute)) {
+		target = target.AddDate(0, 0, -1)
+	}
+	target = previousBusinessDay(target)
+	return time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, loc).UTC().UnixMilli()
+}
+
+func previousBusinessDay(value time.Time) time.Time {
+	for value.Weekday() == time.Saturday || value.Weekday() == time.Sunday {
+		value = value.AddDate(0, 0, -1)
+	}
+	return value
+}
+
+func expectedWeeklyOpenMs(now time.Time) int64 {
+	utc := now.UTC()
+	weekday := int(utc.Weekday())
+	if weekday == 0 {
+		weekday = 7
+	}
+	thisMonday := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -(weekday - 1))
+	return thisMonday.AddDate(0, 0, -7).UnixMilli()
+}
+
+func expectedMonthlyOpenMs(now time.Time) int64 {
+	utc := now.UTC()
+	thisMonth := time.Date(utc.Year(), utc.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return thisMonth.AddDate(0, -1, 0).UnixMilli()
+}
+
+func (s *Service) validateImportRequest(ctx context.Context, req ImportRequest) error {
 	if _, ok := intervalDurations[req.Interval]; !ok {
 		return ErrUnsupportedInterval
 	}
-	instrument, err := ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Symbol, req.DataSource)
 	if err != nil {
 		return err
 	}
@@ -412,7 +616,7 @@ func (s *Service) storeKLines(ctx context.Context, instrumentID string, source s
 }
 
 func (s *Service) importPrecloseSnapshots(ctx context.Context, req ImportRequest) (int64, error) {
-	instrument, err := ResolveInstrument(req.InstrumentID, req.Symbol, req.DataSource)
+	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Symbol, req.DataSource)
 	if err != nil {
 		return 0, err
 	}
@@ -602,10 +806,12 @@ func (c *Client) FetchKLines(ctx context.Context, symbol string, interval string
 }
 
 func (c *YahooClient) FetchKLines(ctx context.Context, symbol string, interval string, startTime int64, endTime int64) ([]BinanceKLine, error) {
-	if interval != "1d" {
+	switch interval {
+	case "1d", "1h", "1m", "1w", "1M":
+	default:
 		return nil, ErrUnsupportedInterval
 	}
-	return c.FetchChartRows(ctx, symbol, "1d", startTime, endTime)
+	return c.FetchChartRows(ctx, symbol, interval, startTime, endTime)
 }
 
 func (c *YahooClient) FetchChartRows(ctx context.Context, symbol string, interval string, startTime int64, endTime int64) ([]BinanceKLine, error) {
@@ -644,7 +850,7 @@ func (c *YahooClient) fetchChart(ctx context.Context, baseURL string, symbol str
 	query := endpoint.Query()
 	query.Set("period1", strconv.FormatInt(startTime/1000, 10))
 	query.Set("period2", strconv.FormatInt(endTime/1000, 10))
-	query.Set("interval", interval)
+	query.Set("interval", yahooChartInterval(interval))
 	query.Set("events", "history")
 	query.Set("includeAdjustedClose", "true")
 	endpoint.RawQuery = query.Encode()
@@ -772,6 +978,17 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func yahooChartInterval(interval string) string {
+	switch normalizeInterval(interval) {
+	case "1w":
+		return "1wk"
+	case "1M":
+		return "1mo"
+	default:
+		return normalizeInterval(interval)
+	}
 }
 
 type yahooChartResponse struct {

@@ -39,7 +39,8 @@ func TestClientFetchKLinesParsesBinanceResponse(t *testing.T) {
 }
 
 func TestValidateImportRequestRejectsUnsupportedInterval(t *testing.T) {
-	err := validateImportRequest(ImportRequest{
+	svc := NewService(nil, nil)
+	err := svc.validateImportRequest(context.Background(), ImportRequest{
 		Symbol:      "BTCUSDT",
 		Interval:    "2m",
 		StartTimeMs: 1,
@@ -47,6 +48,15 @@ func TestValidateImportRequestRejectsUnsupportedInterval(t *testing.T) {
 	})
 	if err != ErrUnsupportedInterval {
 		t.Fatalf("expected ErrUnsupportedInterval, got %v", err)
+	}
+}
+
+func TestYahooChartIntervalMapsWeeklyAndMonthly(t *testing.T) {
+	if got := yahooChartInterval("1w"); got != "1wk" {
+		t.Fatalf("weekly interval = %s", got)
+	}
+	if got := yahooChartInterval("1M"); got != "1mo" {
+		t.Fatalf("monthly interval = %s", got)
 	}
 }
 

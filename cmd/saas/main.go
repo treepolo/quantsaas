@@ -39,6 +39,9 @@ func main() {
 	defer sqlDB.Close()
 
 	ctx := context.Background()
+	if err := marketdata.SeedResearchInstruments(ctx, db.DB); err != nil {
+		logger.Fatal("seed research instruments failed", zap.Error(err))
+	}
 	redisClient, err := store.NewRedis(ctx, cfg.Redis)
 	if err != nil {
 		logger.Fatal("init redis failed", zap.Error(err))

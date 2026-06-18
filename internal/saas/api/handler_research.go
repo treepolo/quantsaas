@@ -19,18 +19,23 @@ import (
 )
 
 type ResearchStatusHandler struct {
-	db *gorm.DB
+	db          *gorm.DB
+	instruments *marketdata.InstrumentStore
 }
 
 func NewResearchStatusHandler(db *gorm.DB) *ResearchStatusHandler {
-	return &ResearchStatusHandler{db: db}
+	return &ResearchStatusHandler{db: db, instruments: marketdata.NewInstrumentStore(db)}
 }
 
 func (h *ResearchStatusHandler) Status(c *gin.Context) {
 	simulation := parsePositionSimulationQuery(c)
-	instruments := marketdata.Instruments()
+	instruments, err := h.instruments.Instruments(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	if requested := c.Query("instrument_id"); requested != "" {
-		instrument, err := marketdata.ResolveInstrument(requested, "", "")
+		instrument, err := h.instruments.ResolveInstrument(c.Request.Context(), requested, "", "")
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
