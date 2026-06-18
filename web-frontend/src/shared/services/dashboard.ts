@@ -4,6 +4,12 @@ export type EquitySnapshot = {
   time: string;
   total_assets: number;
   benchmark?: number;
+  strategy_change_pct?: number;
+  benchmark_change_pct?: number;
+  model_target_weight?: number;
+  model_target_weight_change?: number;
+  empty_reference_target_weight?: number;
+  empty_reference_target_weight_change?: number;
 };
 
 export type PortfolioSummary = {

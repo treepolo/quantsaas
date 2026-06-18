@@ -21,8 +21,12 @@ const (
 type SigmoidDCAEvolvable struct{}
 
 type BacktestPoint struct {
-	TimeMs      int64
-	TotalEquity float64
+	TimeMs                           int64
+	TotalEquity                      float64
+	ModelTargetWeight                float64
+	ModelTargetWeightChange          float64
+	EmptyReferenceTargetWeight       float64
+	EmptyReferenceTargetWeightChange float64
 }
 
 type SigmoidDCAPathResult struct {
@@ -292,6 +296,9 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 	actualEvalStart := int64(0)
 	pendingOutput := quant.StrategyOutput{}
 	hasPendingOutput := false
+	prevModelTargetWeight := 0.0
+	prevEmptyReferenceTargetWeight := 0.0
+	hasPrevTargetWeight := false
 
 	for i, bar := range bars {
 		if bar.Close <= 0 {
@@ -327,6 +334,20 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			RuntimeState: state,
 			Spawn:        params.Spawn,
 		}, params)
+		modelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
+		emptyReferenceOutput := sigmoiddca.Step(quant.StrategyInput{
+			Symbol:     "BTCUSDT",
+			Interval:   interval,
+			Closes:     closes,
+			Timestamps: timestamps,
+			Portfolio: quant.PortfolioSnapshot{
+				USDTBalance: portfolio.TotalEquity,
+				TotalEquity: portfolio.TotalEquity,
+			},
+			RuntimeState: map[string]any{},
+			Spawn:        params.Spawn,
+		}, params)
+		emptyReferenceTargetWeight := diagnosticValue(emptyReferenceOutput.Diagnostics, "target_weight")
 		state = output.RuntimeState
 		if usesNextOpenExecution(executionMode) {
 			pendingOutput = output
@@ -361,8 +382,24 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 				evalInitial = equity
 				actualEvalStart = bar.OpenTime
 			}
+			modelTargetWeightChange := 0.0
+			emptyReferenceTargetWeightChange := 0.0
+			if hasPrevTargetWeight {
+				modelTargetWeightChange = modelTargetWeight - prevModelTargetWeight
+				emptyReferenceTargetWeightChange = emptyReferenceTargetWeight - prevEmptyReferenceTargetWeight
+			}
 			nav = append(nav, equity)
-			points = append(points, BacktestPoint{TimeMs: bar.OpenTime, TotalEquity: equity})
+			points = append(points, BacktestPoint{
+				TimeMs:                           bar.OpenTime,
+				TotalEquity:                      equity,
+				ModelTargetWeight:                modelTargetWeight,
+				ModelTargetWeightChange:          modelTargetWeightChange,
+				EmptyReferenceTargetWeight:       emptyReferenceTargetWeight,
+				EmptyReferenceTargetWeightChange: emptyReferenceTargetWeightChange,
+			})
+			prevModelTargetWeight = modelTargetWeight
+			prevEmptyReferenceTargetWeight = emptyReferenceTargetWeight
+			hasPrevTargetWeight = true
 		}
 	}
 
@@ -380,6 +417,17 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		Metrics: metrics,
 		NAV:     points,
 	}
+}
+
+func diagnosticValue(values map[string]float64, key string) float64 {
+	if values == nil {
+		return 0
+	}
+	value := values[key]
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return value
 }
 
 func normalizeBacktestExecutionMode(mode string) string {

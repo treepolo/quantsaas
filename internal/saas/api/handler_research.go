@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"quantsaas/internal/quant"
+	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
@@ -27,8 +28,17 @@ func NewResearchStatusHandler(db *gorm.DB) *ResearchStatusHandler {
 
 func (h *ResearchStatusHandler) Status(c *gin.Context) {
 	simulation := parsePositionSimulationQuery(c)
-	items := make([]gin.H, 0, len(marketdata.Instruments()))
-	for _, instrument := range marketdata.Instruments() {
+	instruments := marketdata.Instruments()
+	if requested := c.Query("instrument_id"); requested != "" {
+		instrument, err := marketdata.ResolveInstrument(requested, "", "")
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		instruments = []marketdata.ResearchInstrument{instrument}
+	}
+	items := make([]gin.H, 0, len(instruments))
+	for _, instrument := range instruments {
 		items = append(items, h.instrumentStatus(c.Request.Context(), instrument, simulation))
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -144,15 +154,75 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 		"completed":    true,
 	}
 	base["market_state"] = marketState
-	base["target_weight"] = output.Diagnostics["target_weight"]
-	base["current_weight"] = output.Diagnostics["current_weight"]
-	base["delta_weight"] = output.Diagnostics["delta_weight"]
 	base["diagnostics"] = output.Diagnostics
 	base["parameter_values"] = paramValues
+	if model, ok := simulateResearchModel(rows, params, simulation); ok {
+		base["model_simulation"] = model
+		if latestTarget, ok := model["latest_model_target_weight"]; ok {
+			base["target_weight"] = latestTarget
+		}
+		if latestDelta, ok := model["latest_model_target_weight_change"]; ok {
+			base["delta_weight"] = latestDelta
+		}
+		base["empty_reference_target_weight"] = model["latest_empty_reference_target_weight"]
+		base["empty_reference_target_weight_change"] = model["latest_empty_reference_target_weight_change"]
+	} else {
+		base["target_weight"] = output.Diagnostics["target_weight"]
+		base["current_weight"] = output.Diagnostics["current_weight"]
+		base["delta_weight"] = output.Diagnostics["delta_weight"]
+	}
 	if summary, ok := simulateResearchPosition(rows, params, instrument.Symbol, simulation); ok {
 		base["position_simulation"] = summary
 	}
 	return base
+}
+
+func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, settings positionSimulationQuery) (gin.H, bool) {
+	if len(rows) == 0 {
+		return nil, false
+	}
+	spawn := params.Spawn
+	if settings.InitialCapital > 0 {
+		spawn.Policy.InitialUSDT = settings.InitialCapital
+	}
+	if settings.MonthlyDCA >= 0 {
+		spawn.Policy.MonthlyInjectUSDT = settings.MonthlyDCA
+	}
+	bars := barsFromRows(rows)
+	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, rows[0].OpenTime, "1d", marketdata.ExecutionModeCloseSameBar, params.Chromosome, &spawn)
+	baseline := quant.SimulateGhostDCAFrom(bars, rows[0].OpenTime, quant.GhostDCAConfig{
+		InitialUSDT:       spawn.Policy.InitialUSDT,
+		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
+	})
+	points := mergeResearchModelPoints(path.NAV, baseline)
+	if len(points) == 0 {
+		return nil, false
+	}
+	latest := points[len(points)-1]
+	previous := gin.H{}
+	if len(points) > 1 {
+		previous = points[len(points)-2]
+	}
+	return gin.H{
+		"start_time_ms":                               rows[0].OpenTime,
+		"latest_time_ms":                              latest["time_ms"],
+		"latest_time":                                 latest["time"],
+		"initial_capital":                             spawn.Policy.InitialUSDT,
+		"monthly_dca":                                 spawn.Policy.MonthlyInjectUSDT,
+		"latest_nav":                                  latest["model_nav"],
+		"previous_nav":                                previous["model_nav"],
+		"nav_change_pct":                              latest["model_nav_change_pct"],
+		"latest_benchmark":                            latest["benchmark"],
+		"benchmark_change_pct":                        latest["benchmark_change_pct"],
+		"latest_model_target_weight":                  latest["model_target_weight"],
+		"previous_model_target_weight":                previous["model_target_weight"],
+		"latest_model_target_weight_change":           latest["model_target_weight_change"],
+		"latest_empty_reference_target_weight":        latest["empty_reference_target_weight"],
+		"previous_empty_reference_target_weight":      previous["empty_reference_target_weight"],
+		"latest_empty_reference_target_weight_change": latest["empty_reference_target_weight_change"],
+		"points":       len(points),
+		"chart_points": points,
+	}, true
 }
 
 func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, symbol string, settings positionSimulationQuery) (gin.H, bool) {
@@ -280,6 +350,61 @@ func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, 
 		"asset_quantity":         assetQty,
 		"points":                 points,
 	}, true
+}
+
+func barsFromRows(rows []saasstore.KLine) []quant.Bar {
+	bars := make([]quant.Bar, 0, len(rows))
+	for _, row := range rows {
+		bars = append(bars, quant.Bar{
+			OpenTime: row.OpenTime,
+			Open:     row.Open,
+			High:     row.High,
+			Low:      row.Low,
+			Close:    row.Close,
+			Volume:   row.Volume,
+		})
+	}
+	return bars
+}
+
+func mergeResearchModelPoints(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []gin.H {
+	byTime := make(map[int64]float64, len(baseline.Times))
+	for i, ts := range baseline.Times {
+		if i < len(baseline.NAV) {
+			byTime[ts] = baseline.NAV[i]
+		}
+	}
+	points := make([]gin.H, 0, len(strategy))
+	previousModelNAV := 0.0
+	previousBenchmark := 0.0
+	for _, item := range strategy {
+		benchmark, ok := byTime[item.TimeMs]
+		if !ok {
+			continue
+		}
+		points = append(points, gin.H{
+			"time_ms":                              item.TimeMs,
+			"time":                                 time.UnixMilli(item.TimeMs).UTC().Format(time.RFC3339),
+			"model_nav":                            item.TotalEquity,
+			"benchmark":                            benchmark,
+			"model_nav_change_pct":                 pctChange(item.TotalEquity, previousModelNAV),
+			"benchmark_change_pct":                 pctChange(benchmark, previousBenchmark),
+			"model_target_weight":                  item.ModelTargetWeight,
+			"model_target_weight_change":           item.ModelTargetWeightChange,
+			"empty_reference_target_weight":        item.EmptyReferenceTargetWeight,
+			"empty_reference_target_weight_change": item.EmptyReferenceTargetWeightChange,
+		})
+		previousModelNAV = item.TotalEquity
+		previousBenchmark = benchmark
+	}
+	return points
+}
+
+func pctChange(current float64, previous float64) float64 {
+	if previous <= 0 {
+		return 0
+	}
+	return current/previous - 1
 }
 
 func currentWeight(assetQty float64, price float64, equity float64) float64 {

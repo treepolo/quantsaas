@@ -49,9 +49,15 @@ type CreateRequest struct {
 }
 
 type EquitySnapshot struct {
-	Time        string  `json:"time"`
-	TotalAssets float64 `json:"total_assets"`
-	Benchmark   float64 `json:"benchmark"`
+	Time                             string  `json:"time"`
+	TotalAssets                      float64 `json:"total_assets"`
+	Benchmark                        float64 `json:"benchmark"`
+	StrategyChangePct                float64 `json:"strategy_change_pct"`
+	BenchmarkChangePct               float64 `json:"benchmark_change_pct"`
+	ModelTargetWeight                float64 `json:"model_target_weight"`
+	ModelTargetWeightChange          float64 `json:"model_target_weight_change"`
+	EmptyReferenceTargetWeight       float64 `json:"empty_reference_target_weight"`
+	EmptyReferenceTargetWeightChange float64 `json:"empty_reference_target_weight_change"`
 }
 
 type WindowResult struct {
@@ -524,16 +530,35 @@ func mergeNAV(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []Equi
 		}
 	}
 	points := make([]EquitySnapshot, 0, len(strategy))
+	previousStrategy := 0.0
+	previousBenchmark := 0.0
 	for _, item := range strategy {
 		benchmark, ok := byTime[item.TimeMs]
 		if !ok {
 			continue
 		}
+		strategyChange := pctChange(item.TotalEquity, previousStrategy)
+		benchmarkChange := pctChange(benchmark, previousBenchmark)
 		points = append(points, EquitySnapshot{
-			Time:        time.UnixMilli(item.TimeMs).UTC().Format(time.RFC3339),
-			TotalAssets: item.TotalEquity,
-			Benchmark:   benchmark,
+			Time:                             time.UnixMilli(item.TimeMs).UTC().Format(time.RFC3339),
+			TotalAssets:                      item.TotalEquity,
+			Benchmark:                        benchmark,
+			StrategyChangePct:                strategyChange,
+			BenchmarkChangePct:               benchmarkChange,
+			ModelTargetWeight:                item.ModelTargetWeight,
+			ModelTargetWeightChange:          item.ModelTargetWeightChange,
+			EmptyReferenceTargetWeight:       item.EmptyReferenceTargetWeight,
+			EmptyReferenceTargetWeightChange: item.EmptyReferenceTargetWeightChange,
 		})
+		previousStrategy = item.TotalEquity
+		previousBenchmark = benchmark
 	}
 	return points
+}
+
+func pctChange(current float64, previous float64) float64 {
+	if previous <= 0 {
+		return 0
+	}
+	return current/previous - 1
 }

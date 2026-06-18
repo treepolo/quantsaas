@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Area, AreaChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
@@ -23,6 +23,16 @@ type ChartPoint = {
   benchmark?: number;
   strategy_value?: number;
   benchmark_value?: number;
+  strategy_change_pct?: number;
+  benchmark_change_pct?: number;
+  model_target_weight?: number;
+  model_target_weight_change?: number;
+  empty_reference_target_weight?: number;
+  empty_reference_target_weight_change?: number;
+  model_target_weight_value?: number;
+  model_target_weight_change_value?: number;
+  empty_reference_target_weight_value?: number;
+  empty_reference_target_weight_change_value?: number;
   [key: string]: string | number | undefined;
 };
 type ComparisonResult = { genome: GenomeRecord; result: BacktestResult; color: string };
@@ -87,13 +97,19 @@ function buildSingleChartData(result: BacktestResult | null): ChartPoint[] {
     time_ms: new Date(item.time).getTime(),
     time: item.time,
     strategy: item.total_assets,
-    benchmark: item.benchmark ?? item.total_assets
+    benchmark: item.benchmark ?? item.total_assets,
+    strategy_change_pct: item.strategy_change_pct,
+    benchmark_change_pct: item.benchmark_change_pct,
+    model_target_weight: item.model_target_weight,
+    model_target_weight_change: item.model_target_weight_change,
+    empty_reference_target_weight: item.empty_reference_target_weight,
+    empty_reference_target_weight_change: item.empty_reference_target_weight_change
   }));
 }
 
 function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
   const points = new Map<number, ChartPoint>();
-  for (const comparison of items) {
+  for (const [comparisonIndex, comparison] of items.entries()) {
     const key = `series_${comparison.genome.id}`;
     for (const item of comparison.result.nav ?? []) {
       const timeMs = new Date(item.time).getTime();
@@ -107,6 +123,15 @@ function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
         } satisfies ChartPoint);
       point[key] = item.total_assets;
       if (point.benchmark === undefined) point.benchmark = item.benchmark ?? item.total_assets;
+      if (comparisonIndex === 0) {
+        point.strategy = item.total_assets;
+        point.strategy_change_pct = item.strategy_change_pct;
+        point.benchmark_change_pct = item.benchmark_change_pct;
+        point.model_target_weight = item.model_target_weight;
+        point.model_target_weight_change = item.model_target_weight_change;
+        point.empty_reference_target_weight = item.empty_reference_target_weight;
+        point.empty_reference_target_weight_change = item.empty_reference_target_weight_change;
+      }
       points.set(timeMs, point);
     }
   }
@@ -132,6 +157,12 @@ function fromChartValue(value: number | string, mode: ScaleMode) {
 
 function formatRelativeIndex(value: number) {
   return value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function signedPercent(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value)) return "-";
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${formatPercent(value)}`;
 }
 
 function limitTicks(values: number[], maxTicks: number) {
@@ -236,6 +267,7 @@ export function BacktestingPage() {
   const panDragRef = useRef<PanDrag | null>(null);
   const chartLayerRef = useRef<HTMLDivElement | null>(null);
   const [isPanning, setIsPanning] = useState(false);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
   const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];
@@ -324,10 +356,15 @@ export function BacktestingPage() {
       const benchmarkRawValue = Number(item.benchmark) || 0;
       const benchmarkRaw = valueMode === "relative" ? (benchmarkRawValue / baseBenchmark) * 100 : benchmarkRawValue;
       next.benchmark_value = toChartValue(benchmarkRaw, scaleMode);
+      next.model_target_weight_value = Number(item.model_target_weight) || 0;
+      next.model_target_weight_change_value = Number(item.model_target_weight_change) || 0;
+      next.empty_reference_target_weight_value = Number(item.empty_reference_target_weight) || 0;
+      next.empty_reference_target_weight_change_value = Number(item.empty_reference_target_weight_change) || 0;
       return next;
     });
   }, [visibleRawChartData, scaleMode, valueMode, seriesDefs]);
   const axisTicks = useMemo(() => buildAxisTicks(visibleChartData), [visibleChartData]);
+  const hoveredPoint = hoverIndex !== null ? visibleChartData[hoverIndex] : null;
 
   useEffect(() => {
     const element = chartLayerRef.current;
@@ -369,6 +406,7 @@ export function BacktestingPage() {
 
   function beginPan(event: ReactMouseEvent<HTMLDivElement>) {
     if (![0, 1].includes(event.button) || !rangeRef.current || chartLengthRef.current < 2) return;
+    updateHoverFromMouse(event);
     event.preventDefault();
     event.stopPropagation();
     panDragRef.current = {
@@ -380,6 +418,7 @@ export function BacktestingPage() {
   }
 
   function movePan(event: ReactMouseEvent<HTMLDivElement>) {
+    updateHoverFromMouse(event);
     const drag = panDragRef.current;
     if (!drag) return;
     event.preventDefault();
@@ -401,6 +440,28 @@ export function BacktestingPage() {
 
   function resetRange() {
     setRange(chartData.length ? { start: 0, end: chartData.length - 1 } : null);
+  }
+
+  function updateHoverFromMouse(event: ReactMouseEvent<HTMLDivElement>) {
+    if (visibleChartData.length === 0) {
+      setHoverIndex(null);
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / Math.max(1, rect.width)));
+    setHoverIndex(Math.round((visibleChartData.length - 1) * ratio));
+  }
+
+  function updateRangeStart(value: number) {
+    if (!range || chartData.length === 0) return;
+    const nextStart = Math.min(value, range.end);
+    setRange({ start: nextStart, end: range.end });
+  }
+
+  function updateRangeEnd(value: number) {
+    if (!range || chartData.length === 0) return;
+    const nextEnd = Math.max(value, range.start);
+    setRange({ start: range.start, end: nextEnd });
   }
 
   const axisFormatter = (value: number | string) => {
@@ -587,6 +648,7 @@ export function BacktestingPage() {
                   <CartesianGrid stroke="rgba(148,163,184,0.08)" vertical={false} />
                   <XAxis dataKey="time_ms" ticks={axisTicks.ticks} tickFormatter={axisTicks.formatter} stroke="#64748b" tickLine={false} axisLine={false} fontSize={11} interval={0} minTickGap={24} />
                   <YAxis stroke="#64748b" tickLine={false} axisLine={false} fontSize={12} tickFormatter={axisFormatter} domain={["auto", "auto"]} />
+                  {hoveredPoint ? <ReferenceLine x={hoveredPoint.time_ms} stroke="#f8fafc" strokeOpacity={0.35} strokeWidth={1} /> : null}
                   <Tooltip
                     contentStyle={{ background: "#020617", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}
                     formatter={tooltipFormatter}
@@ -607,13 +669,106 @@ export function BacktestingPage() {
                 onMouseDown={beginPan}
                 onMouseMove={movePan}
                 onMouseUp={endPan}
-                onMouseLeave={endPan}
+                onMouseLeave={(event) => {
+                  endPan(event);
+                  setHoverIndex(null);
+                }}
                 onAuxClick={(event) => {
                   if (event.button === 1) event.preventDefault();
                 }}
               />
             </div>
+            {hoveredPoint ? (
+              <ChartReadout
+                point={hoveredPoint}
+                rows={[
+                  ["日期", formatFullAxisTime(hoveredPoint.time_ms)],
+                  ["策略淨值", formatMoney(Number(hoveredPoint.strategy ?? 0))],
+                  ["策略日變化", signedPercent(Number(hoveredPoint.strategy_change_pct ?? 0))],
+                  ["定投淨值", formatMoney(Number(hoveredPoint.benchmark ?? 0))],
+                  ["定投日變化", signedPercent(Number(hoveredPoint.benchmark_change_pct ?? 0))],
+                  ["基準模型目標權重", formatPercent(Number(hoveredPoint.model_target_weight ?? 0))],
+                  ["基準模型權重變化", signedPercent(Number(hoveredPoint.model_target_weight_change ?? 0))],
+                  ["空倉參考目標權重", formatPercent(Number(hoveredPoint.empty_reference_target_weight ?? 0))],
+                  ["空倉參考權重變化", signedPercent(Number(hoveredPoint.empty_reference_target_weight_change ?? 0))]
+                ]}
+              />
+            ) : null}
+            <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} />
           </Card>
+
+          <MetricChartCard
+            title="基準模型目標權重每日值"
+            description="從回測起點空倉開始，依模型路徑逐日產生的目標水準。"
+            data={visibleChartData}
+            axisTicks={axisTicks}
+            hoveredPoint={hoveredPoint}
+            dataKey="model_target_weight_value"
+            color="#38bdf8"
+            formatter={(value) => formatPercent(Number(value))}
+            onMouseDown={beginPan}
+            onMouseMove={movePan}
+            onMouseUp={endPan}
+            onMouseLeave={(event) => {
+              endPan(event);
+              setHoverIndex(null);
+            }}
+            isPanning={isPanning}
+          />
+          <MetricChartCard
+            title="基準模型目標權重每日變化"
+            description="今日基準模型目標權重減昨日基準模型目標權重。"
+            data={visibleChartData}
+            axisTicks={axisTicks}
+            hoveredPoint={hoveredPoint}
+            dataKey="model_target_weight_change_value"
+            color="#f59e0b"
+            formatter={(value) => signedPercent(Number(value))}
+            onMouseDown={beginPan}
+            onMouseMove={movePan}
+            onMouseUp={endPan}
+            onMouseLeave={(event) => {
+              endPan(event);
+              setHoverIndex(null);
+            }}
+            isPanning={isPanning}
+          />
+          <MetricChartCard
+            title="空倉參考目標權重每日值"
+            description="每天獨立假設昨日空倉後，依該日資料得到的參考目標水準。"
+            data={visibleChartData}
+            axisTicks={axisTicks}
+            hoveredPoint={hoveredPoint}
+            dataKey="empty_reference_target_weight_value"
+            color="#a78bfa"
+            formatter={(value) => formatPercent(Number(value))}
+            onMouseDown={beginPan}
+            onMouseMove={movePan}
+            onMouseUp={endPan}
+            onMouseLeave={(event) => {
+              endPan(event);
+              setHoverIndex(null);
+            }}
+            isPanning={isPanning}
+          />
+          <MetricChartCard
+            title="空倉參考目標權重每日變化"
+            description="今日空倉參考目標權重減昨日空倉參考目標權重。"
+            data={visibleChartData}
+            axisTicks={axisTicks}
+            hoveredPoint={hoveredPoint}
+            dataKey="empty_reference_target_weight_change_value"
+            color="#f472b6"
+            formatter={(value) => signedPercent(Number(value))}
+            onMouseDown={beginPan}
+            onMouseMove={movePan}
+            onMouseUp={endPan}
+            onMouseLeave={(event) => {
+              endPan(event);
+              setHoverIndex(null);
+            }}
+            isPanning={isPanning}
+          />
 
           <Card>
             <CardHeader>
@@ -650,6 +805,120 @@ function DateInput({ label, value, onChange }: { label: string; value: string; o
         onChange={(event) => onChange(event.target.value)}
       />
     </label>
+  );
+}
+
+function ChartReadout({ rows }: { point: ChartPoint; rows: Array<[string, string]> }) {
+  return (
+    <div className="mt-3 grid gap-2 rounded-lg border border-white/[0.04] bg-slate-950/50 p-3 text-xs md:grid-cols-3 xl:grid-cols-5">
+      {rows.map(([label, value]) => (
+        <div key={label}>
+          <div className="text-slate-500">{label}</div>
+          <div className="mt-1 font-mono text-slate-100">{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RangeControls({
+  range,
+  total,
+  chartData,
+  onStart,
+  onEnd
+}: {
+  range: ChartRange | null;
+  total: number;
+  chartData: ChartPoint[];
+  onStart: (value: number) => void;
+  onEnd: (value: number) => void;
+}) {
+  if (!range || total <= 1) return null;
+  return (
+    <div className="mt-4 rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
+      <div className="mb-2 flex justify-between gap-3 text-xs text-slate-500">
+        <span>{formatFullAxisTime(chartData[range.start]?.time_ms ?? 0)}</span>
+        <span>{formatFullAxisTime(chartData[range.end]?.time_ms ?? 0)}</span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <input type="range" min={0} max={total - 1} value={range.start} onChange={(event) => onStart(Number(event.target.value))} />
+        <input type="range" min={0} max={total - 1} value={range.end} onChange={(event) => onEnd(Number(event.target.value))} />
+      </div>
+    </div>
+  );
+}
+
+function MetricChartCard({
+  title,
+  description,
+  data,
+  axisTicks,
+  hoveredPoint,
+  dataKey,
+  color,
+  formatter,
+  onMouseDown,
+  onMouseMove,
+  onMouseUp,
+  onMouseLeave,
+  isPanning
+}: {
+  title: string;
+  description: string;
+  data: ChartPoint[];
+  axisTicks: { ticks: number[]; formatter: (value: number | string) => string };
+  hoveredPoint: ChartPoint | null;
+  dataKey: string;
+  color: string;
+  formatter: (value: number | string) => string;
+  onMouseDown: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  onMouseMove: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  onMouseUp: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  onMouseLeave: (event: ReactMouseEvent<HTMLDivElement>) => void;
+  isPanning: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>{title}</CardTitle>
+          <CardDescription>{description}</CardDescription>
+        </div>
+      </CardHeader>
+      <div className="relative h-72 overflow-hidden rounded-lg border border-white/[0.04] bg-slate-950/30 p-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ left: 0, right: 10, top: 10, bottom: 30 }}>
+            <CartesianGrid stroke="rgba(148,163,184,0.08)" vertical={false} />
+            <XAxis dataKey="time_ms" ticks={axisTicks.ticks} tickFormatter={axisTicks.formatter} stroke="#64748b" tickLine={false} axisLine={false} fontSize={11} interval={0} minTickGap={24} />
+            <YAxis stroke="#64748b" tickLine={false} axisLine={false} fontSize={12} tickFormatter={formatter} domain={["auto", "auto"]} />
+            {hoveredPoint ? <ReferenceLine x={hoveredPoint.time_ms} stroke="#f8fafc" strokeOpacity={0.35} strokeWidth={1} /> : null}
+            <Tooltip
+              contentStyle={{ background: "#020617", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}
+              formatter={(value) => [formatter(value as number), title]}
+              labelFormatter={(value) => formatFullAxisTime(value)}
+            />
+            <Area name={title} type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} fill="transparent" isAnimationActive={false} connectNulls />
+          </AreaChart>
+        </ResponsiveContainer>
+        <div
+          className={cn("absolute inset-x-2 bottom-14 top-2 z-10 cursor-grab select-none touch-none overscroll-contain rounded-md", isPanning && "cursor-grabbing")}
+          onMouseDown={onMouseDown}
+          onMouseMove={onMouseMove}
+          onMouseUp={onMouseUp}
+          onMouseLeave={onMouseLeave}
+          onAuxClick={(event) => {
+            if (event.button === 1) event.preventDefault();
+          }}
+        />
+      </div>
+      {hoveredPoint ? (
+        <div className="mt-3 rounded-lg border border-white/[0.04] bg-slate-950/50 p-3 text-xs">
+          <div className="text-slate-500">{formatFullAxisTime(hoveredPoint.time_ms)}</div>
+          <div className="mt-1 font-mono text-slate-100">{formatter(Number(hoveredPoint[dataKey] ?? 0))}</div>
+        </div>
+      ) : null}
+    </Card>
   );
 }
 

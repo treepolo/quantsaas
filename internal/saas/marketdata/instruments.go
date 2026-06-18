@@ -30,12 +30,12 @@ type ResearchInstrument struct {
 }
 
 var researchInstruments = []ResearchInstrument{
-	{ID: InstrumentBTCUSDT, Symbol: "BTCUSDT", DisplayName: "比特幣現貨", DataSource: DataSourceBinance, SupportedIntervals: []string{"1d", "1h", "15m", "5m", "1m", "1s"}},
 	{ID: "TWII", Symbol: "^TWII", DisplayName: "台灣加權指數", DataSource: DataSourceYahoo, SupportedIntervals: []string{"1d"}},
 	{ID: "GSPC", Symbol: "^GSPC", DisplayName: "標普 500 指數", DataSource: DataSourceYahoo, SupportedIntervals: []string{"1d"}},
 	{ID: "NDX", Symbol: "^NDX", DisplayName: "納斯達克 100 指數", DataSource: DataSourceYahoo, SupportedIntervals: []string{"1d"}},
 	{ID: "SOX", Symbol: "^SOX", DisplayName: "費城半導體指數", DataSource: DataSourceYahoo, SupportedIntervals: []string{"1d"}},
 	{ID: "SOXL", Symbol: "SOXL", DisplayName: "SOXL 三倍做多費半 ETF", DataSource: DataSourceYahoo, SupportedIntervals: []string{"1d"}},
+	{ID: InstrumentBTCUSDT, Symbol: "BTCUSDT", DisplayName: "比特幣現貨", DataSource: DataSourceBinance, SupportedIntervals: []string{"1d", "1h", "15m", "5m", "1m", "1s"}},
 }
 
 func Instruments() []ResearchInstrument {
