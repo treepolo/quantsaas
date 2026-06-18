@@ -32,25 +32,28 @@ type Service struct {
 }
 
 type CreateRequest struct {
-	StrategyID    string            `json:"strategy_id"`
-	InstanceID    uint              `json:"instance_id"`
-	InstrumentID  string            `json:"instrument_id"`
-	DataSource    string            `json:"data_source"`
-	ExecutionMode string            `json:"execution_mode"`
-	StartTimeMs   int64             `json:"start_time_ms"`
-	EndTimeMs     int64             `json:"end_time_ms"`
-	Pair          string            `json:"pair"`
-	Symbol        string            `json:"symbol"`
-	Interval      string            `json:"interval"`
-	Source        string            `json:"source"`
-	CandidateID   uint              `json:"candidate_id"`
-	GenomeID      uint              `json:"genome_id"`
-	CustomParams  json.RawMessage   `json:"custom_params"`
-	SpawnPoint    *quant.SpawnPoint `json:"spawn_point"`
+	StrategyID     string            `json:"strategy_id"`
+	InstanceID     uint              `json:"instance_id"`
+	InstrumentID   string            `json:"instrument_id"`
+	DataSource     string            `json:"data_source"`
+	ExecutionMode  string            `json:"execution_mode"`
+	StartTimeMs    int64             `json:"start_time_ms"`
+	EndTimeMs      int64             `json:"end_time_ms"`
+	Pair           string            `json:"pair"`
+	Symbol         string            `json:"symbol"`
+	Interval       string            `json:"interval"`
+	Source         string            `json:"source"`
+	CandidateID    uint              `json:"candidate_id"`
+	GenomeID       uint              `json:"genome_id"`
+	CustomParams   json.RawMessage   `json:"custom_params"`
+	SpawnPoint     *quant.SpawnPoint `json:"spawn_point"`
+	InitialCapital *float64          `json:"initial_capital"`
+	MonthlyDCA     *float64          `json:"monthly_dca"`
 }
 
 type EquitySnapshot struct {
 	Time                             string  `json:"time"`
+	Price                            float64 `json:"price"`
 	TotalAssets                      float64 `json:"total_assets"`
 	Benchmark                        float64 `json:"benchmark"`
 	StrategyChangePct                float64 `json:"strategy_change_pct"`
@@ -72,26 +75,29 @@ type WindowResult struct {
 }
 
 type Response struct {
-	ID            uint               `json:"id"`
-	Status        string             `json:"status"`
-	StrategyID    string             `json:"strategy_id"`
-	Symbol        string             `json:"symbol"`
-	InstrumentID  string             `json:"instrument_id"`
-	DataSource    string             `json:"data_source"`
-	ExecutionMode string             `json:"execution_mode"`
-	Interval      string             `json:"interval"`
-	Source        string             `json:"source"`
-	TotalReturn   float64            `json:"total_return"`
-	Alpha         float64            `json:"alpha"`
-	MaxDrawdown   float64            `json:"max_drawdown"`
-	FinalEquity   float64            `json:"final_equity"`
-	Benchmark     float64            `json:"benchmark"`
-	NAV           []EquitySnapshot   `json:"nav"`
-	Windows       map[string]float64 `json:"windows"`
-	WindowDetails []WindowResult     `json:"window_details"`
-	Error         string             `json:"error,omitempty"`
-	CreatedAt     string             `json:"created_at,omitempty"`
-	FinishedAt    string             `json:"finished_at,omitempty"`
+	ID                   uint               `json:"id"`
+	Status               string             `json:"status"`
+	StrategyID           string             `json:"strategy_id"`
+	Symbol               string             `json:"symbol"`
+	InstrumentID         string             `json:"instrument_id"`
+	DataSource           string             `json:"data_source"`
+	ExecutionMode        string             `json:"execution_mode"`
+	Interval             string             `json:"interval"`
+	Source               string             `json:"source"`
+	TotalReturn          float64            `json:"total_return"`
+	Alpha                float64            `json:"alpha"`
+	MaxDrawdown          float64            `json:"max_drawdown"`
+	FinalEquity          float64            `json:"final_equity"`
+	Benchmark            float64            `json:"benchmark"`
+	BenchmarkReturn      float64            `json:"benchmark_return"`
+	BenchmarkMaxDrawdown float64            `json:"benchmark_max_drawdown"`
+	BenchmarkFinalEquity float64            `json:"benchmark_final_equity"`
+	NAV                  []EquitySnapshot   `json:"nav"`
+	Windows              map[string]float64 `json:"windows"`
+	WindowDetails        []WindowResult     `json:"window_details"`
+	Error                string             `json:"error,omitempty"`
+	CreatedAt            string             `json:"created_at,omitempty"`
+	FinishedAt           string             `json:"finished_at,omitempty"`
 }
 
 type instanceConfig struct {
@@ -231,23 +237,26 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn)
 
 	return &Response{
-		ID:            runID,
-		Status:        saasstore.BacktestStatusCompleted,
-		StrategyID:    req.StrategyID,
-		Symbol:        req.Symbol,
-		InstrumentID:  req.InstrumentID,
-		DataSource:    req.DataSource,
-		ExecutionMode: req.ExecutionMode,
-		Interval:      req.Interval,
-		Source:        req.Source,
-		TotalReturn:   path.Metrics.ROI,
-		Alpha:         alpha,
-		MaxDrawdown:   path.Metrics.MaxDrawdown,
-		FinalEquity:   path.Metrics.FinalEquity,
-		Benchmark:     baseline.FinalEquity,
-		NAV:           mergeNAV(path.NAV, baseline),
-		Windows:       windows,
-		WindowDetails: windowDetails,
+		ID:                   runID,
+		Status:               saasstore.BacktestStatusCompleted,
+		StrategyID:           req.StrategyID,
+		Symbol:               req.Symbol,
+		InstrumentID:         req.InstrumentID,
+		DataSource:           req.DataSource,
+		ExecutionMode:        req.ExecutionMode,
+		Interval:             req.Interval,
+		Source:               req.Source,
+		TotalReturn:          path.Metrics.ROI,
+		Alpha:                alpha,
+		MaxDrawdown:          path.Metrics.MaxDrawdown,
+		FinalEquity:          path.Metrics.FinalEquity,
+		Benchmark:            baseline.FinalEquity,
+		BenchmarkReturn:      baseline.ROI,
+		BenchmarkMaxDrawdown: baseline.MaxDrawdown,
+		BenchmarkFinalEquity: baseline.FinalEquity,
+		NAV:                  mergeNAV(path.NAV, baseline),
+		Windows:              windows,
+		WindowDetails:        windowDetails,
 	}, nil
 }
 
@@ -295,6 +304,12 @@ func (s *Service) resolveParams(ctx context.Context, userID uint, req CreateRequ
 	}
 	if req.SpawnPoint != nil {
 		params.Spawn = *req.SpawnPoint
+	}
+	if req.InitialCapital != nil {
+		params.Spawn.Policy.InitialUSDT = *req.InitialCapital
+	}
+	if req.MonthlyDCA != nil {
+		params.Spawn.Policy.MonthlyInjectUSDT = *req.MonthlyDCA
 	}
 	params.Chromosome = quant.ClampChromosome(params.Chromosome)
 	return params, nil
@@ -542,6 +557,7 @@ func mergeNAV(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []Equi
 		benchmarkChange := pctChange(benchmark, previousBenchmark)
 		points = append(points, EquitySnapshot{
 			Time:                             time.UnixMilli(item.TimeMs).UTC().Format(time.RFC3339),
+			Price:                            item.Price,
 			TotalAssets:                      item.TotalEquity,
 			Benchmark:                        benchmark,
 			StrategyChangePct:                strategyChange,

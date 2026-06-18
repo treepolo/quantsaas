@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Database, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowDown, ArrowUp, CheckCircle2, Database, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { marketDataApi, type DatasetSummary, type InstrumentSummary, type ResearchInstrument, type UpsertInstrumentInput } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
@@ -165,6 +165,11 @@ export function MarketDataPage() {
     onSuccess: refreshMarketQueries
   });
 
+  const reorderMutation = useMutation({
+    mutationFn: (ids: string[]) => marketDataApi.reorderInstruments(ids),
+    onSuccess: refreshMarketQueries
+  });
+
   const updateLatestMutation = useMutation({
     mutationFn: () => marketDataApi.updateLatest(),
     onSuccess: refreshMarketQueries
@@ -215,6 +220,15 @@ export function MarketDataPage() {
       const next = currentIntervals.includes(value) ? currentIntervals.filter((item) => item !== value) : [...currentIntervals, value];
       return { ...current, supported_intervals: next };
     });
+  }
+
+  function moveInstrument(index: number, delta: number) {
+    const nextIndex = index + delta;
+    if (nextIndex < 0 || nextIndex >= instruments.length) return;
+    const ids = instruments.map((item) => item.id);
+    const [moved] = ids.splice(index, 1);
+    ids.splice(nextIndex, 0, moved);
+    reorderMutation.mutate(ids);
   }
 
   const overviewGroups = useMemo(() => {
@@ -407,22 +421,30 @@ export function MarketDataPage() {
         </form>
         {upsertMutation.error ? <div className="mt-3 text-sm text-[#fecaca]">{String(upsertMutation.error.message)}</div> : null}
         <div className="mt-5 grid gap-2">
-          {instruments.map((item) => (
+          {instruments.map((item, index) => (
             <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
               <div>
                 <div className="font-semibold text-slate-100">{item.display_name}</div>
                 <div className="font-mono text-xs text-slate-500">{item.id} · {item.symbol} · {marketName(item.market)} · {item.supported_intervals.map((value) => intervalLabels[value] ?? value).join(" / ")}</div>
               </div>
-              <Button
-                icon={Trash2}
-                variant="danger"
-                loading={deleteMutation.isPending}
-                onClick={() => {
-                  if (window.confirm(`停用 ${item.display_name}？`)) deleteMutation.mutate(item.id);
-                }}
-              >
-                刪除
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button icon={ArrowUp} variant="secondary" disabled={index === 0 || reorderMutation.isPending} onClick={() => moveInstrument(index, -1)}>
+                  上移
+                </Button>
+                <Button icon={ArrowDown} variant="secondary" disabled={index === instruments.length - 1 || reorderMutation.isPending} onClick={() => moveInstrument(index, 1)}>
+                  下移
+                </Button>
+                <Button
+                  icon={Trash2}
+                  variant="danger"
+                  loading={deleteMutation.isPending}
+                  onClick={() => {
+                    if (window.confirm(`停用 ${item.display_name}？`)) deleteMutation.mutate(item.id);
+                  }}
+                >
+                  刪除
+                </Button>
+              </div>
             </div>
           ))}
         </div>

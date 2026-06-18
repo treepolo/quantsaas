@@ -26,12 +26,16 @@ export type ResearchStatusItem = {
   parameter_values?: Record<string, unknown>;
   model_simulation?: ResearchModelSimulation;
   position_simulation?: PositionSimulationSummary;
+  interval_states?: ResearchIntervalState[];
   error?: string;
 };
+
+export type ResearchIntervalState = Omit<ResearchStatusItem, "instrument" | "instrument_id" | "symbol" | "data_source" | "interval_states" | "position_simulation">;
 
 export type ResearchModelPoint = {
   time_ms: number;
   time: string;
+  price?: number;
   model_nav: number;
   benchmark: number;
   model_nav_change_pct: number;

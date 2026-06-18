@@ -91,6 +91,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.GET("/backtests/:id", bt.Get)
 	lab.GET("/market-data/instruments", md.Instruments)
 	lab.POST("/market-data/instruments", md.UpsertInstrument)
+	lab.PATCH("/market-data/instruments/order", md.ReorderInstruments)
 	lab.DELETE("/market-data/instruments/:id", md.DeleteInstrument)
 	lab.GET("/market-data/klines/status", md.Status)
 	lab.GET("/market-data/klines/overview", md.Overview)

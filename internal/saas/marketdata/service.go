@@ -181,6 +181,10 @@ func (s *Service) DisableInstrument(ctx context.Context, id string) error {
 	return s.instruments.Disable(ctx, id)
 }
 
+func (s *Service) ReorderInstruments(ctx context.Context, req ReorderInstrumentRequest) error {
+	return s.instruments.Reorder(ctx, req)
+}
+
 func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, error) {
 	req = s.normalizeImportRequest(req)
 	if err := s.validateImportRequest(ctx, req); err != nil {

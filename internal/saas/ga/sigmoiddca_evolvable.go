@@ -22,6 +22,7 @@ type SigmoidDCAEvolvable struct{}
 
 type BacktestPoint struct {
 	TimeMs                           int64
+	Price                            float64
 	TotalEquity                      float64
 	ModelTargetWeight                float64
 	ModelTargetWeightChange          float64
@@ -391,6 +392,7 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			nav = append(nav, equity)
 			points = append(points, BacktestPoint{
 				TimeMs:                           bar.OpenTime,
+				Price:                            bar.Close,
 				TotalEquity:                      equity,
 				ModelTargetWeight:                modelTargetWeight,
 				ModelTargetWeightChange:          modelTargetWeightChange,

@@ -100,6 +100,12 @@ export const marketDataApi = {
   deleteInstrument(id: string) {
     return apiFetch<{ status: string }>(`/market-data/instruments/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
+  reorderInstruments(ids: string[]) {
+    return apiFetch<{ status: string }>("/market-data/instruments/order", {
+      method: "PATCH",
+      body: JSON.stringify({ ids })
+    });
+  },
   status(instrumentId = "BTCUSDT") {
     return apiFetch<MarketDataStatus>(`/market-data/klines/status?instrument_id=${encodeURIComponent(instrumentId)}`);
   },

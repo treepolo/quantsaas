@@ -56,6 +56,10 @@ type UpsertInstrumentRequest struct {
 	SortOrder          int      `json:"sort_order"`
 }
 
+type ReorderInstrumentRequest struct {
+	IDs []string `json:"ids"`
+}
+
 var defaultYahooIntervals = []string{"1d", "1h", "1m", "1w", "1M"}
 var defaultBinanceIntervals = []string{"1d", "1h", "15m", "5m", "1m", "1s", "1w", "1M"}
 
@@ -96,7 +100,7 @@ func SeedResearchInstruments(ctx context.Context, db *gorm.DB) error {
 	return db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "id"}},
 		DoUpdates: clause.AssignmentColumns([]string{
-			"symbol", "display_name", "data_source", "supported_intervals", "market", "sort_order", "updated_at",
+			"symbol", "display_name", "data_source", "supported_intervals", "market", "updated_at",
 		}),
 	}).Create(&records).Error
 }
@@ -186,6 +190,39 @@ func (s *InstrumentStore) Disable(ctx context.Context, id string) error {
 		Model(&saasstore.ResearchInstrument{}).
 		Where("id = ?", id).
 		Updates(map[string]any{"enabled": false}).Error
+}
+
+func (s *InstrumentStore) Reorder(ctx context.Context, req ReorderInstrumentRequest) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("instrument store is unavailable")
+	}
+	ids := make([]string, 0, len(req.IDs))
+	seen := map[string]bool{}
+	for _, raw := range req.IDs {
+		id := normalizeInstrumentID(raw)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return ErrUnsupportedInstrument
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for index, id := range ids {
+			result := tx.Model(&saasstore.ResearchInstrument{}).
+				Where("id = ? AND enabled = ?", id, true).
+				Update("sort_order", (index+1)*10)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return ErrUnsupportedInstrument
+			}
+		}
+		return nil
+	})
 }
 
 func ResolveInstrument(instrumentID string, symbol string, source string) (ResearchInstrument, error) {

@@ -78,6 +78,27 @@ func (h *MarketDataHandler) DeleteInstrument(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
 }
 
+func (h *MarketDataHandler) ReorderInstruments(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	var req marketdata.ReorderInstrumentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := h.service.ReorderInstruments(c.Request.Context(), req); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, marketdata.ErrUnsupportedInstrument) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": "reordered"})
+}
+
 func (h *MarketDataHandler) Status(c *gin.Context) {
 	if !h.canUseLab() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})

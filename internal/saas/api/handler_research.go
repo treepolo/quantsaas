@@ -93,11 +93,54 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 		"interval":       "1d",
 		"execution_mode": marketdata.ExecutionModeCloseSameBar,
 	}
+	states := make([]gin.H, 0, 2)
+	for _, interval := range []string{"1d", "1w"} {
+		if !instrumentSupportsInterval(instrument, interval) {
+			continue
+		}
+		states = append(states, h.instrumentIntervalStatus(ctx, instrument, interval, simulation))
+	}
+	base["interval_states"] = states
+	if len(states) == 0 {
+		base["status"] = "missing_data"
+		return base
+	}
+	primary := states[0]
+	for _, state := range states {
+		if state["interval"] == "1d" {
+			primary = state
+			break
+		}
+	}
+	for key, value := range primary {
+		base[key] = value
+	}
+	if primary["status"] == "ready" {
+		if rows, ok := primary["_rows"].([]saasstore.KLine); ok {
+			params, _ := primary["_params"].(sigmoiddca.Params)
+			if summary, ok := simulateResearchPosition(rows, params, instrument.Symbol, simulation); ok {
+				base["position_simulation"] = summary
+			}
+		}
+	}
+	delete(base, "_rows")
+	delete(base, "_params")
+	for _, state := range states {
+		delete(state, "_rows")
+		delete(state, "_params")
+	}
+	return base
+}
 
+func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, instrument marketdata.ResearchInstrument, interval string, simulation positionSimulationQuery) gin.H {
+	base := gin.H{
+		"interval":       interval,
+		"execution_mode": marketdata.ExecutionModeCloseSameBar,
+	}
 	var champion saasstore.GeneRecord
 	if err := h.db.WithContext(ctx).
 		Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
-			sigmoiddca.StrategyID, instrument.ID, instrument.DataSource, "1d", marketdata.ExecutionModeCloseSameBar, saasstore.GeneRoleChampion).
+			sigmoiddca.StrategyID, instrument.ID, instrument.DataSource, interval, marketdata.ExecutionModeCloseSameBar, saasstore.GeneRoleChampion).
 		Order("activated_at DESC NULLS LAST, created_at DESC").
 		First(&champion).Error; err != nil {
 		base["status"] = "missing_champion"
@@ -106,7 +149,7 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 
 	var rows []saasstore.KLine
 	if err := h.db.WithContext(ctx).
-		Where("instrument_id = ? AND source = ? AND interval = ?", instrument.ID, instrument.DataSource, "1d").
+		Where("instrument_id = ? AND source = ? AND interval = ?", instrument.ID, instrument.DataSource, interval).
 		Order("open_time ASC").
 		Find(&rows).Error; err != nil || len(rows) == 0 {
 		base["status"] = "missing_data"
@@ -115,11 +158,13 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 		}
 		return base
 	}
-	rows = completedDailyRows(instrument, rows, time.Now().UTC())
-	if len(rows) == 0 {
-		base["status"] = "missing_data"
-		base["error"] = "no completed daily bars"
-		return base
+	if interval == "1d" {
+		rows = completedDailyRows(instrument, rows, time.Now().UTC())
+		if len(rows) == 0 {
+			base["status"] = "missing_data"
+			base["error"] = "no completed daily bars"
+			return base
+		}
 	}
 
 	params := sigmoiddca.ParseParamsFromParamPack([]byte(champion.ParamPack))
@@ -136,7 +181,7 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 	}
 	output := sigmoiddca.Step(quant.StrategyInput{
 		Symbol:     instrument.Symbol,
-		Interval:   "1d",
+		Interval:   interval,
 		Closes:     closes,
 		Timestamps: timestamps,
 		Portfolio:  portfolio,
@@ -161,7 +206,9 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 	base["market_state"] = marketState
 	base["diagnostics"] = output.Diagnostics
 	base["parameter_values"] = paramValues
-	if model, ok := simulateResearchModel(rows, params, simulation); ok {
+	base["_rows"] = rows
+	base["_params"] = params
+	if model, ok := simulateResearchModel(rows, params, interval, simulation); ok {
 		base["model_simulation"] = model
 		if latestTarget, ok := model["latest_model_target_weight"]; ok {
 			base["target_weight"] = latestTarget
@@ -176,13 +223,19 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 		base["current_weight"] = output.Diagnostics["current_weight"]
 		base["delta_weight"] = output.Diagnostics["delta_weight"]
 	}
-	if summary, ok := simulateResearchPosition(rows, params, instrument.Symbol, simulation); ok {
-		base["position_simulation"] = summary
-	}
 	return base
 }
 
-func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, settings positionSimulationQuery) (gin.H, bool) {
+func instrumentSupportsInterval(instrument marketdata.ResearchInstrument, interval string) bool {
+	for _, supported := range instrument.SupportedIntervals {
+		if supported == interval {
+			return true
+		}
+	}
+	return false
+}
+
+func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, interval string, settings positionSimulationQuery) (gin.H, bool) {
 	if len(rows) == 0 {
 		return nil, false
 	}
@@ -194,7 +247,7 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, set
 		spawn.Policy.MonthlyInjectUSDT = settings.MonthlyDCA
 	}
 	bars := barsFromRows(rows)
-	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, rows[0].OpenTime, "1d", marketdata.ExecutionModeCloseSameBar, params.Chromosome, &spawn)
+	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, rows[0].OpenTime, interval, marketdata.ExecutionModeCloseSameBar, params.Chromosome, &spawn)
 	baseline := quant.SimulateGhostDCAFrom(bars, rows[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
@@ -390,6 +443,7 @@ func mergeResearchModelPoints(strategy []ga.BacktestPoint, baseline quant.GhostD
 		points = append(points, gin.H{
 			"time_ms":                              item.TimeMs,
 			"time":                                 time.UnixMilli(item.TimeMs).UTC().Format(time.RFC3339),
+			"price":                                item.Price,
 			"model_nav":                            item.TotalEquity,
 			"benchmark":                            benchmark,
 			"model_nav_change_pct":                 pctChange(item.TotalEquity, previousModelNAV),

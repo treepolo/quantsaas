@@ -2,6 +2,7 @@ import { apiFetch } from "./client";
 
 export type EquitySnapshot = {
   time: string;
+  price?: number;
   total_assets: number;
   benchmark?: number;
   strategy_change_pct?: number;

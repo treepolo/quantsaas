@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent, type ReactNode, type RefCallback } from "react";
+import { useEffect, useMemo, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3, Gauge, Home, RotateCcw } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { formatMoney, formatPercent, shortDateTime } from "../../shared/lib/format";
 import { researchApi, type ResearchModelPoint, type ResearchStatusItem } from "../../shared/services/research";
 import { marketDataApi } from "../../shared/services/marketData";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { Button } from "../../shared/ui/Button";
+import { ChartRangeSlider } from "../../shared/ui/ChartRangeSlider";
 import { cn } from "../../shared/lib/cn";
 
 const settingsStorageKey = "quantsaas.marketStatus.positionSimulation";
@@ -43,7 +44,6 @@ type SimulationSettings = {
 type ScaleMode = "absolute" | "log";
 type ValueMode = "nav" | "relative";
 type ChartRange = { start: number; end: number };
-type PanDrag = { startX: number; range: ChartRange; width: number };
 type ChartPoint = ResearchModelPoint & {
   label: string;
   model_nav_value?: number;
@@ -86,6 +86,11 @@ function formatNumber(value: unknown) {
   return value.toLocaleString("zh-TW", { maximumFractionDigits: 4 });
 }
 
+function formatPrice(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value)) return "-";
+  return value.toLocaleString("zh-TW", { maximumFractionDigits: 4 });
+}
+
 function signedPercent(value: number | undefined) {
   if (value === undefined || !Number.isFinite(value)) return "-";
   const prefix = value > 0 ? "+" : "";
@@ -107,12 +112,6 @@ function formatTick(value: number | string, mode: "year" | "month" | "day") {
   return new Intl.DateTimeFormat("zh-TW", { month: "2-digit", day: "2-digit" }).format(date);
 }
 
-function clampRangeBySize(start: number, size: number, length: number): ChartRange {
-  const clampedSize = Math.max(1, Math.min(length, size));
-  const nextStart = Math.max(0, Math.min(start, length - clampedSize));
-  return { start: nextStart, end: nextStart + clampedSize - 1 };
-}
-
 function toChartValue(value: number | undefined, mode: ScaleMode) {
   const safe = Math.max(1, value ?? 1);
   return mode === "log" ? Math.log10(safe) : safe;
@@ -121,10 +120,6 @@ function toChartValue(value: number | undefined, mode: ScaleMode) {
 function fromChartValue(value: number | string, mode: ScaleMode) {
   const numeric = Number(value);
   return mode === "log" ? Math.pow(10, numeric) : numeric;
-}
-
-function formatRelativeIndex(value: number) {
-  return value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function limitTicks(values: number[], maxTicks: number) {
@@ -189,12 +184,8 @@ export function MarketStatusPage() {
   const [range, setRange] = useState<ChartRange | null>(null);
   const [scaleMode, setScaleMode] = useState<ScaleMode>("absolute");
   const [valueMode, setValueMode] = useState<ValueMode>("nav");
+  const [statusInterval, setStatusInterval] = useState("1d");
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const [isPanning, setIsPanning] = useState(false);
-  const rangeRef = useRef<ChartRange | null>(null);
-  const chartLengthRef = useRef(0);
-  const panDragRef = useRef<PanDrag | null>(null);
-  const chartLayerRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
     localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
@@ -220,28 +211,22 @@ export function MarketStatusPage() {
     refetchInterval: 60_000
   });
   const item = query.data?.items?.[0] as ResearchStatusItem | undefined;
-  const ready = item?.status === "ready";
+  const intervalStates = item?.interval_states ?? [];
+  const activeState = intervalStates.find((state) => state.interval === statusInterval) ?? item;
+  const ready = activeState?.status === "ready";
   const chartData = useMemo<ChartPoint[]>(
     () =>
-      (item?.model_simulation?.chart_points ?? []).map((point) => ({
+      (activeState?.model_simulation?.chart_points ?? []).map((point) => ({
         ...point,
         label: formatFullAxisTime(point.time_ms),
         model_nav_value: point.model_nav,
         benchmark_value: point.benchmark
       })),
-    [item]
+    [activeState]
   );
 
   useEffect(() => {
     setRange(chartData.length ? { start: 0, end: chartData.length - 1 } : null);
-  }, [chartData.length]);
-
-  useEffect(() => {
-    rangeRef.current = range;
-  }, [range]);
-
-  useEffect(() => {
-    chartLengthRef.current = chartData.length;
   }, [chartData.length]);
 
   const visibleRawChartData = useMemo(() => (range ? chartData.slice(range.start, range.end + 1) : chartData), [chartData, range]);
@@ -264,7 +249,7 @@ export function MarketStatusPage() {
   const axisTicks = useMemo(() => buildAxisTicks(visibleChartData), [visibleChartData]);
   const hoveredPoint = hoverIndex !== null ? visibleChartData[hoverIndex] : null;
   const simulation = item?.position_simulation;
-  const model = item?.model_simulation;
+  const model = activeState?.model_simulation;
 
   function updateHoverFromMouse(event: ReactMouseEvent<HTMLDivElement>) {
     if (visibleChartData.length === 0) {
@@ -276,82 +261,10 @@ export function MarketStatusPage() {
     setHoverIndex(Math.round((visibleChartData.length - 1) * ratio));
   }
 
-  function zoomRangeFromWheel(deltaY: number, clientX: number, rect: DOMRect) {
-    if (chartLengthRef.current < 3) return;
-    setRange((currentRange) => {
-      const length = chartLengthRef.current;
-      if (!currentRange || length < 3) return currentRange;
-      const currentSize = currentRange.end - currentRange.start + 1;
-      const nextSize = Math.round(currentSize * (deltaY < 0 ? 0.75 : 1.35));
-      const clampedSize = Math.max(Math.min(10, length), Math.min(length, nextSize));
-      const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
-      const center = currentRange.start + Math.round((currentSize - 1) * ratio);
-      const nextStart = center - Math.round((clampedSize - 1) * ratio);
-      return clampRangeBySize(nextStart, clampedSize, length);
-    });
-  }
-
-  useEffect(() => {
-    const layers = chartLayerRefs.current.filter((element): element is HTMLDivElement => Boolean(element));
-    const cleanups = layers.map((element) => {
-      const handleWheel = (event: WheelEvent) => {
-        event.preventDefault();
-        event.stopPropagation();
-        zoomRangeFromWheel(event.deltaY, event.clientX, element.getBoundingClientRect());
-      };
-      element.addEventListener("wheel", handleWheel, { passive: false });
-      return () => element.removeEventListener("wheel", handleWheel);
-    });
-    return () => cleanups.forEach((cleanup) => cleanup());
-  }, [chartData.length]);
-
-  function setChartLayerRef(index: number): RefCallback<HTMLDivElement> {
-    return (node) => {
-      chartLayerRefs.current[index] = node;
-    };
-  }
-
-  function beginPan(event: ReactMouseEvent<HTMLDivElement>) {
-    if (![0, 1].includes(event.button) || !rangeRef.current || chartLengthRef.current < 2) return;
-    updateHoverFromMouse(event);
-    event.preventDefault();
-    event.stopPropagation();
-    panDragRef.current = {
-      startX: event.clientX,
-      range: rangeRef.current,
-      width: Math.max(1, event.currentTarget.clientWidth)
-    };
-    setIsPanning(true);
-  }
-
-  function movePan(event: ReactMouseEvent<HTMLDivElement>) {
-    updateHoverFromMouse(event);
-    const drag = panDragRef.current;
-    if (!drag) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const size = drag.range.end - drag.range.start + 1;
-    const barsPerPixel = size / drag.width;
-    const shift = Math.round((drag.startX - event.clientX) * barsPerPixel);
-    setRange(clampRangeBySize(drag.range.start + shift, size, chartLengthRef.current));
-  }
-
-  function endPan(event: ReactMouseEvent<HTMLDivElement>) {
-    if (panDragRef.current) {
-      event.preventDefault();
-      event.stopPropagation();
-      panDragRef.current = null;
-      setIsPanning(false);
-    }
-  }
-
   function chartLayerProps() {
     return {
-      onMouseDown: beginPan,
-      onMouseMove: movePan,
-      onMouseUp: endPan,
-      onMouseLeave: (event: ReactMouseEvent<HTMLDivElement>) => {
-        endPan(event);
+      onMouseMove: updateHoverFromMouse,
+      onMouseLeave: () => {
         setHoverIndex(null);
       }
     };
@@ -359,16 +272,6 @@ export function MarketStatusPage() {
 
   function resetRange() {
     setRange(chartData.length ? { start: 0, end: chartData.length - 1 } : null);
-  }
-
-  function updateRangeStart(value: number) {
-    if (!range) return;
-    setRange({ start: Math.min(value, range.end), end: range.end });
-  }
-
-  function updateRangeEnd(value: number) {
-    if (!range) return;
-    setRange({ start: range.start, end: Math.max(value, range.start) });
   }
 
   const navAxisFormatter = (value: number | string) => {
@@ -435,6 +338,21 @@ export function MarketStatusPage() {
             </Button>
           </div>
         </div>
+        <div className="mt-4 inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-1" aria-label="參數週期">
+          {["1d", "1w"].map((interval) => {
+            const state = intervalStates.find((item) => item.interval === interval);
+            return (
+              <button
+                key={interval}
+                type="button"
+                className={cn("rounded-md px-3 py-1.5 text-sm transition", statusInterval === interval ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")}
+                onClick={() => setStatusInterval(interval)}
+              >
+                {interval === "1d" ? "日 K 參數" : "週 K 參數"}{state?.status === "ready" ? "" : "（缺）"}
+              </button>
+            );
+          })}
+        </div>
       </Card>
 
       {query.isLoading ? <Card className="p-4 text-sm text-slate-500">載入中...</Card> : null}
@@ -442,7 +360,7 @@ export function MarketStatusPage() {
 
       {!ready ? (
         <Card className="p-4 text-sm text-slate-500">
-          {item?.status === "missing_champion" ? "尚未有這個標的的已採用參數。" : "尚未有足夠的完成日 K 資料。"}
+          {activeState?.status === "missing_champion" ? `尚未有這個標的的${statusInterval === "1d" ? "日 K" : "週 K"}已採用參數。` : `尚未有足夠的${statusInterval === "1d" ? "日 K" : "週 K"}資料。`}
         </Card>
       ) : (
         <>
@@ -450,13 +368,13 @@ export function MarketStatusPage() {
             <CardHeader>
               <div>
                 <CardTitle>{selectedInstrument?.display_name ?? item?.instrument.display_name}</CardTitle>
-                <CardDescription>{item?.symbol} · {item?.data_source} · {item?.interval} · {item?.execution_mode}</CardDescription>
+                <CardDescription>{item?.symbol} · {item?.data_source} · {activeState?.interval} · {activeState?.execution_mode}</CardDescription>
               </div>
               <Gauge className="h-5 w-5 text-[#99f6e4]" />
             </CardHeader>
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
-              <Metric label="市場狀態" value={stateLabel(item?.market_state)} />
-              <Metric label="最新完成日 K" value={item?.latest_bar ? `${shortDateTime(item.latest_bar.time)} · ${formatNumber(item.latest_bar.close)}` : "-"} />
+              <Metric label="市場狀態" value={stateLabel(activeState?.market_state)} />
+              <Metric label={statusInterval === "1d" ? "最新完成日 K" : "最新完成週 K"} value={activeState?.latest_bar ? `${shortDateTime(activeState.latest_bar.time)} · ${formatNumber(activeState.latest_bar.close)}` : "-"} />
               <Metric label="基準模型淨值" value={model ? formatMoney(model.latest_nav, "USD") : "-"} highlight />
               <Metric label="基準模型淨值日變化" value={signedPercent(model?.nav_change_pct)} danger={(model?.nav_change_pct ?? 0) < 0} />
               <Metric label="定投淨值" value={model ? formatMoney(model.latest_benchmark, "USD") : "-"} />
@@ -468,16 +386,16 @@ export function MarketStatusPage() {
             </div>
           </Card>
 
-          <ChartCard title="基準模型淨值走勢" description="基準模型與定投基準使用相同本金與定期入金設定。" actions={navChartControls} summary={navChartSummary} data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(0)} yFormatter={navAxisFormatter} lines={[["model_nav_value", "基準模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
-          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
-          <ChartCard title="空倉參考目標權重每日值" description="每天獨立假設昨日空倉後得到的參考目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(1)} yFormatter={(value) => formatPercent(Number(value))} lines={[["empty_reference_target_weight", "空倉參考", "#a78bfa"]]} />
-          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
-          <ChartCard title="空倉參考目標權重每日變化" description="今日空倉參考目標權重減昨日空倉參考目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(2)} yFormatter={(value) => signedPercent(Number(value))} lines={[["empty_reference_target_weight_change", "空倉參考變化", "#f472b6"]]} />
-          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
-          <ChartCard title="基準模型目標權重每日值" description="基準模型路徑逐日產生的目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(3)} yFormatter={(value) => formatPercent(Number(value))} lines={[["model_target_weight", "基準模型", "#38bdf8"]]} />
-          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
-          <ChartCard title="基準模型目標權重每日變化" description="今日基準模型目標權重減昨日基準模型目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(4)} yFormatter={(value) => signedPercent(Number(value))} lines={[["model_target_weight_change", "基準模型變化", "#f59e0b"]]} />
-          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
+          <ChartCard title="基準模型淨值走勢" description="基準模型與定投基準使用相同本金與定期入金設定。" actions={navChartControls} summary={navChartSummary} data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={navAxisFormatter} lines={[["model_nav_value", "基準模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="空倉參考目標權重每日值" description="每天獨立假設昨日空倉後得到的參考目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["empty_reference_target_weight", "空倉參考", "#a78bfa"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="空倉參考目標權重每日變化" description="今日空倉參考目標權重減昨日空倉參考目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["empty_reference_target_weight_change", "空倉參考變化", "#f472b6"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="基準模型目標權重每日值" description="基準模型路徑逐日產生的目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["model_target_weight", "基準模型", "#38bdf8"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="基準模型目標權重每日變化" description="今日基準模型目標權重減昨日基準模型目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["model_target_weight_change", "基準模型變化", "#f59e0b"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
 
           <details className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4">
             <summary className="cursor-pointer text-sm font-semibold text-slate-300">倉位模擬系統</summary>
@@ -512,14 +430,14 @@ export function MarketStatusPage() {
           <details className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3">
             <summary className="cursor-pointer text-sm font-semibold text-slate-300">診斷資訊與採用參數</summary>
             <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              {Object.entries(item?.diagnostics ?? {}).map(([key, value]) => (
+              {Object.entries(activeState?.diagnostics ?? {}).map(([key, value]) => (
                 <div key={key} className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
                   <div className="text-xs text-slate-500">{diagLabels[key] ?? key}</div>
                   <div className="mt-1 font-mono text-sm text-slate-100">{formatNumber(value)}</div>
                 </div>
               ))}
             </div>
-            <pre className="mt-4 max-h-72 overflow-auto text-xs leading-relaxed text-slate-300">{JSON.stringify(item?.parameter_values ?? {}, null, 2)}</pre>
+            <pre className="mt-4 max-h-72 overflow-auto text-xs leading-relaxed text-slate-300">{JSON.stringify(activeState?.parameter_values ?? {}, null, 2)}</pre>
           </details>
         </>
       )}
@@ -558,9 +476,7 @@ function ChartCard({
   data,
   axisTicks,
   hoveredPoint,
-  isPanning,
   layerProps,
-  layerRef,
   yFormatter,
   lines
 }: {
@@ -571,9 +487,7 @@ function ChartCard({
   data: ChartPoint[];
   axisTicks: { ticks: number[]; formatter: (value: number | string) => string };
   hoveredPoint: ChartPoint | null;
-  isPanning: boolean;
   layerProps: HTMLAttributes<HTMLDivElement>;
-  layerRef: RefCallback<HTMLDivElement>;
   yFormatter: (value: number | string) => string;
   lines: Array<[string, string, string]>;
 }) {
@@ -594,16 +508,16 @@ function ChartCard({
             <XAxis dataKey="time_ms" ticks={axisTicks.ticks} tickFormatter={axisTicks.formatter} stroke="#64748b" tickLine={false} axisLine={false} fontSize={11} interval={0} minTickGap={24} />
             <YAxis stroke="#64748b" tickLine={false} axisLine={false} fontSize={12} tickFormatter={yFormatter} domain={["auto", "auto"]} />
             {hoveredPoint ? <ReferenceLine x={hoveredPoint.time_ms} stroke="#f8fafc" strokeOpacity={0.35} strokeWidth={1} /> : null}
-            <Tooltip contentStyle={{ background: "#020617", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }} formatter={(value, name) => [yFormatter(value as number), name]} labelFormatter={(value) => formatFullAxisTime(value)} />
             <Legend />
             {lines.map(([key, name, color]) => <Area key={key} name={name} type="monotone" dataKey={key} stroke={color} strokeWidth={2} fill="transparent" isAnimationActive={false} connectNulls />)}
           </AreaChart>
         </ResponsiveContainer>
-        <div ref={layerRef} className={cn("absolute inset-x-2 bottom-14 top-2 z-10 cursor-grab select-none touch-none overscroll-contain rounded-md", isPanning && "cursor-grabbing")} {...layerProps} />
+        <div className="absolute inset-x-2 bottom-14 top-2 z-10 select-none rounded-md" {...layerProps} />
       </div>
       {hoveredPoint ? (
         <div className="mt-3 grid gap-2 rounded-lg border border-white/[0.04] bg-slate-950/50 p-3 text-xs md:grid-cols-3 xl:grid-cols-5">
           <Readout label="日期" value={formatFullAxisTime(hoveredPoint.time_ms)} />
+          <Readout label="價位 / 點數" value={formatPrice(hoveredPoint.price)} />
           <Readout label="基準模型淨值" value={formatMoney(hoveredPoint.model_nav, "USD")} />
           <Readout label="基準模型淨值日變化" value={signedPercent(hoveredPoint.model_nav_change_pct)} />
           <Readout label="定投淨值" value={formatMoney(hoveredPoint.benchmark, "USD")} />
@@ -624,36 +538,5 @@ function Readout({ label, value }: { label: string; value: string }) {
       <div className="text-slate-500">{label}</div>
       <div className="mt-1 font-mono text-slate-100">{value}</div>
     </div>
-  );
-}
-
-function RangeControls({
-  range,
-  total,
-  chartData,
-  onStart,
-  onEnd,
-  onReset
-}: {
-  range: ChartRange | null;
-  total: number;
-  chartData: ChartPoint[];
-  onStart: (value: number) => void;
-  onEnd: (value: number) => void;
-  onReset: () => void;
-}) {
-  if (!range || total <= 1) return null;
-  return (
-    <Card className="p-4">
-      <div className="mb-3 flex items-center justify-between gap-3 text-xs text-slate-500">
-        <span>{formatFullAxisTime(chartData[range.start]?.time_ms ?? 0)}</span>
-        <Button icon={RotateCcw} variant="secondary" onClick={onReset}>重設</Button>
-        <span>{formatFullAxisTime(chartData[range.end]?.time_ms ?? 0)}</span>
-      </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        <input type="range" min={0} max={total - 1} value={range.start} onChange={(event) => onStart(Number(event.target.value))} />
-        <input type="range" min={0} max={total - 1} value={range.end} onChange={(event) => onEnd(Number(event.target.value))} />
-      </div>
-    </Card>
   );
 }

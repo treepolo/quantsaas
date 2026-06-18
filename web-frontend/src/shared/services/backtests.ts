@@ -16,6 +16,9 @@ export type BacktestResult = {
   max_drawdown: number;
   final_equity: number;
   benchmark: number;
+  benchmark_return?: number;
+  benchmark_max_drawdown?: number;
+  benchmark_final_equity?: number;
   nav: EquitySnapshot[];
   windows: Record<string, number>;
 };
