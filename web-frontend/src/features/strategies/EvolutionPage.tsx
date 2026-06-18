@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
@@ -12,8 +12,8 @@ import { cn } from "../../shared/lib/cn";
 
 const intervalLabels: Record<string, string> = { "1d": "日 K", "1h": "1 小時", "15m": "15 分鐘", "5m": "5 分鐘", "1m": "1 分鐘", "1s": "1 秒", "1w": "週 K", "1M": "月 K" };
 const executionModes = [
-  ["close_same_bar", "收盤同根", "用當根收盤價作為研究判斷基準"],
   ["close_next_open", "隔日開盤", "用收盤訊號，假設下一根開盤才調整"],
+  ["close_same_bar", "收盤同根", "用當根收盤價作為研究判斷基準"],
   ["preclose_10m", "收盤前 10 分鐘", "需要額外快照資料，缺資料時不會假裝可用"]
 ] as const;
 const traceModeOptions: Array<[TraceMode, string, string]> = [
@@ -165,7 +165,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
   const selected = instruments.find((item) => item.id === instrumentId);
   const [interval, setInterval] = useState("1d");
-  const [executionMode, setExecutionMode] = useState("close_same_bar");
+  const [executionMode, setExecutionMode] = useState("close_next_open");
   const [startDate, setStartDate] = useState(dateInputValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
   const [endDate, setEndDate] = useState(dateInputValue(new Date()));
   const [population, setPopulation] = useState(300);
@@ -177,6 +177,26 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [continuousUnlimited, setContinuousUnlimited] = useState(false);
   const [standardStartDate, setStandardStartDate] = useState(startDate);
   const [standardEndDate, setStandardEndDate] = useState(endDate);
+  const datasetQuery = useQuery({
+    queryKey: ["market-data", selected?.id ?? instrumentId],
+    queryFn: () => marketDataApi.status(selected?.id ?? instrumentId),
+    enabled: Boolean(selected?.id ?? instrumentId)
+  });
+  const selectedDataset = useMemo(
+    () => datasetQuery.data?.datasets.find((item) => item.interval === interval),
+    [datasetQuery.data, interval]
+  );
+
+  useEffect(() => {
+    if (!selectedDataset?.first_open_ms || !selectedDataset?.last_open_ms) return;
+    const nextStart = msToDateInput(selectedDataset.first_open_ms);
+    const nextEnd = msToDateInput(selectedDataset.last_open_ms);
+    if (!nextStart || !nextEnd) return;
+    setStartDate(nextStart);
+    setEndDate(nextEnd);
+    setStandardStartDate(nextStart);
+    setStandardEndDate(nextEnd);
+  }, [instrumentId, interval, selectedDataset?.first_open_ms, selectedDataset?.last_open_ms]);
   const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 2_000 });
   const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
   const createMutation = useMutation({

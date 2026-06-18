@@ -41,8 +41,8 @@ type SeriesDef = { key: string; dataKey: string; name: string; color: string };
 type MetricSeriesDef = { dataKey: string; name: string; color: string };
 
 const executionModes = [
-  ["close_same_bar", "收盤同根"],
   ["close_next_open", "隔日開盤"],
+  ["close_same_bar", "收盤同根"],
   ["preclose_10m", "收盤前 10 分鐘"]
 ] as const;
 
@@ -264,7 +264,7 @@ export function BacktestingPage() {
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
   const selectedInstrument = instruments.find((item) => item.id === instrumentId);
   const [interval, setInterval] = useState("1d");
-  const [executionMode, setExecutionMode] = useState("close_same_bar");
+  const [executionMode, setExecutionMode] = useState("close_next_open");
   const [source, setSource] = useState<"champion" | "candidate" | "custom">(initialGenome ? "candidate" : "champion");
   const [candidateId, setCandidateId] = useState(initialGenome);
   const [selectedGenomeIds, setSelectedGenomeIds] = useState<number[]>(initialGenome ? [initialGenome] : []);
@@ -729,7 +729,7 @@ function NumberInput({ label, value, min, onChange }: { label: string; value: nu
         className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
         type="number"
         min={min}
-        step="100"
+        step="1"
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
       />

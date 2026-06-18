@@ -463,7 +463,7 @@ function NumberInput({ label, value, min, onChange }: { label: string; value: nu
   return (
     <label>
       <span className="mb-2 block text-sm text-slate-300">{label}</span>
-      <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} step="100" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} step="1" value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
 }

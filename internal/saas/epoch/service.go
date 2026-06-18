@@ -589,7 +589,11 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 	if req.Interval == "" {
 		req.Interval = "1d"
 	}
-	req.ExecutionMode = marketdata.NormalizeExecutionMode(req.ExecutionMode)
+	if strings.TrimSpace(req.ExecutionMode) == "" {
+		req.ExecutionMode = marketdata.ExecutionModeCloseNextOpen
+	} else {
+		req.ExecutionMode = marketdata.NormalizeExecutionMode(req.ExecutionMode)
+	}
 	if req.SpawnMode == "" {
 		req.SpawnMode = "inherit"
 	}
