@@ -37,6 +37,7 @@ type ChartPoint = {
 };
 type ComparisonResult = { genome: GenomeRecord; result: BacktestResult; color: string };
 type SeriesDef = { key: string; dataKey: string; name: string; color: string };
+type MetricSeriesDef = { dataKey: string; name: string; color: string };
 
 const executionModes = [
   ["close_same_bar", "收盤同根"],
@@ -122,6 +123,10 @@ function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
           benchmark: item.benchmark ?? item.total_assets
         } satisfies ChartPoint);
       point[key] = item.total_assets;
+      point[`${key}_model_target_weight`] = item.model_target_weight;
+      point[`${key}_model_target_weight_change`] = item.model_target_weight_change;
+      point[`${key}_empty_reference_target_weight`] = item.empty_reference_target_weight;
+      point[`${key}_empty_reference_target_weight_change`] = item.empty_reference_target_weight_change;
       if (point.benchmark === undefined) point.benchmark = item.benchmark ?? item.total_assets;
       if (comparisonIndex === 0) {
         point.strategy = item.total_assets;
@@ -136,6 +141,15 @@ function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
     }
   }
   return Array.from(points.values()).sort((a, b) => a.time_ms - b.time_ms);
+}
+
+function buildMetricSeries(comparisonResults: ComparisonResult[], metricKey: string, fallback: MetricSeriesDef): MetricSeriesDef[] {
+  if (comparisonResults.length === 0) return [fallback];
+  return comparisonResults.map((item) => ({
+    dataKey: `series_${item.genome.id}_${metricKey}`,
+    name: shortGenomeLabel(item.genome),
+    color: item.color
+  }));
 }
 
 function clampRangeBySize(start: number, size: number, length: number): ChartRange {
@@ -319,6 +333,22 @@ export function BacktestingPage() {
             color: item.color
           }))
         : [{ key: "strategy", dataKey: "strategy_value", name: "策略結果", color: "#2dd4bf" }],
+    [comparisonResults]
+  );
+  const modelWeightSeries = useMemo(
+    () => buildMetricSeries(comparisonResults, "model_target_weight", { dataKey: "model_target_weight", name: "基準模型", color: "#38bdf8" }),
+    [comparisonResults]
+  );
+  const modelWeightChangeSeries = useMemo(
+    () => buildMetricSeries(comparisonResults, "model_target_weight_change", { dataKey: "model_target_weight_change", name: "基準模型變化", color: "#f59e0b" }),
+    [comparisonResults]
+  );
+  const emptyReferenceWeightSeries = useMemo(
+    () => buildMetricSeries(comparisonResults, "empty_reference_target_weight", { dataKey: "empty_reference_target_weight", name: "空倉參考", color: "#a78bfa" }),
+    [comparisonResults]
+  );
+  const emptyReferenceWeightChangeSeries = useMemo(
+    () => buildMetricSeries(comparisonResults, "empty_reference_target_weight_change", { dataKey: "empty_reference_target_weight_change", name: "空倉參考變化", color: "#f472b6" }),
     [comparisonResults]
   );
   const chartData = useMemo(
@@ -711,8 +741,7 @@ export function BacktestingPage() {
             data={visibleChartData}
             axisTicks={axisTicks}
             hoveredPoint={hoveredPoint}
-            dataKey="model_target_weight_value"
-            color="#38bdf8"
+            lines={modelWeightSeries}
             formatter={(value) => formatPercent(Number(value))}
             onMouseDown={beginPan}
             onMouseMove={movePan}
@@ -731,8 +760,7 @@ export function BacktestingPage() {
             data={visibleChartData}
             axisTicks={axisTicks}
             hoveredPoint={hoveredPoint}
-            dataKey="model_target_weight_change_value"
-            color="#f59e0b"
+            lines={modelWeightChangeSeries}
             formatter={(value) => signedPercent(Number(value))}
             onMouseDown={beginPan}
             onMouseMove={movePan}
@@ -751,8 +779,7 @@ export function BacktestingPage() {
             data={visibleChartData}
             axisTicks={axisTicks}
             hoveredPoint={hoveredPoint}
-            dataKey="empty_reference_target_weight_value"
-            color="#a78bfa"
+            lines={emptyReferenceWeightSeries}
             formatter={(value) => formatPercent(Number(value))}
             onMouseDown={beginPan}
             onMouseMove={movePan}
@@ -771,8 +798,7 @@ export function BacktestingPage() {
             data={visibleChartData}
             axisTicks={axisTicks}
             hoveredPoint={hoveredPoint}
-            dataKey="empty_reference_target_weight_change_value"
-            color="#f472b6"
+            lines={emptyReferenceWeightChangeSeries}
             formatter={(value) => signedPercent(Number(value))}
             onMouseDown={beginPan}
             onMouseMove={movePan}
@@ -871,8 +897,7 @@ function MetricChartCard({
   data,
   axisTicks,
   hoveredPoint,
-  dataKey,
-  color,
+  lines,
   formatter,
   onMouseDown,
   onMouseMove,
@@ -886,8 +911,7 @@ function MetricChartCard({
   data: ChartPoint[];
   axisTicks: { ticks: number[]; formatter: (value: number | string) => string };
   hoveredPoint: ChartPoint | null;
-  dataKey: string;
-  color: string;
+  lines: MetricSeriesDef[];
   formatter: (value: number | string) => string;
   onMouseDown: (event: ReactMouseEvent<HTMLDivElement>) => void;
   onMouseMove: (event: ReactMouseEvent<HTMLDivElement>) => void;
@@ -913,10 +937,13 @@ function MetricChartCard({
             {hoveredPoint ? <ReferenceLine x={hoveredPoint.time_ms} stroke="#f8fafc" strokeOpacity={0.35} strokeWidth={1} /> : null}
             <Tooltip
               contentStyle={{ background: "#020617", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8 }}
-              formatter={(value) => [formatter(value as number), title]}
+              formatter={(value, name) => [formatter(value as number), name]}
               labelFormatter={(value) => formatFullAxisTime(value)}
             />
-            <Area name={title} type="monotone" dataKey={dataKey} stroke={color} strokeWidth={2} fill="transparent" isAnimationActive={false} connectNulls />
+            <Legend />
+            {lines.map((line) => (
+              <Area key={line.dataKey} name={line.name} type="monotone" dataKey={line.dataKey} stroke={line.color} strokeWidth={2} fill="transparent" isAnimationActive={false} connectNulls />
+            ))}
           </AreaChart>
         </ResponsiveContainer>
         <div
@@ -934,7 +961,17 @@ function MetricChartCard({
       {hoveredPoint ? (
         <div className="mt-3 rounded-lg border border-white/[0.04] bg-slate-950/50 p-3 text-xs">
           <div className="text-slate-500">{formatFullAxisTime(hoveredPoint.time_ms)}</div>
-          <div className="mt-1 font-mono text-slate-100">{formatter(Number(hoveredPoint[dataKey] ?? 0))}</div>
+          <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {lines.map((line) => (
+              <div key={line.dataKey}>
+                <div className="flex items-center gap-2 text-slate-500">
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: line.color }} />
+                  <span>{line.name}</span>
+                </div>
+                <div className="mt-1 font-mono text-slate-100">{formatter(Number(hoveredPoint[line.dataKey] ?? 0))}</div>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
     </Card>
