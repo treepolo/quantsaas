@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent, type RefCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3, Gauge, Home, RotateCcw } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -176,6 +176,7 @@ export function MarketStatusPage() {
   const rangeRef = useRef<ChartRange | null>(null);
   const chartLengthRef = useRef(0);
   const panDragRef = useRef<PanDrag | null>(null);
+  const chartLayerRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
     localStorage.setItem(settingsStorageKey, JSON.stringify(settings));
@@ -256,6 +257,26 @@ export function MarketStatusPage() {
     });
   }
 
+  useEffect(() => {
+    const layers = chartLayerRefs.current.filter((element): element is HTMLDivElement => Boolean(element));
+    const cleanups = layers.map((element) => {
+      const handleWheel = (event: WheelEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        zoomRangeFromWheel(event.deltaY, event.clientX, element.getBoundingClientRect());
+      };
+      element.addEventListener("wheel", handleWheel, { passive: false });
+      return () => element.removeEventListener("wheel", handleWheel);
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
+  }, [chartData.length]);
+
+  function setChartLayerRef(index: number): RefCallback<HTMLDivElement> {
+    return (node) => {
+      chartLayerRefs.current[index] = node;
+    };
+  }
+
   function beginPan(event: ReactMouseEvent<HTMLDivElement>) {
     if (![0, 1].includes(event.button) || !rangeRef.current || chartLengthRef.current < 2) return;
     updateHoverFromMouse(event);
@@ -298,11 +319,6 @@ export function MarketStatusPage() {
       onMouseLeave: (event: ReactMouseEvent<HTMLDivElement>) => {
         endPan(event);
         setHoverIndex(null);
-      },
-      onWheel: (event: ReactWheelEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        zoomRangeFromWheel(event.deltaY, event.clientX, event.currentTarget.getBoundingClientRect());
       }
     };
   }
@@ -377,11 +393,15 @@ export function MarketStatusPage() {
             </div>
           </Card>
 
-          <ChartCard title="基準模型淨值走勢" description="基準模型與定投基準使用相同本金與定期入金設定。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} yFormatter={axisMoney} lines={[["model_nav_value", "基準模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
-          <ChartCard title="空倉參考目標權重每日值" description="每天獨立假設昨日空倉後得到的參考目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["empty_reference_target_weight", "空倉參考", "#a78bfa"]]} />
-          <ChartCard title="空倉參考目標權重每日變化" description="今日空倉參考目標權重減昨日空倉參考目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["empty_reference_target_weight_change", "空倉參考變化", "#f472b6"]]} />
-          <ChartCard title="基準模型目標權重每日值" description="基準模型路徑逐日產生的目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["model_target_weight", "基準模型", "#38bdf8"]]} />
-          <ChartCard title="基準模型目標權重每日變化" description="今日基準模型目標權重減昨日基準模型目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["model_target_weight_change", "基準模型變化", "#f59e0b"]]} />
+          <ChartCard title="基準模型淨值走勢" description="基準模型與定投基準使用相同本金與定期入金設定。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(0)} yFormatter={axisMoney} lines={[["model_nav_value", "基準模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
+          <ChartCard title="空倉參考目標權重每日值" description="每天獨立假設昨日空倉後得到的參考目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(1)} yFormatter={(value) => formatPercent(Number(value))} lines={[["empty_reference_target_weight", "空倉參考", "#a78bfa"]]} />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
+          <ChartCard title="空倉參考目標權重每日變化" description="今日空倉參考目標權重減昨日空倉參考目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(2)} yFormatter={(value) => signedPercent(Number(value))} lines={[["empty_reference_target_weight_change", "空倉參考變化", "#f472b6"]]} />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
+          <ChartCard title="基準模型目標權重每日值" description="基準模型路徑逐日產生的目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(3)} yFormatter={(value) => formatPercent(Number(value))} lines={[["model_target_weight", "基準模型", "#38bdf8"]]} />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
+          <ChartCard title="基準模型目標權重每日變化" description="今日基準模型目標權重減昨日基準模型目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(4)} yFormatter={(value) => signedPercent(Number(value))} lines={[["model_target_weight_change", "基準模型變化", "#f59e0b"]]} />
           <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
 
           <details className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4">
@@ -463,6 +483,7 @@ function ChartCard({
   hoveredPoint,
   isPanning,
   layerProps,
+  layerRef,
   yFormatter,
   lines
 }: {
@@ -473,6 +494,7 @@ function ChartCard({
   hoveredPoint: ChartPoint | null;
   isPanning: boolean;
   layerProps: HTMLAttributes<HTMLDivElement>;
+  layerRef: RefCallback<HTMLDivElement>;
   yFormatter: (value: number | string) => string;
   lines: Array<[string, string, string]>;
 }) {
@@ -496,7 +518,7 @@ function ChartCard({
             {lines.map(([key, name, color]) => <Area key={key} name={name} type="monotone" dataKey={key} stroke={color} strokeWidth={2} fill="transparent" isAnimationActive={false} connectNulls />)}
           </AreaChart>
         </ResponsiveContainer>
-        <div className={cn("absolute inset-x-2 bottom-14 top-2 z-10 cursor-grab select-none touch-none overscroll-contain rounded-md", isPanning && "cursor-grabbing")} {...layerProps} />
+        <div ref={layerRef} className={cn("absolute inset-x-2 bottom-14 top-2 z-10 cursor-grab select-none touch-none overscroll-contain rounded-md", isPanning && "cursor-grabbing")} {...layerProps} />
       </div>
       {hoveredPoint ? (
         <div className="mt-3 grid gap-2 rounded-lg border border-white/[0.04] bg-slate-950/50 p-3 text-xs md:grid-cols-3 xl:grid-cols-5">

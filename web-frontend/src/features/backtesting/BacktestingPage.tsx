@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type WheelEvent as ReactWheelEvent } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type RefCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -265,7 +265,7 @@ export function BacktestingPage() {
   const rangeRef = useRef<ChartRange | null>(null);
   const chartLengthRef = useRef(0);
   const panDragRef = useRef<PanDrag | null>(null);
-  const chartLayerRef = useRef<HTMLDivElement | null>(null);
+  const chartLayerRefs = useRef<Array<HTMLDivElement | null>>([]);
   const [isPanning, setIsPanning] = useState(false);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
@@ -367,15 +367,17 @@ export function BacktestingPage() {
   const hoveredPoint = hoverIndex !== null ? visibleChartData[hoverIndex] : null;
 
   useEffect(() => {
-    const element = chartLayerRef.current;
-    if (!element) return;
-    const handleWheel = (event: WheelEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-      zoomRangeFromWheel(event.deltaY, event.clientX, element.getBoundingClientRect());
-    };
-    element.addEventListener("wheel", handleWheel, { passive: false });
-    return () => element.removeEventListener("wheel", handleWheel);
+    const layers = chartLayerRefs.current.filter((element): element is HTMLDivElement => Boolean(element));
+    const cleanups = layers.map((element) => {
+      const handleWheel = (event: WheelEvent) => {
+        event.preventDefault();
+        event.stopPropagation();
+        zoomRangeFromWheel(event.deltaY, event.clientX, element.getBoundingClientRect());
+      };
+      element.addEventListener("wheel", handleWheel, { passive: false });
+      return () => element.removeEventListener("wheel", handleWheel);
+    });
+    return () => cleanups.forEach((cleanup) => cleanup());
   }, [chartData.length]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -402,6 +404,12 @@ export function BacktestingPage() {
       const nextStart = center - Math.round((clampedSize - 1) * ratio);
       return clampRangeBySize(nextStart, clampedSize, length);
     });
+  }
+
+  function setChartLayerRef(index: number): RefCallback<HTMLDivElement> {
+    return (node) => {
+      chartLayerRefs.current[index] = node;
+    };
   }
 
   function beginPan(event: ReactMouseEvent<HTMLDivElement>) {
@@ -664,7 +672,7 @@ export function BacktestingPage() {
               <div
                 aria-label="圖表互動區"
                 data-testid="backtest-chart-layer"
-                ref={chartLayerRef}
+                ref={setChartLayerRef(0)}
                 className={cn("absolute inset-x-2 bottom-14 top-2 z-10 cursor-grab select-none touch-none overscroll-contain rounded-md", isPanning && "cursor-grabbing")}
                 onMouseDown={beginPan}
                 onMouseMove={movePan}
@@ -714,7 +722,9 @@ export function BacktestingPage() {
               setHoverIndex(null);
             }}
             isPanning={isPanning}
+            layerRef={setChartLayerRef(1)}
           />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} />
           <MetricChartCard
             title="基準模型目標權重每日變化"
             description="今日基準模型目標權重減昨日基準模型目標權重。"
@@ -732,7 +742,9 @@ export function BacktestingPage() {
               setHoverIndex(null);
             }}
             isPanning={isPanning}
+            layerRef={setChartLayerRef(2)}
           />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} />
           <MetricChartCard
             title="空倉參考目標權重每日值"
             description="每天獨立假設昨日空倉後，依該日資料得到的參考目標水準。"
@@ -750,7 +762,9 @@ export function BacktestingPage() {
               setHoverIndex(null);
             }}
             isPanning={isPanning}
+            layerRef={setChartLayerRef(3)}
           />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} />
           <MetricChartCard
             title="空倉參考目標權重每日變化"
             description="今日空倉參考目標權重減昨日空倉參考目標權重。"
@@ -768,7 +782,9 @@ export function BacktestingPage() {
               setHoverIndex(null);
             }}
             isPanning={isPanning}
+            layerRef={setChartLayerRef(4)}
           />
+          <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} />
 
           <Card>
             <CardHeader>
@@ -862,7 +878,8 @@ function MetricChartCard({
   onMouseMove,
   onMouseUp,
   onMouseLeave,
-  isPanning
+  isPanning,
+  layerRef
 }: {
   title: string;
   description: string;
@@ -877,6 +894,7 @@ function MetricChartCard({
   onMouseUp: (event: ReactMouseEvent<HTMLDivElement>) => void;
   onMouseLeave: (event: ReactMouseEvent<HTMLDivElement>) => void;
   isPanning: boolean;
+  layerRef: RefCallback<HTMLDivElement>;
 }) {
   return (
     <Card>
@@ -902,6 +920,7 @@ function MetricChartCard({
           </AreaChart>
         </ResponsiveContainer>
         <div
+          ref={layerRef}
           className={cn("absolute inset-x-2 bottom-14 top-2 z-10 cursor-grab select-none touch-none overscroll-contain rounded-md", isPanning && "cursor-grabbing")}
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
