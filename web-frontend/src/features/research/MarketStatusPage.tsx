@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent, type RefCallback } from "react";
+import { useEffect, useMemo, useRef, useState, type HTMLAttributes, type MouseEvent as ReactMouseEvent, type ReactNode, type RefCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3, Gauge, Home, RotateCcw } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -40,6 +40,8 @@ type SimulationSettings = {
   monthlyDCA: number;
 };
 
+type ScaleMode = "absolute" | "log";
+type ValueMode = "nav" | "relative";
 type ChartRange = { start: number; end: number };
 type PanDrag = { startX: number; range: ChartRange; width: number };
 type ChartPoint = ResearchModelPoint & {
@@ -111,6 +113,20 @@ function clampRangeBySize(start: number, size: number, length: number): ChartRan
   return { start: nextStart, end: nextStart + clampedSize - 1 };
 }
 
+function toChartValue(value: number | undefined, mode: ScaleMode) {
+  const safe = Math.max(1, value ?? 1);
+  return mode === "log" ? Math.log10(safe) : safe;
+}
+
+function fromChartValue(value: number | string, mode: ScaleMode) {
+  const numeric = Number(value);
+  return mode === "log" ? Math.pow(10, numeric) : numeric;
+}
+
+function formatRelativeIndex(value: number) {
+  return value.toLocaleString("zh-TW", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 function limitTicks(values: number[], maxTicks: number) {
   if (values.length <= maxTicks) return values;
   const step = Math.ceil(values.length / maxTicks);
@@ -171,6 +187,8 @@ export function MarketStatusPage() {
   const [homeInstrument, setHomeInstrument] = useState(() => loadHomeInstrument());
   const [instrumentId, setInstrumentId] = useState(() => loadHomeInstrument());
   const [range, setRange] = useState<ChartRange | null>(null);
+  const [scaleMode, setScaleMode] = useState<ScaleMode>("absolute");
+  const [valueMode, setValueMode] = useState<ValueMode>("nav");
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [isPanning, setIsPanning] = useState(false);
   const rangeRef = useRef<ChartRange | null>(null);
@@ -226,7 +244,23 @@ export function MarketStatusPage() {
     chartLengthRef.current = chartData.length;
   }, [chartData.length]);
 
-  const visibleChartData = useMemo(() => (range ? chartData.slice(range.start, range.end + 1) : chartData), [chartData, range]);
+  const visibleRawChartData = useMemo(() => (range ? chartData.slice(range.start, range.end + 1) : chartData), [chartData, range]);
+  const visibleChartData = useMemo(() => {
+    if (visibleRawChartData.length === 0) return [];
+    const baseModel = Math.max(1, visibleRawChartData[0].model_nav ?? visibleRawChartData[0].model_nav_value ?? 1);
+    const baseBenchmark = Math.max(1, visibleRawChartData[0].benchmark ?? visibleRawChartData[0].benchmark_value ?? 1);
+    return visibleRawChartData.map((point) => {
+      const modelRaw = Number(point.model_nav ?? point.model_nav_value ?? 0);
+      const benchmarkRaw = Number(point.benchmark ?? point.benchmark_value ?? 0);
+      const modelDisplay = valueMode === "relative" ? (modelRaw / baseModel) * 100 : modelRaw;
+      const benchmarkDisplay = valueMode === "relative" ? (benchmarkRaw / baseBenchmark) * 100 : benchmarkRaw;
+      return {
+        ...point,
+        model_nav_value: toChartValue(modelDisplay, scaleMode),
+        benchmark_value: toChartValue(benchmarkDisplay, scaleMode)
+      };
+    });
+  }, [visibleRawChartData, scaleMode, valueMode]);
   const axisTicks = useMemo(() => buildAxisTicks(visibleChartData), [visibleChartData]);
   const hoveredPoint = hoverIndex !== null ? visibleChartData[hoverIndex] : null;
   const simulation = item?.position_simulation;
@@ -337,6 +371,47 @@ export function MarketStatusPage() {
     setRange({ start: range.start, end: Math.max(value, range.start) });
   }
 
+  const navAxisFormatter = (value: number | string) => {
+    const display = fromChartValue(value, scaleMode);
+    if (valueMode === "relative") {
+      return display >= 100 ? display.toFixed(0) : display.toFixed(1);
+    }
+    return axisMoney(display);
+  };
+
+  const navChartControls = (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-1" aria-label="顯示模式">
+        <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", valueMode === "nav" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setValueMode("nav")}>
+          實際淨值
+        </button>
+        <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", valueMode === "relative" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setValueMode("relative")}>
+          區間相對
+        </button>
+      </div>
+      <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.03] p-1" aria-label="刻度模式">
+        <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", scaleMode === "absolute" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setScaleMode("absolute")}>
+          絕對值
+        </button>
+        <button type="button" className={cn("rounded-md px-3 py-1.5 text-sm transition", scaleMode === "log" ? "bg-[#2dd4bf] text-slate-950" : "text-slate-300 hover:bg-white/[0.06]")} onClick={() => setScaleMode("log")}>
+          對數
+        </button>
+      </div>
+      <Button icon={RotateCcw} variant="secondary" onClick={resetRange}>
+        重設
+      </Button>
+    </div>
+  );
+
+  const navChartSummary = (
+    <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+      <span className="inline-flex items-center gap-2">
+        <BarChart3 className="h-4 w-4" />
+        {valueMode === "relative" ? "左側起點 = 100" : scaleMode === "log" ? "對數刻度" : "絕對值刻度"}
+      </span>
+    </div>
+  );
+
   return (
     <section className="space-y-4">
       <div>
@@ -393,7 +468,7 @@ export function MarketStatusPage() {
             </div>
           </Card>
 
-          <ChartCard title="基準模型淨值走勢" description="基準模型與定投基準使用相同本金與定期入金設定。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(0)} yFormatter={axisMoney} lines={[["model_nav_value", "基準模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
+          <ChartCard title="基準模型淨值走勢" description="基準模型與定投基準使用相同本金與定期入金設定。" actions={navChartControls} summary={navChartSummary} data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(0)} yFormatter={navAxisFormatter} lines={[["model_nav_value", "基準模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
           <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
           <ChartCard title="空倉參考目標權重每日值" description="每天獨立假設昨日空倉後得到的參考目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} isPanning={isPanning} layerProps={chartLayerProps()} layerRef={setChartLayerRef(1)} yFormatter={(value) => formatPercent(Number(value))} lines={[["empty_reference_target_weight", "空倉參考", "#a78bfa"]]} />
           <RangeControls range={range} total={chartData.length} chartData={chartData} onStart={updateRangeStart} onEnd={updateRangeEnd} onReset={resetRange} />
@@ -478,6 +553,8 @@ function NumberInput({ label, value, min, onChange }: { label: string; value: nu
 function ChartCard({
   title,
   description,
+  actions,
+  summary,
   data,
   axisTicks,
   hoveredPoint,
@@ -489,6 +566,8 @@ function ChartCard({
 }: {
   title: string;
   description: string;
+  actions?: ReactNode;
+  summary?: ReactNode;
   data: ChartPoint[];
   axisTicks: { ticks: number[]; formatter: (value: number | string) => string };
   hoveredPoint: ChartPoint | null;
@@ -505,7 +584,9 @@ function ChartCard({
           <CardTitle>{title}</CardTitle>
           <CardDescription>{description}</CardDescription>
         </div>
+        {actions}
       </CardHeader>
+      {summary}
       <div className="relative h-72 overflow-hidden rounded-lg border border-white/[0.04] bg-slate-950/30 p-2">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ left: 0, right: 10, top: 10, bottom: 30 }}>
