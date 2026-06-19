@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -220,6 +221,11 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 			return ImportResult{}, err
 		}
 		rows = normalizeYahooRowsForStorage(req, rows)
+		if len(rows) > 0 && isFullCoverageImport(existing, req) {
+			if err := s.deleteKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval); err != nil {
+				return ImportResult{}, err
+			}
+		}
 		stored, err := s.storeKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval, rows)
 		if err != nil {
 			return ImportResult{}, err
@@ -402,12 +408,25 @@ func (s *Service) datasetBounds(ctx context.Context, req ImportRequest) datasetB
 	return out
 }
 
+func isFullCoverageImport(existing datasetBounds, req ImportRequest) bool {
+	return existing.Count == 0 || existing.FirstOpenMs == 0 || req.StartTimeMs <= existing.FirstOpenMs
+}
+
+func (s *Service) deleteKLines(ctx context.Context, instrumentID string, source string, symbol string, interval string) error {
+	if s.db == nil {
+		return nil
+	}
+	return s.db.WithContext(ctx).
+		Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ?", instrumentID, source, symbol, interval).
+		Delete(&saasstore.KLine{}).Error
+}
+
 func (s *Service) recordDatasetMetadata(ctx context.Context, req ImportRequest, result ImportResult, existing datasetBounds) (string, error) {
 	current := currentPriceAdjustment(req.DataSource, req.Interval)
 	if s.db == nil || result.FetchedBars == 0 {
 		return current, nil
 	}
-	fullCoverage := existing.Count == 0 || existing.FirstOpenMs == 0 || req.StartTimeMs <= existing.FirstOpenMs
+	fullCoverage := isFullCoverageImport(existing, req)
 	if !fullCoverage {
 		var existingMeta saasstore.DatasetMetadata
 		err := s.db.WithContext(ctx).
@@ -1051,6 +1070,14 @@ func (c *YahooClient) FetchKLines(ctx context.Context, symbol string, interval s
 	default:
 		return nil, ErrUnsupportedInterval
 	}
+	switch normalizeInterval(interval) {
+	case "1w", "1M":
+		rows, err := c.FetchChartRows(ctx, symbol, "1d", startTime, endTime)
+		if err != nil {
+			return nil, err
+		}
+		return aggregateYahooDailyRows(symbol, rows, interval), nil
+	}
 	return c.FetchChartRows(ctx, symbol, interval, startTime, endTime)
 }
 
@@ -1160,6 +1187,7 @@ func (c *YahooClient) fetchChart(ctx context.Context, baseURL string, symbol str
 			low *= factor
 			closePrice = adjClose
 		}
+		open, high, low, closePrice = repairYahooOHLC(open, high, low, closePrice)
 		volume := 0.0
 		if i < len(quote.Volume) && quote.Volume[i] != nil {
 			volume = float64(*quote.Volume[i])
@@ -1234,6 +1262,98 @@ func uniqueStrings(values []string) []string {
 	return out
 }
 
+func repairYahooOHLC(open float64, high float64, low float64, closePrice float64) (float64, float64, float64, float64) {
+	if closePrice <= 0 {
+		return open, high, low, closePrice
+	}
+	if open <= 0 {
+		open = closePrice
+	}
+	if high <= 0 {
+		high = math.Max(open, closePrice)
+	}
+	if low <= 0 {
+		low = math.Min(open, closePrice)
+	}
+	high = math.Max(high, math.Max(open, closePrice))
+	low = math.Min(low, math.Min(open, closePrice))
+	return open, high, low, closePrice
+}
+
+func aggregateYahooDailyRows(symbol string, rows []BinanceKLine, interval string) []BinanceKLine {
+	rows = filterYahooRegularDailyRows(symbol, rows)
+	if len(rows) == 0 {
+		return nil
+	}
+	interval = normalizeInterval(interval)
+	out := make([]BinanceKLine, 0)
+	currentKey := ""
+	var current BinanceKLine
+	for _, row := range rows {
+		key := aggregateYahooKey(symbol, row.OpenTime, interval)
+		if key == "" {
+			continue
+		}
+		if currentKey == "" || key != currentKey {
+			if currentKey != "" {
+				out = append(out, current)
+			}
+			currentKey = key
+			current = row
+			continue
+		}
+		current.High = math.Max(current.High, row.High)
+		current.Low = math.Min(current.Low, row.Low)
+		current.Close = row.Close
+		current.Volume += row.Volume
+	}
+	if currentKey != "" {
+		out = append(out, current)
+	}
+	return out
+}
+
+func filterYahooRegularDailyRows(symbol string, rows []BinanceKLine) []BinanceKLine {
+	out := make([]BinanceKLine, 0, len(rows))
+	for _, row := range rows {
+		if row.OpenTime != marketDailyOpenMs("", symbol, row.OpenTime) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func aggregateYahooKey(symbol string, openTimeMs int64, interval string) string {
+	loc := marketLocationForSymbol(symbol)
+	local := time.UnixMilli(openTimeMs).In(loc)
+	switch interval {
+	case "1w":
+		offset := (int(local.Weekday()) + 6) % 7
+		start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -offset)
+		return start.Format("2006-01-02")
+	case "1M":
+		return local.Format("2006-01")
+	default:
+		return ""
+	}
+}
+
+func marketLocationForSymbol(symbol string) *time.Location {
+	if isTaiwanInstrument("", symbol) {
+		loc, err := time.LoadLocation("Asia/Taipei")
+		if err == nil {
+			return loc
+		}
+		return time.FixedZone("Asia/Taipei", 8*3600)
+	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err == nil {
+		return loc
+	}
+	return time.FixedZone("America/New_York", -5*3600)
+}
+
 func yahooChartInterval(interval string) string {
 	switch normalizeInterval(interval) {
 	case "1w":
@@ -1262,7 +1382,7 @@ func backAdjustLargeYahooDiscontinuities(rows []BinanceKLine) {
 			continue
 		}
 		ratio := currentClose / prevClose
-		if ratio >= 0.25 && ratio <= 4 {
+		if ratio >= 0.35 && ratio <= 2.85 {
 			continue
 		}
 		for j := 0; j < i; j++ {

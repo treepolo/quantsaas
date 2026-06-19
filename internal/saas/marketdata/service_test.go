@@ -196,9 +196,32 @@ func TestYahooClientAdjustsOHLCWithAdjustedClose(t *testing.T) {
 	}
 }
 
+func TestRepairYahooOHLCFillsZeroOpen(t *testing.T) {
+	open, high, low, closePrice := repairYahooOHLC(0, 10, 8, 9)
+	if open != 9 || high != 10 || low != 8 || closePrice != 9 {
+		t.Fatalf("unexpected repaired OHLC: %f %f %f %f", open, high, low, closePrice)
+	}
+}
+
+func TestAggregateYahooDailyRowsBuildsWeeklyFromDailyScale(t *testing.T) {
+	rows := []BinanceKLine{
+		{OpenTime: time.Date(2013, 12, 23, 1, 0, 0, 0, time.UTC).UnixMilli(), Open: 9.10, High: 9.20, Low: 9.05, Close: 9.15, Volume: 1},
+		{OpenTime: time.Date(2013, 12, 24, 1, 0, 0, 0, time.UTC).UnixMilli(), Open: 9.15, High: 9.25, Low: 9.10, Close: 9.20, Volume: 2},
+		{OpenTime: time.Date(2013, 12, 25, 1, 0, 0, 0, time.UTC).UnixMilli(), Open: 9.20, High: 9.30, Low: 9.18, Close: 9.24, Volume: 3},
+	}
+	weekly := aggregateYahooDailyRows("0050.TW", rows, "1w")
+	if len(weekly) != 1 {
+		t.Fatalf("weekly len = %d, want 1", len(weekly))
+	}
+	row := weekly[0]
+	if row.Open != 9.10 || row.High != 9.30 || row.Low != 9.05 || row.Close != 9.24 || row.Volume != 6 {
+		t.Fatalf("unexpected weekly row: %+v", row)
+	}
+}
+
 func TestBackAdjustLargeYahooDiscontinuities(t *testing.T) {
 	rows := []BinanceKLine{
-		{Open: 19, High: 22, Low: 18, Close: 20},
+		{Open: 3.8, High: 4.4, Low: 3.6, Close: 4},
 		{Open: 0.9, High: 1.1, Low: 0.8, Close: 1},
 		{Open: 1.1, High: 1.3, Low: 1.0, Close: 1.2},
 	}
