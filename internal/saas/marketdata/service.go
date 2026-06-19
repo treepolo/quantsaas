@@ -204,6 +204,7 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 		if err != nil {
 			return ImportResult{}, err
 		}
+		rows = normalizeYahooRowsForStorage(req, rows)
 		stored, err := s.storeKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval, rows)
 		if err != nil {
 			return ImportResult{}, err
@@ -368,13 +369,13 @@ func (s *Service) UpdateLatest(ctx context.Context) ([]AutoUpdateResult, error) 
 	results := make([]AutoUpdateResult, 0)
 	for _, instrument := range instruments {
 		var instrumentErr string
-		for _, interval := range instrument.SupportedIntervals {
+		for _, interval := range autoUpdateIntervals(instrument.SupportedIntervals) {
 			req := ImportRequest{
 				InstrumentID: instrument.ID,
 				DataSource:   instrument.DataSource,
 				Symbol:       instrument.Symbol,
 				Interval:     interval,
-				StartTimeMs:  s.latestUpdateStart(instrument, interval),
+				StartTimeMs:  s.latestOnlyUpdateStart(instrument, interval),
 				EndTimeMs:    s.now().UnixMilli(),
 			}
 			item := AutoUpdateResult{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Interval: interval}
@@ -453,7 +454,22 @@ func (s *Service) defaultStartTime(symbol string, interval string) int64 {
 	return s.now().AddDate(-10, 0, 0).UnixMilli()
 }
 
-func (s *Service) latestUpdateStart(instrument ResearchInstrument, interval string) int64 {
+func autoUpdateIntervals(supported []string) []string {
+	allowed := map[string]bool{"1d": true, "1w": true, "1M": true}
+	out := make([]string, 0, 3)
+	seen := map[string]bool{}
+	for _, raw := range supported {
+		interval := normalizeInterval(raw)
+		if !allowed[interval] || seen[interval] {
+			continue
+		}
+		seen[interval] = true
+		out = append(out, interval)
+	}
+	return out
+}
+
+func (s *Service) latestOnlyUpdateStart(instrument ResearchInstrument, interval string) int64 {
 	var latest struct {
 		LastOpenMs *int64
 	}
@@ -470,20 +486,14 @@ func (s *Service) latestUpdateStart(instrument ResearchInstrument, interval stri
 	}
 	now := s.now()
 	switch interval {
-	case "1s":
-		return now.Add(-24 * time.Hour).UnixMilli()
-	case "1m":
-		return now.AddDate(0, 0, -7).UnixMilli()
-	case "5m", "15m", "30m":
-		return now.AddDate(0, 0, -14).UnixMilli()
-	case "1h":
-		return now.AddDate(0, -2, 0).UnixMilli()
+	case "1d":
+		return now.AddDate(0, 0, -10).UnixMilli()
 	case "1w":
-		return now.AddDate(-2, 0, 0).UnixMilli()
+		return now.AddDate(0, 0, -70).UnixMilli()
 	case "1M":
-		return now.AddDate(-5, 0, 0).UnixMilli()
+		return now.AddDate(0, -8, 0).UnixMilli()
 	default:
-		return now.AddDate(0, 0, -45).UnixMilli()
+		return now.AddDate(0, 0, -10).UnixMilli()
 	}
 }
 
@@ -506,6 +516,20 @@ func (s *Service) enrichFreshness(instrument ResearchInstrument, item *DatasetSu
 		return
 	}
 	item.IsFresh = item.Count > 0 && item.LastOpenMs >= expected
+}
+
+func normalizeYahooRowsForStorage(req ImportRequest, rows []BinanceKLine) []BinanceKLine {
+	if req.Interval != "1d" || len(rows) == 0 {
+		return rows
+	}
+	out := make([]BinanceKLine, 0, len(rows))
+	for _, row := range rows {
+		if row.OpenTime != marketDailyOpenMs(req.InstrumentID, row.OpenTime) {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 func expectedLatestOpenMs(instrument ResearchInstrument, interval string, now time.Time) int64 {
@@ -542,7 +566,7 @@ func expectedDailyOpenMs(instrument ResearchInstrument, now time.Time) int64 {
 		target = target.AddDate(0, 0, -1)
 	}
 	target = previousBusinessDay(target)
-	return time.Date(target.Year(), target.Month(), target.Day(), 0, 0, 0, 0, loc).UTC().UnixMilli()
+	return marketDailyOpenAt(instrument.ID, target).UnixMilli()
 }
 
 func previousBusinessDay(value time.Time) time.Time {
@@ -697,6 +721,32 @@ func buildPrecloseSnapshots(instrument ResearchInstrument, rows []BinanceKLine, 
 		})
 	}
 	return out, nil
+}
+
+func marketDailyOpenMs(instrumentID string, openTimeMs int64) int64 {
+	return marketDailyOpenAt(instrumentID, time.UnixMilli(openTimeMs)).UnixMilli()
+}
+
+func marketDailyOpenAt(instrumentID string, value time.Time) time.Time {
+	switch instrumentID {
+	case InstrumentBTCUSDT:
+		utc := value.UTC()
+		return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+	case "TWII":
+		loc, err := time.LoadLocation("Asia/Taipei")
+		if err != nil {
+			loc = time.FixedZone("Asia/Taipei", 8*3600)
+		}
+		local := value.In(loc)
+		return time.Date(local.Year(), local.Month(), local.Day(), 9, 0, 0, 0, loc).UTC()
+	default:
+		loc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			loc = time.FixedZone("America/New_York", -5*3600)
+		}
+		local := value.In(loc)
+		return time.Date(local.Year(), local.Month(), local.Day(), 9, 30, 0, 0, loc).UTC()
+	}
 }
 
 func precloseSchedule(instrumentID string) (*time.Location, int, int) {

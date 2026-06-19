@@ -60,6 +60,33 @@ func TestYahooChartIntervalMapsWeeklyAndMonthly(t *testing.T) {
 	}
 }
 
+func TestNormalizeYahooDailyRowsDropsRealtimeRows(t *testing.T) {
+	rows := []BinanceKLine{
+		{OpenTime: time.Date(2026, 6, 18, 13, 30, 0, 0, time.UTC).UnixMilli(), Close: 279.29},
+		{OpenTime: time.Date(2026, 6, 18, 13, 34, 41, 0, time.UTC).UnixMilli(), Close: 268.65},
+	}
+	normalized := normalizeYahooRowsForStorage(ImportRequest{InstrumentID: "SOXL", DataSource: DataSourceYahoo, Symbol: "SOXL", Interval: "1d"}, rows)
+	if len(normalized) != 1 {
+		t.Fatalf("normalized len = %d, want 1", len(normalized))
+	}
+	if normalized[0].Close != 279.29 {
+		t.Fatalf("kept close = %f, want regular daily close", normalized[0].Close)
+	}
+}
+
+func TestAutoUpdateIntervalsOnlyUsesHighTimeframes(t *testing.T) {
+	got := autoUpdateIntervals([]string{"1d", "1h", "1m", "1w", "1M", "1d"})
+	want := []string{"1d", "1w", "1M"}
+	if len(got) != len(want) {
+		t.Fatalf("intervals = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("intervals = %+v, want %+v", got, want)
+		}
+	}
+}
+
 func TestYahooClientRetries429AndParsesChartResponse(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
