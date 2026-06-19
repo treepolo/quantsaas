@@ -161,14 +161,26 @@ func (s *Service) CancelTask(ctx context.Context, taskID uint) error {
 		return nil
 	}
 	now := time.Now().UTC()
+	updates := map[string]any{
+		"status":        TaskStatusCancelled,
+		"error_message": "使用者已中止任務",
+		"finished_at":   &now,
+	}
+	var task saasstore.EvolutionTask
+	if err := s.db.WithContext(ctx).First(&task, taskID).Error; err == nil {
+		var req CreateTaskRequest
+		if err := json.Unmarshal([]byte(task.Config), &req); err == nil {
+			if id, saveErr := s.saveCancelledBest(ctx, taskID, req); saveErr == nil && id > 0 {
+				updates["error_message"] = fmt.Sprintf("使用者已中止任務，已保存目前最佳參數 #%d", id)
+			} else if saveErr != nil {
+				s.logger.Warn("failed to save cancelled best", zap.Error(saveErr))
+			}
+		}
+	}
 	return s.db.WithContext(ctx).
 		Model(&saasstore.EvolutionTask{}).
 		Where("id = ? AND status = ?", taskID, TaskStatusRunning).
-		Updates(map[string]any{
-			"status":        TaskStatusCancelled,
-			"error_message": "使用者已中止任務",
-			"finished_at":   &now,
-		}).Error
+		Updates(updates).Error
 }
 
 func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {

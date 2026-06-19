@@ -420,7 +420,15 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   });
   const cancelMutation = useMutation({
     mutationFn: (taskId: number) => evolutionApi.cancel(taskId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] })
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
+      queryClient.invalidateQueries({ queryKey: ["genomes"] });
+      queryClient.invalidateQueries({ queryKey: ["gene-observations"] });
+      window.setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["genomes"] });
+        queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
+      }, 2500);
+    }
   });
   const landscapeQuery = useMemo<GeneObservationQuery>(() => ({
     strategy_id: "sigmoid-dca-btc",
