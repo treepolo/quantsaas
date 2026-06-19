@@ -951,6 +951,10 @@ func (c *YahooClient) fetchChart(ctx context.Context, baseURL string, symbol str
 		return nil, false, nil
 	}
 	quote := result.Indicators.Quote[0]
+	var adjustedClose []*float64
+	if len(result.Indicators.AdjClose) > 0 {
+		adjustedClose = result.Indicators.AdjClose[0].AdjClose
+	}
 	rows := make([]BinanceKLine, 0, len(result.Timestamp))
 	for i, ts := range result.Timestamp {
 		open, ok := yahooFloatAt(quote.Open, i)
@@ -969,6 +973,13 @@ func (c *YahooClient) fetchChart(ctx context.Context, baseURL string, symbol str
 		if !ok {
 			continue
 		}
+		if adjClose, ok := yahooFloatAt(adjustedClose, i); ok && closePrice != 0 {
+			factor := adjClose / closePrice
+			open *= factor
+			high *= factor
+			low *= factor
+			closePrice = adjClose
+		}
 		volume := 0.0
 		if i < len(quote.Volume) && quote.Volume[i] != nil {
 			volume = float64(*quote.Volume[i])
@@ -981,6 +992,9 @@ func (c *YahooClient) fetchChart(ctx context.Context, baseURL string, symbol str
 			Close:    closePrice,
 			Volume:   volume,
 		})
+	}
+	if shouldBackAdjustYahooDiscontinuities(interval) {
+		backAdjustLargeYahooDiscontinuities(rows)
 	}
 	return rows, false, nil
 }
@@ -1051,6 +1065,35 @@ func yahooChartInterval(interval string) string {
 	}
 }
 
+func shouldBackAdjustYahooDiscontinuities(interval string) bool {
+	switch normalizeInterval(interval) {
+	case "1d", "1w", "1M":
+		return true
+	default:
+		return false
+	}
+}
+
+func backAdjustLargeYahooDiscontinuities(rows []BinanceKLine) {
+	for i := 1; i < len(rows); i++ {
+		prevClose := rows[i-1].Close
+		currentClose := rows[i].Close
+		if prevClose <= 0 || currentClose <= 0 {
+			continue
+		}
+		ratio := currentClose / prevClose
+		if ratio >= 0.25 && ratio <= 4 {
+			continue
+		}
+		for j := 0; j < i; j++ {
+			rows[j].Open *= ratio
+			rows[j].High *= ratio
+			rows[j].Low *= ratio
+			rows[j].Close *= ratio
+		}
+	}
+}
+
 type yahooChartResponse struct {
 	Chart struct {
 		Result []struct {
@@ -1063,6 +1106,9 @@ type yahooChartResponse struct {
 					Close  []*float64 `json:"close"`
 					Volume []*int64   `json:"volume"`
 				} `json:"quote"`
+				AdjClose []struct {
+					AdjClose []*float64 `json:"adjclose"`
+				} `json:"adjclose"`
 			} `json:"indicators"`
 		} `json:"result"`
 		Error *struct {

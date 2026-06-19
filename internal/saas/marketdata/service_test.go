@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -36,6 +37,10 @@ func TestClientFetchKLinesParsesBinanceResponse(t *testing.T) {
 	if row.OpenTime != 1499040000000 || row.Open != 0.01634790 || row.High != 0.80000000 || row.Low != 0.01575800 || row.Close != 0.01577100 || row.Volume != 148976.11427815 {
 		t.Fatalf("unexpected row: %+v", row)
 	}
+}
+
+func nearlyEqual(a float64, b float64) bool {
+	return math.Abs(a-b) < 1e-9
 }
 
 func TestValidateImportRequestRejectsUnsupportedInterval(t *testing.T) {
@@ -147,5 +152,61 @@ func TestYahooClientRetries429AndParsesChartResponse(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].Close != 23050.0 || rows[0].Volume != 123456 {
 		t.Fatalf("unexpected rows: %+v", rows)
+	}
+}
+
+func TestYahooClientAdjustsOHLCWithAdjustedClose(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"chart": {
+				"result": [{
+					"timestamp": [1719878400],
+					"indicators": {
+						"quote": [{
+							"open": [90.0],
+							"high": [110.0],
+							"low": [80.0],
+							"close": [100.0],
+							"volume": [123456]
+						}],
+						"adjclose": [{
+							"adjclose": [50.0]
+						}]
+					}
+				}],
+				"error": null
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewYahooClient(server.URL)
+	client.lastAt = time.Now().Add(-yahooMinRequestInterval)
+	rows, err := client.FetchKLines(context.Background(), "0050.TW", "1d", 1719878400000, 1719964800000)
+	if err != nil {
+		t.Fatalf("FetchKLines failed: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows len = %d", len(rows))
+	}
+	row := rows[0]
+	if row.Open != 45.0 || row.High != 55.0 || row.Low != 40.0 || row.Close != 50.0 || row.Volume != 123456 {
+		t.Fatalf("unexpected adjusted row: %+v", row)
+	}
+}
+
+func TestBackAdjustLargeYahooDiscontinuities(t *testing.T) {
+	rows := []BinanceKLine{
+		{Open: 19, High: 22, Low: 18, Close: 20},
+		{Open: 0.9, High: 1.1, Low: 0.8, Close: 1},
+		{Open: 1.1, High: 1.3, Low: 1.0, Close: 1.2},
+	}
+	backAdjustLargeYahooDiscontinuities(rows)
+	if !nearlyEqual(rows[0].Open, 0.95) || !nearlyEqual(rows[0].High, 1.1) || !nearlyEqual(rows[0].Low, 0.9) || !nearlyEqual(rows[0].Close, 1) {
+		t.Fatalf("unexpected first adjusted row: %+v", rows[0])
+	}
+	if rows[1].Close != 1 || rows[2].Close != 1.2 {
+		t.Fatalf("unexpected later rows: %+v", rows)
 	}
 }
