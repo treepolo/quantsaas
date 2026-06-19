@@ -182,6 +182,28 @@ type GeneRecord struct {
 	ActivatedAt   *time.Time
 }
 
+type GeneObservation struct {
+	ID            uint `gorm:"primaryKey"`
+	CreatedAt     time.Time
+	StrategyID    string  `gorm:"size:80;not null;index"`
+	InstrumentID  string  `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource    string  `gorm:"size:32;not null;index;default:binance"`
+	Interval      string  `gorm:"size:16;not null;index;default:1d"`
+	ExecutionMode string  `gorm:"size:32;not null;index;default:close_same_bar"`
+	TrainStartMs  int64   `gorm:"not null;default:0;index"`
+	TrainEndMs    int64   `gorm:"not null;default:0;index"`
+	SpawnMode     string  `gorm:"size:32;not null;index;default:inherit"`
+	SearchHash    string  `gorm:"size:64;not null;index;uniqueIndex:idx_gene_observation_unique"`
+	TaskID        uint    `gorm:"not null;index"`
+	Generation    int     `gorm:"not null;index"`
+	Individual    int     `gorm:"not null;default:0"`
+	Fingerprint   string  `gorm:"size:32;not null;index;uniqueIndex:idx_gene_observation_unique"`
+	ParamPack     JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ScoreTotal    float64 `gorm:"type:numeric(30,10);not null;default:0;index"`
+	MaxDrawdown   float64 `gorm:"type:numeric(30,10);not null;default:0"`
+	Fatal         bool    `gorm:"not null;default:false"`
+}
+
 type EvolutionTask struct {
 	ID            uint `gorm:"primaryKey"`
 	CreatedAt     time.Time

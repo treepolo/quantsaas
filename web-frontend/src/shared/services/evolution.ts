@@ -114,6 +114,49 @@ export type CreateTaskInput = {
   standard_end_ms?: number;
 };
 
+export type GeneObservationAxis = {
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+};
+
+export type GeneObservation = {
+  id: number;
+  created_at: string;
+  task_id: number;
+  generation: number;
+  individual: number;
+  fingerprint: string;
+  score_total: number;
+  max_drawdown: number;
+  fatal: boolean;
+  param_values: Record<string, number>;
+  param_pack?: Record<string, unknown> | null;
+  instrument_id?: string;
+  data_source?: string;
+  interval?: string;
+  execution_mode?: string;
+};
+
+export type GeneObservationResponse = {
+  schema: GeneObservationAxis[];
+  observations: GeneObservation[];
+  count: number;
+};
+
+export type GeneObservationQuery = {
+  strategy_id?: string;
+  instrument_id?: string;
+  data_source?: string;
+  interval?: string;
+  execution_mode?: string;
+  train_start_ms?: number;
+  train_end_ms?: number;
+  spawn_mode?: string;
+  limit?: number;
+};
+
 export type EvolutionOverview = {
   current_task: EvolutionTask | null;
   running: boolean;
@@ -135,6 +178,13 @@ export const evolutionApi = {
   },
   listGenomes() {
     return apiFetch<GenomeRecord[]>("/evolution/genomes");
+  },
+  listGeneObservations(input: GeneObservationQuery) {
+    const params = new URLSearchParams();
+    Object.entries(input).forEach(([key, value]) => {
+      if (value !== undefined && value !== "" && value !== 0) params.set(key, String(value));
+    });
+    return apiFetch<GeneObservationResponse>(`/evolution/gene-observations?${params.toString()}`);
   },
   updateGenome(genomeId: number, input: { name?: string; notes?: string; tags?: string[] }) {
     return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/genomes/${genomeId}`, {

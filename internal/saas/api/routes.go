@@ -83,6 +83,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/evolution/tasks/:taskID/cancel", ev.CancelTask)
 	lab.POST("/evolution/tasks/:taskID/promote", ev.Promote)
 	lab.GET("/evolution/genomes", listGenomesHandler(deps))
+	lab.GET("/evolution/gene-observations", ev.ListGeneObservations)
 	lab.PATCH("/evolution/genomes/:id", ev.UpdateGenome)
 	lab.DELETE("/evolution/genomes/:id", ev.DeleteGenome)
 	lab.GET("/genome/champion", ev.GetChampion)

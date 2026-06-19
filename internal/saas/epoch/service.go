@@ -177,6 +177,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		return
 	}
 	result, err := s.engine.RunEpoch(ctx, ga.EpochConfig{
+		TaskID:             taskID,
 		Pair:               req.Pair,
 		InstrumentID:       req.InstrumentID,
 		DataSource:         req.DataSource,
@@ -226,6 +227,11 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		if errors.Is(err, context.Canceled) {
 			updates["status"] = TaskStatusCancelled
 			updates["error_message"] = "使用者已中止任務"
+			if id, saveErr := s.saveCancelledBest(ctx, taskID, req); saveErr == nil && id > 0 {
+				updates["error_message"] = fmt.Sprintf("使用者已中止任務，已保存目前最佳參數 #%d", id)
+			} else if saveErr != nil {
+				s.logger.Warn("failed to save cancelled best", zap.Error(saveErr))
+			}
 		} else {
 			updates["status"] = TaskStatusFailed
 			updates["error_message"] = err.Error()
@@ -308,6 +314,11 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 		if errors.Is(lastErr, context.Canceled) {
 			updates["status"] = TaskStatusCancelled
 			updates["error_message"] = "使用者已中止任務"
+			if id, saveErr := s.saveCancelledBest(ctx, taskID, req); saveErr == nil && id > 0 {
+				updates["error_message"] = fmt.Sprintf("使用者已中止任務，已保存目前最佳參數 #%d", id)
+			} else if saveErr != nil {
+				s.logger.Warn("failed to save cancelled best", zap.Error(saveErr))
+			}
 		} else {
 			updates["status"] = TaskStatusFailed
 			updates["error_message"] = lastErr.Error()
@@ -327,6 +338,7 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 
 func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, taskID uint) ga.EpochConfig {
 	return ga.EpochConfig{
+		TaskID:             taskID,
 		Pair:               req.Pair,
 		InstrumentID:       req.InstrumentID,
 		DataSource:         req.DataSource,
@@ -414,6 +426,79 @@ func (s *Service) writeContinuousSnapshot(taskID uint, req CreateTaskRequest, it
 	_ = s.db.Model(&saasstore.EvolutionTask{}).
 		Where("id = ?", taskID).
 		Update("result", saasstore.JSONB(raw)).Error
+}
+
+func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req CreateTaskRequest) (uint, error) {
+	saveCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ctx = saveCtx
+	var task saasstore.EvolutionTask
+	if err := s.db.WithContext(ctx).First(&task, taskID).Error; err != nil {
+		return 0, err
+	}
+	var result struct {
+		BestScore     float64                `json:"best_score"`
+		MaxDrawdown   float64                `json:"max_drawdown"`
+		WindowScores  []quant.CrucibleResult `json:"window_scores"`
+		BestParamPack json.RawMessage        `json:"best_param_pack"`
+		GeneRecordID  uint                   `json:"gene_record_id"`
+	}
+	if err := json.Unmarshal([]byte(task.Result), &result); err != nil {
+		return 0, nil
+	}
+	if result.GeneRecordID > 0 || !json.Valid(result.BestParamPack) || string(result.BestParamPack) == "null" {
+		return 0, nil
+	}
+	searchConfig := map[string]any{
+		"strategy_id":          req.StrategyID,
+		"symbol":               req.Pair,
+		"instrument_id":        req.InstrumentID,
+		"data_source":          req.DataSource,
+		"interval":             req.Interval,
+		"execution_mode":       req.ExecutionMode,
+		"train_start_ms":       req.TrainStartMs,
+		"train_end_ms":         req.TrainEndMs,
+		"spawn_mode":           req.SpawnMode,
+		"population":           req.PopSize,
+		"generations":          req.MaxGenerations,
+		"source":               "cancelled_task",
+		"cancelled_task_id":    taskID,
+		"continuous_mode":      req.ContinuousMode,
+		"standard_start_ms":    req.StandardStartMs,
+		"standard_end_ms":      req.StandardEndMs,
+		"continuous_unlimited": req.ContinuousUnlimited,
+	}
+	configRaw, _ := json.Marshal(searchConfig)
+	windowScore, _ := json.Marshal(result.WindowScores)
+	record := saasstore.GeneRecord{
+		StrategyID:    req.StrategyID,
+		InstrumentID:  req.InstrumentID,
+		DataSource:    req.DataSource,
+		Interval:      req.Interval,
+		ExecutionMode: req.ExecutionMode,
+		Role:          saasstore.GeneRoleChallenger,
+		Tags:          saasstore.JSONB(`["中止保存"]`),
+		SearchConfig:  saasstore.JSONB(configRaw),
+		ParamPack:     saasstore.JSONB(result.BestParamPack),
+		ScoreTotal:    result.BestScore,
+		MaxDrawdown:   result.MaxDrawdown,
+		WindowScore:   saasstore.JSONB(windowScore),
+	}
+	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
+		return 0, err
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"current_generation":   0,
+		"best_score":           result.BestScore,
+		"max_drawdown":         result.MaxDrawdown,
+		"window_scores":        result.WindowScores,
+		"best_param_pack":      result.BestParamPack,
+		"gene_record_id":       record.ID,
+		"updated_at":           time.Now().UTC().Format(time.RFC3339),
+		"cancelled_saved_best": true,
+	})
+	_ = s.db.WithContext(ctx).Model(&saasstore.EvolutionTask{}).Where("id = ?", taskID).Update("result", saasstore.JSONB(raw)).Error
+	return record.ID, nil
 }
 
 func (s *Service) refreshStandardizedChampion(ctx context.Context, req CreateTaskRequest, newGeneID uint, current *standardizedChampion) (*standardizedChampion, error) {

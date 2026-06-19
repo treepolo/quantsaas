@@ -42,6 +42,7 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		&SpotExecution{},
 		&AuditLog{},
 		&GeneRecord{},
+		&GeneObservation{},
 		&EvolutionTask{},
 		&BacktestRun{},
 		&ResearchInstrument{},

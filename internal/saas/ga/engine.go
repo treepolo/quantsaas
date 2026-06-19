@@ -16,6 +16,8 @@ import (
 type GenomeStore interface {
 	LoadEliteGenes(ctx context.Context, scope GeneScope, limit int) ([][]byte, error)
 	SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult, searchConfig []byte) (uint, error)
+	LoadObservedFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte) (map[uint64]bool, error)
+	SaveObservedGenes(ctx context.Context, scope GeneScope, searchConfig []byte, observations []GeneObservation) error
 	LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error)
 }
 
@@ -54,6 +56,7 @@ type EvolutionEngine struct {
 }
 
 type EpochConfig struct {
+	TaskID             uint
 	Pair               string
 	InstrumentID       string
 	DataSource         string
@@ -83,6 +86,15 @@ type EpochProgress struct {
 	BestParamPack       []byte
 	MutationProbability float64
 	MutationScale       float64
+}
+
+type GeneObservation struct {
+	TaskID      uint
+	Generation  int
+	Individual  int
+	Fingerprint uint64
+	ParamPack   []byte
+	Fitness     FitnessResult
 }
 
 type EpochResult struct {
@@ -138,6 +150,18 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	plan.Trace = cfg.OnTrace
 	plan.TraceMode = cfg.TraceMode
 	plan.TraceModeFunc = cfg.TraceModeFunc
+	searchConfig := e.searchConfig(cfg)
+	scope := GeneScope{
+		StrategyID:    e.evolvable.StrategyID(),
+		InstrumentID:  cfg.InstrumentID,
+		DataSource:    cfg.DataSource,
+		Interval:      cfg.Interval,
+		ExecutionMode: cfg.ExecutionMode,
+	}
+	knownFingerprints, err := e.store.LoadObservedFingerprints(ctx, scope, searchConfig)
+	if err != nil {
+		return EpochResult{}, err
+	}
 
 	population, err := e.initializePopulation(ctx, cfg, rng)
 	if err != nil {
@@ -146,7 +170,9 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		})
 		return EpochResult{}, err
 	}
+	population = e.deduplicatePopulation(population, knownFingerprints, rng, true)
 	population = e.evaluatePopulation(ctx, population, plan, 0, cfg)
+	e.saveObservedPopulation(ctx, scope, searchConfig, population, plan, 0, cfg, knownFingerprints)
 
 	best := bestIndividual(population)
 	bestScore := best.Fitness.ScoreTotal
@@ -209,8 +235,9 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 			"mutation_scale":       mutScale,
 		})
 
-		population = e.nextGeneration(population, mutProb, mutScale, rng, cfg, generation+1)
+		population = e.nextGeneration(population, mutProb, mutScale, rng, cfg, generation+1, knownFingerprints)
 		population = e.evaluatePopulation(ctx, population, plan, generation+1, cfg)
+		e.saveObservedPopulation(ctx, scope, searchConfig, population, plan, generation+1, cfg, knownFingerprints)
 	}
 
 	sortPopulation(population)
@@ -222,14 +249,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	if err != nil {
 		return EpochResult{}, err
 	}
-	searchConfig := e.searchConfig(cfg)
-	id, err := e.store.SaveChallenger(ctx, GeneScope{
-		StrategyID:    e.evolvable.StrategyID(),
-		InstrumentID:  cfg.InstrumentID,
-		DataSource:    cfg.DataSource,
-		Interval:      cfg.Interval,
-		ExecutionMode: cfg.ExecutionMode,
-	}, paramPack, best.Fitness, searchConfig)
+	id, err := e.store.SaveChallenger(ctx, scope, paramPack, best.Fitness, searchConfig)
 	if err != nil {
 		return EpochResult{}, err
 	}
@@ -491,7 +511,78 @@ func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []i
 	return population
 }
 
-func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float64, mutScale float64, rng RandomSource, cfg EpochConfig, generation int) []individual {
+func (e *EvolutionEngine) saveObservedPopulation(ctx context.Context, scope GeneScope, searchConfig []byte, population []individual, plan EvaluablePlan, generation int, cfg EpochConfig, knownFingerprints map[uint64]bool) {
+	if len(population) == 0 {
+		return
+	}
+	observations := make([]GeneObservation, 0, len(population))
+	for i, item := range population {
+		fingerprint := e.evolvable.Fingerprint(item.Gene)
+		paramPack, err := e.evolvable.EncodeResult(item.Gene, plan.Spawn)
+		if err != nil {
+			continue
+		}
+		observations = append(observations, GeneObservation{
+			TaskID:      cfg.TaskID,
+			Generation:  generation,
+			Individual:  i,
+			Fingerprint: fingerprint,
+			ParamPack:   paramPack,
+			Fitness:     item.Fitness,
+		})
+		if knownFingerprints != nil {
+			knownFingerprints[fingerprint] = true
+		}
+	}
+	if len(observations) == 0 {
+		return
+	}
+	if err := e.store.SaveObservedGenes(ctx, scope, searchConfig, observations); err != nil {
+		e.trace(cfg, TraceModeSummary, "evolution", "gene_observations.save_failed", "failed to save gene observations", map[string]any{
+			"generation": generation,
+			"error":      err.Error(),
+		})
+	}
+}
+
+func (e *EvolutionEngine) deduplicatePopulation(population []individual, knownFingerprints map[uint64]bool, rng RandomSource, preserveFirst bool) []individual {
+	if len(population) == 0 || knownFingerprints == nil {
+		return population
+	}
+	out := make([]individual, len(population))
+	copy(out, population)
+	for i := range out {
+		if preserveFirst && i == 0 {
+			knownFingerprints[e.evolvable.Fingerprint(out[i].Gene)] = true
+			continue
+		}
+		out[i].Gene = e.uniqueGene(out[i].Gene, knownFingerprints, rng, func() Gene {
+			return e.evolvable.Sample(rng)
+		})
+		knownFingerprints[e.evolvable.Fingerprint(out[i].Gene)] = true
+	}
+	return out
+}
+
+func (e *EvolutionEngine) uniqueGene(g Gene, knownFingerprints map[uint64]bool, rng RandomSource, create func() Gene) Gene {
+	if knownFingerprints == nil {
+		return g
+	}
+	fingerprint := e.evolvable.Fingerprint(g)
+	if !knownFingerprints[fingerprint] {
+		return g
+	}
+	for i := 0; i < 25; i++ {
+		candidate := create()
+		candidateFingerprint := e.evolvable.Fingerprint(candidate)
+		if !knownFingerprints[candidateFingerprint] {
+			return candidate
+		}
+	}
+	return e.evolvable.Mutate(g, 0.55, 3.0, rng)
+}
+
+func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float64, mutScale float64, rng RandomSource, cfg EpochConfig, generation int, knownFingerprints map[uint64]bool) []individual {
 	sortPopulation(population)
 	popSize := len(population)
 	eliteCount := e.EliteCount
@@ -505,6 +596,10 @@ func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float6
 		p2 := e.tournamentSelect(population, rng)
 		child := e.evolvable.Crossover(p1.Gene, p2.Gene, rng)
 		child = e.evolvable.Mutate(child, mutProb, mutScale, rng)
+		child = e.uniqueGene(child, knownFingerprints, rng, func() Gene {
+			next := e.evolvable.Crossover(p1.Gene, p2.Gene, rng)
+			return e.evolvable.Mutate(next, mutProb, mutScale, rng)
+		})
 		e.trace(cfg, TraceModeDetailed, "evolution", "offspring.created", "offspring generated", map[string]any{
 			"generation":           generation,
 			"child":                len(next),
@@ -513,6 +608,9 @@ func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float6
 			"mutation_probability": mutProb,
 			"mutation_scale":       mutScale,
 		})
+		if knownFingerprints != nil {
+			knownFingerprints[e.evolvable.Fingerprint(child)] = true
+		}
 		next = append(next, individual{Gene: child})
 	}
 	e.trace(cfg, TraceModeSummary, "evolution", "generation.spawned", "next generation spawned", map[string]any{

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
-import { evolutionApi, type EvolutionTask, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
+import { evolutionApi, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
@@ -157,6 +157,199 @@ function Metric({ label, value, danger = false }: { label: string; value: string
   );
 }
 
+function ParameterLandscape({ query, live = false }: { query: GeneObservationQuery; live?: boolean }) {
+  const observationsQuery = useQuery({
+    queryKey: ["gene-observations", query],
+    queryFn: () => evolutionApi.listGeneObservations(query),
+    refetchInterval: live ? 2_000 : false,
+    enabled: Boolean(query.instrument_id && query.interval && query.execution_mode)
+  });
+  const schema = observationsQuery.data?.schema ?? [];
+  const observations = observationsQuery.data?.observations ?? [];
+  return (
+    <Card className="md:col-span-2">
+      <CardHeader>
+        <div>
+          <CardTitle>參數分佈地圖</CardTitle>
+          <CardDescription>依目前搜尋條件顯示曾經誕生過的參數；任務運行時會持續更新。</CardDescription>
+        </div>
+        <div className="text-right text-xs text-slate-500">
+          {observationsQuery.isFetching ? "更新中" : "已同步"}<br />
+          {observations.length.toLocaleString("zh-TW")} 筆
+        </div>
+      </CardHeader>
+      {observationsQuery.isLoading ? <div className="text-sm text-slate-500">載入參數分佈...</div> : null}
+      {!observationsQuery.isLoading && observations.length === 0 ? (
+        <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4 text-sm text-slate-500">目前搜尋條件還沒有參數誕生紀錄。開始搜尋後，這裡會逐代更新。</div>
+      ) : null}
+      {observations.length > 0 ? (
+        <div className="grid gap-4 xl:grid-cols-2">
+          <PcaScatterPlot schema={schema} observations={observations} />
+          <ParallelCoordinatePlot schema={schema} observations={observations} />
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function PcaScatterPlot({ schema, observations }: { schema: GeneObservationAxis[]; observations: GeneObservation[] }) {
+  const points = useMemo(() => pcaProjection(schema, observations), [schema, observations]);
+  const [hovered, setHovered] = useState<(typeof points)[number] | null>(null);
+  const width = 620;
+  const height = 360;
+  const padding = 36;
+  const xs = points.map((item) => item.x);
+  const ys = points.map((item) => item.y);
+  const minX = Math.min(...xs, -1);
+  const maxX = Math.max(...xs, 1);
+  const minY = Math.min(...ys, -1);
+  const maxY = Math.max(...ys, 1);
+  const sx = (x: number) => padding + ((x - minX) / Math.max(0.000001, maxX - minX)) * (width - padding * 2);
+  const sy = (y: number) => height - padding - ((y - minY) / Math.max(0.000001, maxY - minY)) * (height - padding * 2);
+  return (
+    <div className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-semibold text-slate-200">降維散點圖</div>
+        <div className="text-xs text-slate-500">越靠近代表 15 維形狀越相似</div>
+      </div>
+      <div className="relative overflow-hidden rounded-lg border border-white/[0.04] bg-slate-950">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-80 w-full" role="img" aria-label="參數降維散點圖">
+          <line x1={padding} x2={width - padding} y1={height / 2} y2={height / 2} stroke="rgba(148,163,184,0.18)" />
+          <line x1={width / 2} x2={width / 2} y1={padding} y2={height - padding} stroke="rgba(148,163,184,0.18)" />
+          {points.map((point) => (
+            <circle
+              key={point.observation.id}
+              cx={sx(point.x)}
+              cy={sy(point.y)}
+              r={point.observation.fatal ? 2.4 : 3.2}
+              fill={scoreColor(point.observation.score_total, observations)}
+              opacity={point.observation.fatal ? 0.22 : 0.72}
+              onMouseEnter={() => setHovered(point)}
+              onMouseLeave={() => setHovered(null)}
+            />
+          ))}
+        </svg>
+        {hovered ? <ObservationTooltip observation={hovered.observation} className="left-3 top-3" /> : null}
+      </div>
+    </div>
+  );
+}
+
+function ParallelCoordinatePlot({ schema, observations }: { schema: GeneObservationAxis[]; observations: GeneObservation[] }) {
+  const [hovered, setHovered] = useState<GeneObservation | null>(null);
+  const width = 720;
+  const height = 360;
+  const paddingX = 34;
+  const paddingY = 26;
+  const x = (index: number) => paddingX + (index / Math.max(1, schema.length - 1)) * (width - paddingX * 2);
+  const y = (axis: GeneObservationAxis, value: number) => {
+    const normalized = (value - axis.min) / Math.max(0.000001, axis.max - axis.min);
+    return height - paddingY - Math.min(1, Math.max(0, normalized)) * (height - paddingY * 2);
+  };
+  const visible = observations.slice(-3000);
+  return (
+    <div className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <div className="text-sm font-semibold text-slate-200">平行座標圖</div>
+        <div className="text-xs text-slate-500">每一條線是一組參數</div>
+      </div>
+      <div className="relative overflow-hidden rounded-lg border border-white/[0.04] bg-slate-950">
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-80 w-full" role="img" aria-label="參數平行座標圖">
+          {schema.map((axis, index) => (
+            <g key={axis.key}>
+              <line x1={x(index)} x2={x(index)} y1={paddingY} y2={height - paddingY} stroke="rgba(148,163,184,0.24)" />
+              <text x={x(index)} y={height - 6} textAnchor="middle" fontSize="10" fill="rgb(148,163,184)">
+                {axis.label.slice(0, 5)}
+              </text>
+            </g>
+          ))}
+          {visible.map((item) => {
+            const d = schema.map((axis, index) => `${index === 0 ? "M" : "L"} ${x(index).toFixed(2)} ${y(axis, Number(item.param_values[axis.key] ?? axis.min)).toFixed(2)}`).join(" ");
+            return (
+              <path
+                key={item.id}
+                d={d}
+                fill="none"
+                stroke={scoreColor(item.score_total, observations)}
+                strokeWidth={hovered?.id === item.id ? 2.2 : 0.85}
+                opacity={hovered?.id === item.id ? 0.95 : item.fatal ? 0.08 : 0.22}
+                onMouseEnter={() => setHovered(item)}
+                onMouseLeave={() => setHovered(null)}
+              />
+            );
+          })}
+        </svg>
+        {hovered ? <ObservationTooltip observation={hovered} className="left-3 top-3" /> : null}
+      </div>
+      {observations.length > visible.length ? <div className="mt-2 text-xs text-slate-500">為了維持流暢，平行座標顯示最近 {visible.length.toLocaleString("zh-TW")} 筆。</div> : null}
+    </div>
+  );
+}
+
+function ObservationTooltip({ observation, className }: { observation: GeneObservation; className?: string }) {
+  return (
+    <div className={cn("pointer-events-none absolute z-10 rounded-lg border border-white/10 bg-slate-900/95 p-3 text-xs text-slate-200 shadow-xl", className)}>
+      <div className="font-semibold">#{observation.id} · 任務 #{observation.task_id}</div>
+      <div className="mt-1 text-slate-400">世代 {observation.generation} / 個體 {observation.individual}</div>
+      <div className="mt-1">評分 {observation.score_total.toFixed(4)}</div>
+      <div>最大回撤 {formatPercent(observation.max_drawdown)}</div>
+      <div className={cn("mt-1", observation.fatal ? "text-[#fecaca]" : "text-[#99f6e4]")}>{observation.fatal ? "淘汰" : "有效"}</div>
+    </div>
+  );
+}
+
+function scoreColor(score: number, observations: GeneObservation[]) {
+  const values = observations.filter((item) => Number.isFinite(item.score_total)).map((item) => item.score_total);
+  const min = Math.min(...values, score);
+  const max = Math.max(...values, score);
+  const ratio = (score - min) / Math.max(0.000001, max - min);
+  if (ratio > 0.75) return "rgb(45,212,191)";
+  if (ratio > 0.45) return "rgb(250,204,21)";
+  return "rgb(248,113,113)";
+}
+
+function pcaProjection(schema: GeneObservationAxis[], observations: GeneObservation[]) {
+  const vectors = observations.map((item) => schema.map((axis) => {
+    const value = Number(item.param_values[axis.key] ?? axis.min);
+    return (value - axis.min) / Math.max(0.000001, axis.max - axis.min);
+  }));
+  if (vectors.length === 0 || schema.length === 0) return [];
+  const dims = schema.length;
+  const means = Array.from({ length: dims }, (_, dim) => vectors.reduce((sum, vector) => sum + vector[dim], 0) / vectors.length);
+  const centered = vectors.map((vector) => vector.map((value, dim) => value - means[dim]));
+  const covariance = Array.from({ length: dims }, (_, row) =>
+    Array.from({ length: dims }, (_, col) => centered.reduce((sum, vector) => sum + vector[row] * vector[col], 0) / Math.max(1, centered.length - 1))
+  );
+  const pc1 = powerIteration(covariance);
+  const lambda1 = dot(pc1, multiply(covariance, pc1));
+  const deflated = covariance.map((row, i) => row.map((value, j) => value - lambda1 * pc1[i] * pc1[j]));
+  const pc2 = powerIteration(deflated);
+  return observations.map((observation, index) => ({
+    observation,
+    x: dot(centered[index], pc1),
+    y: dot(centered[index], pc2)
+  }));
+}
+
+function powerIteration(matrix: number[][]) {
+  const dims = matrix.length;
+  let vector = Array.from({ length: dims }, (_, index) => (index === 0 ? 1 : 1 / Math.max(1, dims)));
+  for (let step = 0; step < 32; step++) {
+    const next = multiply(matrix, vector);
+    const norm = Math.sqrt(dot(next, next)) || 1;
+    vector = next.map((value) => value / norm);
+  }
+  return vector;
+}
+
+function multiply(matrix: number[][], vector: number[]) {
+  return matrix.map((row) => row.reduce((sum, value, index) => sum + value * vector[index], 0));
+}
+
+function dot(a: number[], b: number[]) {
+  return a.reduce((sum, value, index) => sum + value * b[index], 0);
+}
+
 function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, string> }) {
   const queryClient = useQueryClient();
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
@@ -229,6 +422,17 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     mutationFn: (taskId: number) => evolutionApi.cancel(taskId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] })
   });
+  const landscapeQuery = useMemo<GeneObservationQuery>(() => ({
+    strategy_id: "sigmoid-dca-btc",
+    instrument_id: instrumentId,
+    data_source: selected?.data_source,
+    interval,
+    execution_mode: executionMode,
+    train_start_ms: startDate ? dayStartMs(startDate) : undefined,
+    train_end_ms: endDate ? dayEndMs(endDate) : undefined,
+    spawn_mode: spawnMode,
+    limit: 12000
+  }), [endDate, executionMode, instrumentId, interval, selected?.data_source, spawnMode, startDate]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -247,6 +451,17 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     const progressPct = Math.min(100, Math.round((running.progress || 0) * 100));
     const evaluated = running.evaluated_individuals ?? current * (running.pop_size ?? 0);
     const planned = running.planned_evaluations ?? (running.pop_size ?? 0) * max;
+    const runningLandscapeQuery: GeneObservationQuery = {
+      strategy_id: running.strategy_id ?? "sigmoid-dca-btc",
+      instrument_id: running.instrument_id,
+      data_source: running.data_source,
+      interval: running.interval,
+      execution_mode: running.execution_mode,
+      train_start_ms: running.train_start_ms,
+      train_end_ms: running.train_end_ms,
+      spawn_mode: running.spawn_mode,
+      limit: 12000
+    };
     return (
       <div className="space-y-4">
         <Card>
@@ -285,6 +500,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             </div>
           </div>
         </Card>
+        <ParameterLandscape query={runningLandscapeQuery} live />
         <CurrentBestCard task={running} />
         <TraceConsole task={running} />
       </div>
@@ -334,6 +550,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             </div>
           </div>
           {executionMode === "preclose_10m" ? <div className="md:col-span-2 text-xs text-[#fde68a]">這個模式需要收盤前快照資料；缺資料時任務可能無法產生有效結果。</div> : null}
+          <ParameterLandscape query={landscapeQuery} />
           <div className="md:col-span-2">
             <Button type="submit" loading={createMutation.isPending}>開始搜尋</Button>
             {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}

@@ -178,6 +178,69 @@ func (h *EvolutionHandler) CancelTask(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": epoch.TaskStatusCancelled, "task_id": taskID})
 }
 
+func (h *EvolutionHandler) ListGeneObservations(c *gin.Context) {
+	query := h.db.WithContext(c.Request.Context()).Model(&saasstore.GeneObservation{})
+	if value := strings.TrimSpace(c.Query("strategy_id")); value != "" {
+		query = query.Where("strategy_id = ?", value)
+	}
+	if value := strings.TrimSpace(c.Query("instrument_id")); value != "" {
+		query = query.Where("instrument_id = ?", strings.ToUpper(value))
+	}
+	if value := strings.TrimSpace(c.Query("data_source")); value != "" {
+		query = query.Where("data_source = ?", value)
+	}
+	if value := strings.TrimSpace(c.Query("interval")); value != "" {
+		query = query.Where("interval = ?", value)
+	}
+	if value := strings.TrimSpace(c.Query("execution_mode")); value != "" {
+		query = query.Where("execution_mode = ?", value)
+	}
+	if value := strings.TrimSpace(c.Query("spawn_mode")); value != "" {
+		query = query.Where("spawn_mode = ?", value)
+	}
+	if value, err := strconv.ParseInt(c.DefaultQuery("train_start_ms", "0"), 10, 64); err == nil && value > 0 {
+		query = query.Where("train_start_ms = ?", value)
+	}
+	if value, err := strconv.ParseInt(c.DefaultQuery("train_end_ms", "0"), 10, 64); err == nil && value > 0 {
+		query = query.Where("train_end_ms = ?", value)
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "5000"))
+	if limit <= 0 || limit > 20000 {
+		limit = 5000
+	}
+	var rows []saasstore.GeneObservation
+	if err := query.Order("created_at ASC, id ASC").Limit(limit).Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	points := make([]gin.H, 0, len(rows))
+	for _, row := range rows {
+		params := sigmoiddca.ParseParamsFromParamPack([]byte(row.ParamPack))
+		points = append(points, gin.H{
+			"id":             row.ID,
+			"created_at":     row.CreatedAt.Format(time.RFC3339),
+			"task_id":        row.TaskID,
+			"generation":     row.Generation,
+			"individual":     row.Individual,
+			"fingerprint":    row.Fingerprint,
+			"score_total":    row.ScoreTotal,
+			"max_drawdown":   row.MaxDrawdown,
+			"fatal":          row.Fatal,
+			"param_values":   chromosomeValues(params.Chromosome),
+			"param_pack":     parseRawJSON(json.RawMessage(row.ParamPack)),
+			"instrument_id":  row.InstrumentID,
+			"data_source":    row.DataSource,
+			"interval":       row.Interval,
+			"execution_mode": row.ExecutionMode,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"schema":       chromosomeSchema(),
+		"observations": points,
+		"count":        len(points),
+	})
+}
+
 func (h *EvolutionHandler) Promote(c *gin.Context) {
 	if !h.canUseLab() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "此功能僅允許 lab/dev 模式"})
@@ -477,6 +540,81 @@ func geneResponse(record saasstore.GeneRecord) gin.H {
 		"max_drawdown":   record.MaxDrawdown,
 		"window_score":   parseWindowScores(record.WindowScore),
 		"param_pack":     parseRawJSON(json.RawMessage(record.ParamPack)),
+	}
+}
+
+func chromosomeSchema() []gin.H {
+	keys := []string{
+		"micro_reserve_pct",
+		"beta",
+		"gamma",
+		"w_mean",
+		"w_momentum",
+		"w_breakout",
+		"dust_usd",
+		"wedge_delta_threshold",
+		"wedge_vol_ratio_threshold",
+		"macro_bear_multiplier",
+		"macro_bull_multiplier",
+		"extra_deploy_pct",
+		"soft_release_months",
+		"soft_release_pct",
+		"hard_release_max_pct",
+	}
+	out := make([]gin.H, 0, len(keys))
+	for _, key := range keys {
+		bound := quant.HardBounds[key]
+		out = append(out, gin.H{
+			"key":   key,
+			"label": chromosomeLabel(key),
+			"min":   bound.Min,
+			"max":   bound.Max,
+		})
+	}
+	return out
+}
+
+func chromosomeLabel(key string) string {
+	labels := map[string]string{
+		"micro_reserve_pct":         "微觀保留比例",
+		"beta":                      "Beta",
+		"gamma":                     "Gamma",
+		"w_mean":                    "均值權重",
+		"w_momentum":                "動量權重",
+		"w_breakout":                "突破權重",
+		"dust_usd":                  "最小有效金額",
+		"wedge_delta_threshold":     "楔形變化門檻",
+		"wedge_vol_ratio_threshold": "楔形波動門檻",
+		"macro_bear_multiplier":     "熊市底倉倍率",
+		"macro_bull_multiplier":     "牛市底倉倍率",
+		"extra_deploy_pct":          "超額部署比例",
+		"soft_release_months":       "軟釋放月數",
+		"soft_release_pct":          "軟釋放比例",
+		"hard_release_max_pct":      "硬釋放比例",
+	}
+	if label, ok := labels[key]; ok {
+		return label
+	}
+	return key
+}
+
+func chromosomeValues(c quant.Chromosome) map[string]float64 {
+	return map[string]float64{
+		"micro_reserve_pct":         c.MicroReservePct,
+		"beta":                      c.Beta,
+		"gamma":                     c.Gamma,
+		"w_mean":                    c.WMean,
+		"w_momentum":                c.WMomentum,
+		"w_breakout":                c.WBreakout,
+		"dust_usd":                  c.DustUSD,
+		"wedge_delta_threshold":     c.WedgeDeltaThreshold,
+		"wedge_vol_ratio_threshold": c.WedgeVolRatioThreshold,
+		"macro_bear_multiplier":     c.MacroBearMultiplier,
+		"macro_bull_multiplier":     c.MacroBullMultiplier,
+		"extra_deploy_pct":          c.ExtraDeployPct,
+		"soft_release_months":       float64(c.SoftReleaseMonths),
+		"soft_release_pct":          c.SoftReleasePct,
+		"hard_release_max_pct":      c.HardReleaseMaxPct,
 	}
 }
 
