@@ -23,6 +23,11 @@ const (
 	DefaultYahooBaseURL = "https://query1.finance.yahoo.com"
 	DefaultSymbol       = "BTCUSDT"
 
+	PriceAdjustmentLegacyUnknown = "legacy_unknown"
+	PriceAdjustmentRawExchange   = "raw_exchange_v1"
+	PriceAdjustmentYahooAdjusted = "yahoo_adjusted_ohlc_v1"
+	PriceAdjustmentYahooIntraday = "yahoo_raw_intraday_v1"
+
 	yahooUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 QuantSaaS/0.1"
 	yahooMinRequestInterval = 1200 * time.Millisecond
 )
@@ -102,6 +107,8 @@ type ImportResult struct {
 	PrecloseSnapshotCount int64  `json:"preclose_snapshot_count"`
 	FirstOpenMs           int64  `json:"first_open_ms,omitempty"`
 	LastOpenMs            int64  `json:"last_open_ms,omitempty"`
+	PriceAdjustment       string `json:"price_adjustment,omitempty"`
+	PriceAdjustmentLabel  string `json:"price_adjustment_label,omitempty"`
 }
 
 type AutoUpdateResult struct {
@@ -114,20 +121,25 @@ type AutoUpdateResult struct {
 }
 
 type DatasetSummary struct {
-	InstrumentID          string `json:"instrument_id"`
-	DataSource            string `json:"data_source"`
-	Symbol                string `json:"symbol"`
-	Market                string `json:"market"`
-	Interval              string `json:"interval"`
-	Count                 int64  `json:"count"`
-	PrecloseSnapshotCount int64  `json:"preclose_snapshot_count"`
-	FirstPrecloseMs       int64  `json:"first_preclose_ms,omitempty"`
-	LastPrecloseMs        int64  `json:"last_preclose_ms,omitempty"`
-	FirstOpenMs           int64  `json:"first_open_ms,omitempty"`
-	LastOpenMs            int64  `json:"last_open_ms,omitempty"`
-	ExpectedLatestOpenMs  int64  `json:"expected_latest_open_ms,omitempty"`
-	IsFresh               bool   `json:"is_fresh"`
-	UpdatedAt             string `json:"updated_at,omitempty"`
+	InstrumentID           string `json:"instrument_id"`
+	DataSource             string `json:"data_source"`
+	Symbol                 string `json:"symbol"`
+	Market                 string `json:"market"`
+	Interval               string `json:"interval"`
+	Count                  int64  `json:"count"`
+	PrecloseSnapshotCount  int64  `json:"preclose_snapshot_count"`
+	FirstPrecloseMs        int64  `json:"first_preclose_ms,omitempty"`
+	LastPrecloseMs         int64  `json:"last_preclose_ms,omitempty"`
+	FirstOpenMs            int64  `json:"first_open_ms,omitempty"`
+	LastOpenMs             int64  `json:"last_open_ms,omitempty"`
+	ExpectedLatestOpenMs   int64  `json:"expected_latest_open_ms,omitempty"`
+	IsFresh                bool   `json:"is_fresh"`
+	UpdatedAt              string `json:"updated_at,omitempty"`
+	PriceAdjustment        string `json:"price_adjustment"`
+	PriceAdjustmentLabel   string `json:"price_adjustment_label"`
+	PriceAdjustmentNote    string `json:"price_adjustment_note"`
+	NeedsFullReimport      bool   `json:"needs_full_reimport"`
+	PriceMetadataUpdatedAt string `json:"price_metadata_updated_at,omitempty"`
 }
 
 func NewService(db *gorm.DB, client *Client) *Service {
@@ -190,14 +202,17 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 	if err := s.validateImportRequest(ctx, req); err != nil {
 		return ImportResult{}, err
 	}
+	existing := s.datasetBounds(ctx, req)
 
 	result := ImportResult{
-		InstrumentID: req.InstrumentID,
-		DataSource:   req.DataSource,
-		Symbol:       req.Symbol,
-		Interval:     req.Interval,
-		StartTimeMs:  req.StartTimeMs,
-		EndTimeMs:    req.EndTimeMs,
+		InstrumentID:         req.InstrumentID,
+		DataSource:           req.DataSource,
+		Symbol:               req.Symbol,
+		Interval:             req.Interval,
+		StartTimeMs:          req.StartTimeMs,
+		EndTimeMs:            req.EndTimeMs,
+		PriceAdjustment:      currentPriceAdjustment(req.DataSource, req.Interval),
+		PriceAdjustmentLabel: priceAdjustmentLabel(currentPriceAdjustment(req.DataSource, req.Interval)),
 	}
 	if req.DataSource == DataSourceYahoo {
 		rows, err := s.yahooClient.FetchKLines(ctx, req.Symbol, req.Interval, req.StartTimeMs, req.EndTimeMs)
@@ -215,6 +230,12 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 			result.FirstOpenMs = rows[0].OpenTime
 			result.LastOpenMs = rows[len(rows)-1].OpenTime
 		}
+		adjustment, err := s.recordDatasetMetadata(ctx, req, result, existing)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		result.PriceAdjustment = adjustment
+		result.PriceAdjustmentLabel = priceAdjustmentLabel(adjustment)
 		if req.IncludePrecloseSnapshots {
 			count, err := s.importPrecloseSnapshots(ctx, req)
 			if err != nil {
@@ -269,6 +290,12 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 		}
 		result.PrecloseSnapshotCount = count
 	}
+	adjustment, err := s.recordDatasetMetadata(ctx, req, result, existing)
+	if err != nil {
+		return ImportResult{}, err
+	}
+	result.PriceAdjustment = adjustment
+	result.PriceAdjustmentLabel = priceAdjustmentLabel(adjustment)
 
 	return result, nil
 }
@@ -283,6 +310,10 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 	}
 	for i, interval := range intervals {
 		intervals[i] = normalizeInterval(interval)
+	}
+	metadata, err := s.datasetMetadataByInterval(ctx, instrument, intervals)
+	if err != nil {
+		return nil, err
 	}
 
 	rows := make([]DatasetSummary, 0, len(intervals))
@@ -313,6 +344,7 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 		if summary.UpdatedAt != nil {
 			item.UpdatedAt = summary.UpdatedAt.UTC().Format(time.RFC3339)
 		}
+		s.enrichPriceAdjustment(instrument, &item, metadata[interval])
 		if interval == "1d" {
 			var snapshotSummary struct {
 				Count       int64
@@ -338,6 +370,98 @@ func (s *Service) Summaries(ctx context.Context, symbol string, intervals []stri
 		rows = append(rows, item)
 	}
 	return rows, nil
+}
+
+type datasetBounds struct {
+	Count       int64
+	FirstOpenMs int64
+	LastOpenMs  int64
+}
+
+func (s *Service) datasetBounds(ctx context.Context, req ImportRequest) datasetBounds {
+	if s.db == nil {
+		return datasetBounds{}
+	}
+	var summary struct {
+		Count       int64
+		FirstOpenMs *int64
+		LastOpenMs  *int64
+	}
+	_ = s.db.WithContext(ctx).
+		Model(&saasstore.KLine{}).
+		Select("count(*) as count, min(open_time) as first_open_ms, max(open_time) as last_open_ms").
+		Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ?", req.InstrumentID, req.DataSource, req.Symbol, req.Interval).
+		Scan(&summary).Error
+	out := datasetBounds{Count: summary.Count}
+	if summary.FirstOpenMs != nil {
+		out.FirstOpenMs = *summary.FirstOpenMs
+	}
+	if summary.LastOpenMs != nil {
+		out.LastOpenMs = *summary.LastOpenMs
+	}
+	return out
+}
+
+func (s *Service) recordDatasetMetadata(ctx context.Context, req ImportRequest, result ImportResult, existing datasetBounds) (string, error) {
+	current := currentPriceAdjustment(req.DataSource, req.Interval)
+	if s.db == nil || result.FetchedBars == 0 {
+		return current, nil
+	}
+	fullCoverage := existing.Count == 0 || existing.FirstOpenMs == 0 || req.StartTimeMs <= existing.FirstOpenMs
+	if !fullCoverage {
+		var existingMeta saasstore.DatasetMetadata
+		err := s.db.WithContext(ctx).
+			Where("instrument_id = ? AND data_source = ? AND symbol = ? AND interval = ?", req.InstrumentID, req.DataSource, req.Symbol, req.Interval).
+			First(&existingMeta).Error
+		if err == nil && existingMeta.PriceAdjustment == current && existingMeta.FullCoverage {
+			existingMeta.ImportedEndMs = maxInt64(existingMeta.ImportedEndMs, result.LastOpenMs)
+			return current, s.db.WithContext(ctx).Save(&existingMeta).Error
+		}
+		if err == nil {
+			return existingMeta.PriceAdjustment, nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return current, err
+		}
+		current = PriceAdjustmentLegacyUnknown
+	}
+	row := saasstore.DatasetMetadata{
+		InstrumentID:    req.InstrumentID,
+		DataSource:      req.DataSource,
+		Symbol:          req.Symbol,
+		Interval:        req.Interval,
+		PriceAdjustment: current,
+		ImportedStartMs: result.FirstOpenMs,
+		ImportedEndMs:   result.LastOpenMs,
+		FullCoverage:    fullCoverage,
+	}
+	err := s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "instrument_id"},
+			{Name: "data_source"},
+			{Name: "symbol"},
+			{Name: "interval"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{"price_adjustment", "imported_start_ms", "imported_end_ms", "full_coverage", "updated_at"}),
+	}).Create(&row).Error
+	return current, err
+}
+
+func (s *Service) datasetMetadataByInterval(ctx context.Context, instrument ResearchInstrument, intervals []string) (map[string]saasstore.DatasetMetadata, error) {
+	out := map[string]saasstore.DatasetMetadata{}
+	if s.db == nil || len(intervals) == 0 {
+		return out, nil
+	}
+	var rows []saasstore.DatasetMetadata
+	if err := s.db.WithContext(ctx).
+		Where("instrument_id = ? AND data_source = ? AND symbol = ? AND interval IN ?", instrument.ID, instrument.DataSource, instrument.Symbol, intervals).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		out[row.Interval] = row
+	}
+	return out, nil
 }
 
 func (s *Service) AllSummaries(ctx context.Context) ([]InstrumentSummary, error) {
@@ -516,6 +640,62 @@ func (s *Service) enrichFreshness(instrument ResearchInstrument, item *DatasetSu
 		return
 	}
 	item.IsFresh = item.Count > 0 && item.LastOpenMs >= expected
+}
+
+func (s *Service) enrichPriceAdjustment(instrument ResearchInstrument, item *DatasetSummary, metadata saasstore.DatasetMetadata) {
+	adjustment := metadata.PriceAdjustment
+	if adjustment == "" {
+		if item.Count == 0 {
+			adjustment = currentPriceAdjustment(instrument.DataSource, item.Interval)
+		} else {
+			adjustment = PriceAdjustmentLegacyUnknown
+		}
+	}
+	label, note := priceAdjustmentText(adjustment)
+	item.PriceAdjustment = adjustment
+	item.PriceAdjustmentLabel = label
+	item.PriceAdjustmentNote = note
+	item.NeedsFullReimport = item.Count > 0 && currentPriceAdjustment(instrument.DataSource, item.Interval) != adjustment
+	if !metadata.UpdatedAt.IsZero() {
+		item.PriceMetadataUpdatedAt = metadata.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+}
+
+func currentPriceAdjustment(source string, interval string) string {
+	if normalizeSource(source) != DataSourceYahoo {
+		return PriceAdjustmentRawExchange
+	}
+	switch normalizeInterval(interval) {
+	case "1d", "1w", "1M":
+		return PriceAdjustmentYahooAdjusted
+	default:
+		return PriceAdjustmentYahooIntraday
+	}
+}
+
+func priceAdjustmentLabel(value string) string {
+	label, _ := priceAdjustmentText(value)
+	return label
+}
+
+func priceAdjustmentText(value string) (string, string) {
+	switch value {
+	case PriceAdjustmentYahooAdjusted:
+		return "Yahoo 調整後價格", "使用 Yahoo adjclose 調整 OHLC，並回推修正大型公司行動斷層。"
+	case PriceAdjustmentYahooIntraday:
+		return "Yahoo 日內原始價格", "日內資料不做股息或拆分回推，適合短週期觀察。"
+	case PriceAdjustmentRawExchange:
+		return "交易所原始價格", "使用資料來源提供的原始 K 線價格。"
+	default:
+		return "舊口徑或未知", "這批資料是在口徑記錄機制建立前匯入，完整重匯後才會標成新版口徑。"
+	}
+}
+
+func maxInt64(a int64, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func normalizeYahooRowsForStorage(req ImportRequest, rows []BinanceKLine) []BinanceKLine {

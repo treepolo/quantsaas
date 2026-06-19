@@ -281,6 +281,24 @@ type KLine struct {
 	Volume       float64 `gorm:"type:numeric(30,10);not null"`
 }
 
+type DatasetMetadata struct {
+	ID              uint `gorm:"primaryKey"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	InstrumentID    string `gorm:"size:32;not null;index;uniqueIndex:idx_dataset_metadata_identity"`
+	DataSource      string `gorm:"size:32;not null;index;uniqueIndex:idx_dataset_metadata_identity"`
+	Symbol          string `gorm:"size:64;not null;index;uniqueIndex:idx_dataset_metadata_identity"`
+	Interval        string `gorm:"size:16;not null;index;uniqueIndex:idx_dataset_metadata_identity"`
+	PriceAdjustment string `gorm:"size:64;not null;default:legacy_unknown"`
+	ImportedStartMs int64  `gorm:"not null;default:0"`
+	ImportedEndMs   int64  `gorm:"not null;default:0"`
+	FullCoverage    bool   `gorm:"not null;default:false"`
+}
+
+func (DatasetMetadata) TableName() string {
+	return "dataset_metadata"
+}
+
 type DailyExecutionSnapshot struct {
 	ID           uint `gorm:"primaryKey"`
 	CreatedAt    time.Time

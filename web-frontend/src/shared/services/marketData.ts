@@ -15,6 +15,11 @@ export type DatasetSummary = {
   expected_latest_open_ms?: number;
   is_fresh?: boolean;
   updated_at?: string;
+  price_adjustment?: string;
+  price_adjustment_label?: string;
+  price_adjustment_note?: string;
+  needs_full_reimport?: boolean;
+  price_metadata_updated_at?: string;
 };
 
 export type ResearchInstrument = {
@@ -76,6 +81,8 @@ export type ImportKLinesResult = {
   preclose_snapshot_count?: number;
   first_open_ms?: number;
   last_open_ms?: number;
+  price_adjustment?: string;
+  price_adjustment_label?: string;
 };
 
 export type AutoUpdateResult = {

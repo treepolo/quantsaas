@@ -77,6 +77,7 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
         <InfoRow label="第一筆開始時間" value={formatMs(dataset.first_open_ms)} />
         <InfoRow label="最後一筆開始時間" value={formatMs(dataset.last_open_ms)} />
         <InfoRow label="理論最新開始時間" value={formatMs(dataset.expected_latest_open_ms)} />
+        <InfoRow label="價格口徑" value={dataset.price_adjustment_label ?? "未記錄"} />
         {dataset.interval === "1d" ? (
           <>
             <InfoRow label="收盤前快照" value={(dataset.preclose_snapshot_count ?? 0).toLocaleString("zh-TW")} />
@@ -84,6 +85,11 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
           </>
         ) : null}
       </div>
+      {dataset.needs_full_reimport ? (
+        <div className="mt-3 rounded-md border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-3 py-2 text-xs leading-5 text-[#fde68a]">
+          這批資料是舊口徑或未知口徑；若要使用新版 Yahoo 調整後價格，請用完整區間重新匯入。
+        </div>
+      ) : null}
     </Card>
   );
 }
@@ -136,6 +142,7 @@ export function MarketDataPage() {
   });
   const intervals = statusQuery.data?.supported_intervals ?? selected?.supported_intervals ?? ["1d"];
   const datasets = useMemo(() => statusQuery.data?.datasets ?? [], [statusQuery.data]);
+  const selectedDataset = datasets.find((dataset) => dataset.interval === interval);
 
   const importMutation = useMutation({
     mutationFn: () =>
@@ -184,6 +191,12 @@ export function MarketDataPage() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (selectedDataset?.needs_full_reimport) {
+      const ok = window.confirm(
+        `目前 ${selected?.display_name ?? selected?.symbol ?? instrumentId} 的 ${intervalLabels[interval] ?? interval} 是舊口徑或未知口徑。\n\n完整重匯會改變這個標的既有回測結果。確定要繼續匯入並改成新版價格口徑嗎？`
+      );
+      if (!ok) return;
+    }
     importMutation.mutate();
   }
 
@@ -307,6 +320,11 @@ export function MarketDataPage() {
             <CardDescription>手動補資料時使用；日 K 可另外匯入收盤前快照。</CardDescription>
           </div>
         </CardHeader>
+        {selectedDataset?.needs_full_reimport ? (
+          <div className="mb-4 rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-4 py-3 text-sm leading-6 text-[#fde68a]">
+            目前選取的資料集是「{selectedDataset.price_adjustment_label ?? "舊口徑或未知"}」。若要切換成新版 Yahoo 調整後價格，請把開始日期設到資料源能提供的最早日期再重新匯入；重匯後，使用這批資料的回測結果會改變。
+          </div>
+        ) : null}
         <form className="grid gap-4 md:grid-cols-5" onSubmit={submit}>
           <label>
             <span className="mb-2 block text-sm text-slate-300">研究商品</span>
@@ -350,6 +368,7 @@ export function MarketDataPage() {
         {importMutation.data ? (
           <div className="mt-4 rounded-lg border border-[#2dd4bf]/20 bg-[#2dd4bf]/10 px-4 py-3 text-sm text-[#99f6e4]">
             已匯入 {importMutation.data.fetched_bars.toLocaleString("zh-TW")} 筆，寫入 {importMutation.data.stored_bars.toLocaleString("zh-TW")} 筆。
+            {importMutation.data.price_adjustment_label ? ` 價格口徑：${importMutation.data.price_adjustment_label}。` : ""}
             {includePreclose ? ` 收盤前快照 ${Number(importMutation.data.preclose_snapshot_count ?? 0).toLocaleString("zh-TW")} 筆。` : ""}
           </div>
         ) : null}

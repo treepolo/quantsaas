@@ -47,6 +47,7 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		&BacktestRun{},
 		&ResearchInstrument{},
 		&KLine{},
+		&DatasetMetadata{},
 		&DailyExecutionSnapshot{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
