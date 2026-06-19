@@ -524,7 +524,7 @@ func normalizeYahooRowsForStorage(req ImportRequest, rows []BinanceKLine) []Bina
 	}
 	out := make([]BinanceKLine, 0, len(rows))
 	for _, row := range rows {
-		if row.OpenTime != marketDailyOpenMs(req.InstrumentID, row.OpenTime) {
+		if row.OpenTime != marketDailyOpenMs(req.InstrumentID, req.Symbol, row.OpenTime) {
 			continue
 		}
 		out = append(out, row)
@@ -566,7 +566,7 @@ func expectedDailyOpenMs(instrument ResearchInstrument, now time.Time) int64 {
 		target = target.AddDate(0, 0, -1)
 	}
 	target = previousBusinessDay(target)
-	return marketDailyOpenAt(instrument.ID, target).UnixMilli()
+	return marketDailyOpenAt(instrument.ID, instrument.Symbol, target).UnixMilli()
 }
 
 func previousBusinessDay(value time.Time) time.Time {
@@ -723,49 +723,55 @@ func buildPrecloseSnapshots(instrument ResearchInstrument, rows []BinanceKLine, 
 	return out, nil
 }
 
-func marketDailyOpenMs(instrumentID string, openTimeMs int64) int64 {
-	return marketDailyOpenAt(instrumentID, time.UnixMilli(openTimeMs)).UnixMilli()
+func marketDailyOpenMs(instrumentID string, symbol string, openTimeMs int64) int64 {
+	return marketDailyOpenAt(instrumentID, symbol, time.UnixMilli(openTimeMs)).UnixMilli()
 }
 
-func marketDailyOpenAt(instrumentID string, value time.Time) time.Time {
+func marketDailyOpenAt(instrumentID string, symbol string, value time.Time) time.Time {
 	switch instrumentID {
 	case InstrumentBTCUSDT:
 		utc := value.UTC()
 		return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
-	case "TWII":
+	}
+	if isTaiwanInstrument(instrumentID, symbol) {
 		loc, err := time.LoadLocation("Asia/Taipei")
 		if err != nil {
 			loc = time.FixedZone("Asia/Taipei", 8*3600)
 		}
 		local := value.In(loc)
 		return time.Date(local.Year(), local.Month(), local.Day(), 9, 0, 0, 0, loc).UTC()
-	default:
-		loc, err := time.LoadLocation("America/New_York")
-		if err != nil {
-			loc = time.FixedZone("America/New_York", -5*3600)
-		}
-		local := value.In(loc)
-		return time.Date(local.Year(), local.Month(), local.Day(), 9, 30, 0, 0, loc).UTC()
 	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.FixedZone("America/New_York", -5*3600)
+	}
+	local := value.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day(), 9, 30, 0, 0, loc).UTC()
+}
+
+func isTaiwanInstrument(instrumentID string, symbol string) bool {
+	id := strings.ToUpper(strings.TrimSpace(instrumentID))
+	sym := strings.ToUpper(strings.TrimSpace(symbol))
+	return id == "TWII" || strings.HasSuffix(id, ".TW") || strings.HasSuffix(sym, ".TW")
 }
 
 func precloseSchedule(instrumentID string) (*time.Location, int, int) {
 	switch instrumentID {
 	case InstrumentBTCUSDT:
 		return time.UTC, 0, 0
-	case "TWII":
+	}
+	if isTaiwanInstrument(instrumentID, "") {
 		loc, err := time.LoadLocation("Asia/Taipei")
 		if err != nil {
 			return time.FixedZone("Asia/Taipei", 8*3600), 13, 30
 		}
 		return loc, 13, 30
-	default:
-		loc, err := time.LoadLocation("America/New_York")
-		if err != nil {
-			return time.FixedZone("America/New_York", -5*3600), 16, 0
-		}
-		return loc, 16, 0
 	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		return time.FixedZone("America/New_York", -5*3600), 16, 0
+	}
+	return loc, 16, 0
 }
 
 func (s *Service) fetchBinanceKLines(ctx context.Context, symbol string, interval string, startTimeMs int64, endTimeMs int64) ([]BinanceKLine, error) {

@@ -74,6 +74,20 @@ func TestNormalizeYahooDailyRowsDropsRealtimeRows(t *testing.T) {
 	}
 }
 
+func TestNormalizeYahooDailyRowsKeepsTaiwanETFOpen(t *testing.T) {
+	rows := []BinanceKLine{
+		{OpenTime: time.Date(2026, 6, 18, 1, 0, 0, 0, time.UTC).UnixMilli(), Close: 189.75},
+		{OpenTime: time.Date(2026, 6, 18, 5, 33, 15, 0, time.UTC).UnixMilli(), Close: 190.10},
+	}
+	normalized := normalizeYahooRowsForStorage(ImportRequest{InstrumentID: "0050.TW", DataSource: DataSourceYahoo, Symbol: "0050.TW", Interval: "1d"}, rows)
+	if len(normalized) != 1 {
+		t.Fatalf("normalized len = %d, want 1", len(normalized))
+	}
+	if normalized[0].Close != 189.75 {
+		t.Fatalf("kept close = %f, want Taiwan regular daily close", normalized[0].Close)
+	}
+}
+
 func TestAutoUpdateIntervalsOnlyUsesHighTimeframes(t *testing.T) {
 	got := autoUpdateIntervals([]string{"1d", "1h", "1m", "1w", "1M", "1d"})
 	want := []string{"1d", "1w", "1M"}
