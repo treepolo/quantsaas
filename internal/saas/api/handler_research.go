@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"net/http"
 	"strconv"
@@ -91,7 +92,7 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 		"symbol":         instrument.Symbol,
 		"data_source":    instrument.DataSource,
 		"interval":       "1d",
-		"execution_mode": marketdata.ExecutionModeCloseSameBar,
+		"execution_mode": marketdata.ExecutionModeCloseNextOpen,
 	}
 	states := make([]gin.H, 0, 2)
 	for _, interval := range []string{"1d", "1w"} {
@@ -135,17 +136,14 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, instrument marketdata.ResearchInstrument, interval string, simulation positionSimulationQuery) gin.H {
 	base := gin.H{
 		"interval":       interval,
-		"execution_mode": marketdata.ExecutionModeCloseSameBar,
+		"execution_mode": marketdata.ExecutionModeCloseNextOpen,
 	}
-	var champion saasstore.GeneRecord
-	if err := h.db.WithContext(ctx).
-		Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
-			sigmoiddca.StrategyID, instrument.ID, instrument.DataSource, interval, marketdata.ExecutionModeCloseSameBar, saasstore.GeneRoleChampion).
-		Order("activated_at DESC NULLS LAST, created_at DESC").
-		First(&champion).Error; err != nil {
+	champion, err := h.loadMarketStateChampion(ctx, instrument, interval)
+	if err != nil {
 		base["status"] = "missing_champion"
 		return base
 	}
+	base["execution_mode"] = champion.ExecutionMode
 
 	var rows []saasstore.KLine
 	if err := h.db.WithContext(ctx).
@@ -208,7 +206,7 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 	base["parameter_values"] = paramValues
 	base["_rows"] = rows
 	base["_params"] = params
-	if model, ok := simulateResearchModel(rows, params, interval, simulation); ok {
+	if model, ok := simulateResearchModel(rows, params, interval, champion.ExecutionMode, simulation); ok {
 		base["model_simulation"] = model
 		if latestTarget, ok := model["latest_model_target_weight"]; ok {
 			base["target_weight"] = latestTarget
@@ -226,6 +224,35 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 	return base
 }
 
+func (h *ResearchStatusHandler) loadMarketStateChampion(ctx context.Context, instrument marketdata.ResearchInstrument, interval string) (saasstore.GeneRecord, error) {
+	var fallbackErr error
+	for _, executionMode := range marketStateExecutionModePriority() {
+		var champion saasstore.GeneRecord
+		err := h.db.WithContext(ctx).
+			Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
+				sigmoiddca.StrategyID, instrument.ID, instrument.DataSource, interval, executionMode, saasstore.GeneRoleChampion).
+			Order("activated_at DESC NULLS LAST, created_at DESC").
+			First(&champion).Error
+		if err == nil {
+			return champion, nil
+		}
+		if fallbackErr == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+			fallbackErr = err
+		}
+	}
+	if fallbackErr == nil {
+		fallbackErr = gorm.ErrRecordNotFound
+	}
+	return saasstore.GeneRecord{}, fallbackErr
+}
+
+func marketStateExecutionModePriority() []string {
+	return []string{
+		marketdata.ExecutionModeCloseNextOpen,
+		marketdata.ExecutionModeCloseSameBar,
+	}
+}
+
 func instrumentSupportsInterval(instrument marketdata.ResearchInstrument, interval string) bool {
 	for _, supported := range instrument.SupportedIntervals {
 		if supported == interval {
@@ -235,7 +262,7 @@ func instrumentSupportsInterval(instrument marketdata.ResearchInstrument, interv
 	return false
 }
 
-func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, interval string, settings positionSimulationQuery) (gin.H, bool) {
+func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, interval string, executionMode string, settings positionSimulationQuery) (gin.H, bool) {
 	if len(rows) == 0 {
 		return nil, false
 	}
@@ -247,10 +274,12 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 		spawn.Policy.MonthlyInjectUSDT = settings.MonthlyDCA
 	}
 	bars := barsFromRows(rows)
-	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, rows[0].OpenTime, interval, marketdata.ExecutionModeCloseSameBar, params.Chromosome, &spawn)
+	executionMode = marketdata.NormalizeExecutionMode(executionMode)
+	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, rows[0].OpenTime, interval, executionMode, params.Chromosome, &spawn)
 	baseline := quant.SimulateGhostDCAFrom(bars, rows[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
+		UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
 	})
 	points := mergeResearchModelPoints(path.NAV, baseline)
 	if len(points) == 0 {
