@@ -494,9 +494,6 @@ func normalizeSpawnPoint(spawn *quant.SpawnPoint) error {
 	if spawn.Policy.MonthlyInjectUSDT < 0 {
 		return errors.New("月度投入不可為負數")
 	}
-	if spawn.Policy.MonthlyInjectUSDT == 0 {
-		spawn.Policy.MonthlyInjectUSDT = 100
-	}
 	if spawn.Policy.ColdSealedBTC < 0 {
 		return errors.New("封存資產不可為負數")
 	}
