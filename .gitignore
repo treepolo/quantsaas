@@ -1,5 +1,7 @@
 config.agent.yaml
 *.env
+deploy/oracle/.env.cloud
+backups/
 *.exe
 bin/
 dist/
