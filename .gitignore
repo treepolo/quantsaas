@@ -2,6 +2,7 @@ config.agent.yaml
 *.env
 deploy/oracle/.env.cloud
 backups/
+/emergency/
 *.exe
 bin/
 dist/
