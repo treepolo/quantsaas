@@ -97,6 +97,31 @@ func TestReadManualPricesJSONL(t *testing.T) {
 	}
 }
 
+func TestMergeBarsReplacesSameDateAndSorts(t *testing.T) {
+	day1 := time.Date(2026, 6, 17, 13, 30, 0, 0, time.UTC).UnixMilli()
+	day2 := time.Date(2026, 6, 18, 13, 30, 0, 0, time.UTC).UnixMilli()
+	day3 := time.Date(2026, 6, 19, 13, 30, 0, 0, time.UTC).UnixMilli()
+	merged := MergeBars(
+		[]Bar{
+			NewBar(day2, 20, 21, 19, 20.5, 100),
+			NewBar(day1, 10, 11, 9, 10.5, 100),
+		},
+		[]Bar{
+			NewBar(day2, 30, 31, 29, 30.5, 200),
+			NewBar(day3, 40, 41, 39, 40.5, 300),
+		},
+	)
+	if len(merged) != 3 {
+		t.Fatalf("merged length = %d, want 3", len(merged))
+	}
+	if merged[0].Date != "2026-06-17" || merged[1].Date != "2026-06-18" || merged[2].Date != "2026-06-19" {
+		t.Fatalf("unexpected order: %#v", merged)
+	}
+	if merged[1].Close != 30.5 || merged[1].Volume != 200 {
+		t.Fatalf("same-date bar was not replaced: %#v", merged[1])
+	}
+}
+
 func testBars(n int) []Bar {
 	start := time.Date(2024, 1, 2, 14, 30, 0, 0, time.UTC)
 	bars := make([]Bar, 0, n)

@@ -1,0 +1,123 @@
+name: SOXL 緊急每日試算
+
+on:
+  schedule:
+    # 美股收盤後約 2.5 至 3.5 小時執行；遇美股假日會沿用最新可取得日線。
+    - cron: "30 23 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: soxl-emergency-signal
+  cancel-in-progress: false
+
+jobs:
+  update-signal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+          cache: true
+
+      - name: Check encrypted bundle and secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${EMERGENCY_BUNDLE_PASSWORD:-}" || {
+            echo "Missing repository secret: EMERGENCY_BUNDLE_PASSWORD" >&2
+            exit 1
+          }
+          test -f secure-backups/emergency/soxl-21.bundle.json.enc || {
+            echo "Missing secure-backups/emergency/soxl-21.bundle.json.enc" >&2
+            echo "請先在本機執行「匯出SOXL21加密備份到GitHub.bat」或「上傳SOXL21加密資料包到GitHub.bat」。" >&2
+            exit 1
+          }
+        env:
+          EMERGENCY_BUNDLE_PASSWORD: ${{ secrets.EMERGENCY_BUNDLE_PASSWORD }}
+
+      - name: Decrypt emergency bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p emergency secure-backups/emergency
+          go run ./cmd/emergency-signal decrypt \
+            --in secure-backups/emergency/soxl-21.bundle.json.enc \
+            --out emergency/soxl-21.bundle.json
+          if [ -f secure-backups/emergency/soxl-21-manual-prices.jsonl.enc ]; then
+            go run ./cmd/emergency-signal decrypt \
+              --in secure-backups/emergency/soxl-21-manual-prices.jsonl.enc \
+              --out emergency/soxl-21-manual-prices.jsonl
+          fi
+        env:
+          EMERGENCY_BUNDLE_PASSWORD: ${{ secrets.EMERGENCY_BUNDLE_PASSWORD }}
+
+      - name: Refresh SOXL daily data from Yahoo
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/emergency-signal refresh-yahoo \
+            --bundle emergency/soxl-21.bundle.json \
+            --symbol SOXL \
+            --interval 1d \
+            --lookback-days 14
+
+      - name: Calculate latest SOXL signal
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/emergency-signal latest \
+            --bundle emergency/soxl-21.bundle.json \
+            --manual-file emergency/soxl-21-manual-prices.jsonl \
+            --out-json secure-backups/emergency/soxl-21-latest.json \
+            --out-md secure-backups/emergency/soxl-21-latest.md
+          cat secure-backups/emergency/soxl-21-latest.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Re-encrypt updated emergency bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          go run ./cmd/emergency-signal encrypt \
+            --in emergency/soxl-21.bundle.json \
+            --out secure-backups/emergency/soxl-21.bundle.json.enc
+          if [ -f emergency/soxl-21-manual-prices.jsonl ]; then
+            go run ./cmd/emergency-signal encrypt \
+              --in emergency/soxl-21-manual-prices.jsonl \
+              --out secure-backups/emergency/soxl-21-manual-prices.jsonl.enc
+          fi
+        env:
+          EMERGENCY_BUNDLE_PASSWORD: ${{ secrets.EMERGENCY_BUNDLE_PASSWORD }}
+
+      - name: Upload latest result artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: soxl-21-latest
+          path: |
+            secure-backups/emergency/soxl-21-latest.json
+            secure-backups/emergency/soxl-21-latest.md
+
+      - name: Commit updated signal files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add secure-backups/emergency/soxl-21.bundle.json.enc
+          git add secure-backups/emergency/soxl-21-latest.json
+          git add secure-backups/emergency/soxl-21-latest.md
+          if [ -f secure-backups/emergency/soxl-21-manual-prices.jsonl.enc ]; then
+            git add secure-backups/emergency/soxl-21-manual-prices.jsonl.enc
+          fi
+          if git diff --cached --quiet; then
+            echo "No SOXL emergency signal changes to commit."
+          else
+            git commit -m "chore: update SOXL emergency signal"
+            git push
+          fi

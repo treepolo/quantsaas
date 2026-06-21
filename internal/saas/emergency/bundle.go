@@ -151,6 +151,56 @@ func SaveBundle(path string, bundle Bundle) error {
 	return os.WriteFile(path, append(raw, '\n'), 0o600)
 }
 
+func NewBar(openTimeMs int64, open float64, high float64, low float64, close float64, volume float64) Bar {
+	return Bar{
+		Date:       time.UnixMilli(openTimeMs).UTC().Format("2006-01-02"),
+		OpenTimeMs: openTimeMs,
+		Open:       open,
+		High:       high,
+		Low:        low,
+		Close:      close,
+		Volume:     volume,
+	}
+}
+
+func LatestBarOpenTimeMs(bars []Bar) int64 {
+	latest := int64(0)
+	for _, bar := range bars {
+		if bar.OpenTimeMs > latest {
+			latest = bar.OpenTimeMs
+		}
+	}
+	return latest
+}
+
+func MergeBars(base []Bar, incoming []Bar) []Bar {
+	byDate := map[string]Bar{}
+	for _, bar := range base {
+		if bar.Close <= 0 {
+			continue
+		}
+		date := barDate(bar)
+		bar.Date = date
+		byDate[date] = bar
+	}
+	for _, bar := range incoming {
+		if bar.Close <= 0 {
+			continue
+		}
+		date := barDate(bar)
+		bar.Date = date
+		byDate[date] = bar
+	}
+	out := make([]Bar, 0, len(byDate))
+	for _, bar := range byDate {
+		out = append(out, bar)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].OpenTimeMs < out[j].OpenTimeMs
+	})
+	return out
+}
+
 func (b Bundle) Validate() error {
 	if b.Version == 0 {
 		return errors.New("bundle version is required")

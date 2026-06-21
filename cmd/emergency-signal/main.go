@@ -8,9 +8,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"quantsaas/internal/saas/config"
 	"quantsaas/internal/saas/emergency"
+	"quantsaas/internal/saas/marketdata"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -34,6 +36,8 @@ func run(args []string) error {
 		return runCalc(args[1:])
 	case "latest":
 		return runLatest(args[1:])
+	case "refresh-yahoo":
+		return runRefreshYahoo(args[1:])
 	case "encrypt":
 		return runEncrypt(args[1:])
 	case "decrypt":
@@ -120,6 +124,79 @@ func runLatest(args []string) error {
 		return err
 	}
 	return calculateAndWrite(bundle, *manualPath, *outJSON, *outMD, *jsonOnly)
+}
+
+func runRefreshYahoo(args []string) error {
+	fs := flag.NewFlagSet("refresh-yahoo", flag.ContinueOnError)
+	bundlePath := fs.String("bundle", "emergency/soxl-21.bundle.json", "要更新的緊急資料包")
+	outPath := fs.String("out", "", "更新後輸出路徑，留空時覆蓋 --bundle")
+	symbol := fs.String("symbol", "", "Yahoo 代碼，留空時使用資料包 symbol")
+	interval := fs.String("interval", "", "Yahoo 週期，留空時使用資料包 interval")
+	lookbackDays := fs.Int("lookback-days", 10, "從既有最後一筆往回重抓幾天，以修正晚到或還原價調整")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	bundle, err := emergency.LoadBundle(*bundlePath)
+	if err != nil {
+		return err
+	}
+	resolvedSymbol := strings.TrimSpace(*symbol)
+	if resolvedSymbol == "" {
+		resolvedSymbol = bundle.Symbol
+	}
+	resolvedInterval := strings.TrimSpace(*interval)
+	if resolvedInterval == "" {
+		resolvedInterval = bundle.Interval
+	}
+	if resolvedSymbol == "" || resolvedInterval == "" {
+		return fmt.Errorf("refresh-yahoo 需要 symbol 與 interval")
+	}
+	if resolvedInterval != "1d" {
+		return fmt.Errorf("GitHub Actions 緊急試算目前只支援日線更新，收到 interval=%s", resolvedInterval)
+	}
+	out := strings.TrimSpace(*outPath)
+	if out == "" {
+		out = *bundlePath
+	}
+
+	latest := emergency.LatestBarOpenTimeMs(bundle.Bars)
+	now := time.Now().UTC()
+	start := now.AddDate(0, 0, -30).UnixMilli()
+	if latest > 0 {
+		start = time.UnixMilli(latest).UTC().AddDate(0, 0, -*lookbackDays).UnixMilli()
+	}
+	end := now.AddDate(0, 0, 2).UnixMilli()
+
+	client := marketdata.NewYahooClient(marketdata.DefaultYahooBaseURL)
+	rows, err := client.FetchKLines(context.Background(), resolvedSymbol, resolvedInterval, start, end)
+	if err != nil {
+		return fmt.Errorf("抓取 Yahoo 最新資料失敗: %w", err)
+	}
+	incoming := make([]emergency.Bar, 0, len(rows))
+	for _, row := range rows {
+		if row.Close <= 0 {
+			continue
+		}
+		incoming = append(incoming, emergency.NewBar(row.OpenTime, row.Open, row.High, row.Low, row.Close, row.Volume))
+	}
+	beforeCount := len(bundle.Bars)
+	beforeLatest := emergency.LatestBarOpenTimeMs(bundle.Bars)
+	bundle.Bars = emergency.MergeBars(bundle.Bars, incoming)
+	afterLatest := emergency.LatestBarOpenTimeMs(bundle.Bars)
+	if err := ensureParentDir(out); err != nil {
+		return err
+	}
+	if err := emergency.SaveBundle(out, bundle); err != nil {
+		return err
+	}
+
+	fmt.Printf("Yahoo 更新完成：抓到 %d 筆，資料包 %d -> %d 筆\n", len(incoming), beforeCount, len(bundle.Bars))
+	if afterLatest > beforeLatest {
+		fmt.Printf("最新日線：%s\n", time.UnixMilli(afterLatest).UTC().Format("2006-01-02"))
+	} else if afterLatest > 0 {
+		fmt.Printf("最新日線未變：%s\n", time.UnixMilli(afterLatest).UTC().Format("2006-01-02"))
+	}
+	return nil
 }
 
 func runEncrypt(args []string) error {
@@ -241,6 +318,7 @@ func usage() error {
   emergency-signal export --parameter-id 21 --out emergency/soxl-21.bundle.json
   emergency-signal latest --bundle emergency/soxl-21.bundle.json
   emergency-signal calc --bundle emergency/soxl-21.bundle.json --date 2026-06-22 --close 28.34
+  emergency-signal refresh-yahoo --bundle emergency/soxl-21.bundle.json --symbol SOXL
   emergency-signal encrypt --in emergency/soxl-21.bundle.json --out secure-backups/emergency/soxl-21.bundle.json.enc
   emergency-signal decrypt --in secure-backups/emergency/soxl-21.bundle.json.enc --out emergency/soxl-21.bundle.json
 
