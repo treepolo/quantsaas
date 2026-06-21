@@ -3,6 +3,7 @@
 $root = Get-ProjectRoot
 Set-Location $root
 Ensure-PlainBundle -Root $root
+Ensure-ManualPrices -Root $root
 
 Invoke-GoTool -Root $root -Arguments @(
     "latest",

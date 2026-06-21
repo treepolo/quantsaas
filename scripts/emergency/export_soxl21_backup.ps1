@@ -30,6 +30,9 @@ Invoke-GoTool -Root $root -Passphrase $passphrase -Arguments @(
     "--out", "secure-backups/emergency/soxl-21.bundle.json.enc"
 )
 
+Ensure-ManualPrices -Root $root -Passphrase $passphrase
+Encrypt-ManualPrices -Root $root -Passphrase $passphrase
+
 Write-Host ""
 Write-Host "Generating latest signal..."
 Invoke-GoTool -Root $root -Arguments @(
@@ -40,17 +43,11 @@ Invoke-GoTool -Root $root -Arguments @(
 if ($Push) {
     Write-Host ""
     Write-Host "Committing and pushing encrypted backup to GitHub..."
-    git add secure-backups/emergency/soxl-21.bundle.json.enc
-    git diff --cached --quiet
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "Encrypted backup did not change; no commit needed."
-    } else {
-        git commit -m "Update encrypted SOXL emergency bundle"
-        git push
-    }
+    Push-EncryptedEmergencyBackups -Root $root -Message "Update encrypted SOXL emergency backups"
 }
 
 Write-Host ""
 Write-Host "Done."
 Write-Host "Plain bundle: emergency\soxl-21.bundle.json (not committed)"
 Write-Host "Encrypted backup: secure-backups\emergency\soxl-21.bundle.json.enc"
+Write-Host "Encrypted manual prices: secure-backups\emergency\soxl-21-manual-prices.jsonl.enc"
