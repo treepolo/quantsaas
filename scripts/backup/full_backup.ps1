@@ -85,7 +85,7 @@ Set-Content -Path (Join-Path $stateDir "last-full-at.txt") -Encoding UTF8 -Value
 Set-Content -Path (Join-Path $stateDir "last-incremental-at.txt") -Encoding UTF8 -Value $now
 
 if ($Upload) {
-    Publish-BackupToCloud -FilePath $encryptedPath -Remote $Remote
+    Publish-BackupToCloud -Root $root -FilePath $encryptedPath -Remote $Remote
 }
 
 Write-Host ""

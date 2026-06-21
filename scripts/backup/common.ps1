@@ -182,6 +182,7 @@ function Unprotect-BackupArchive {
 
 function Publish-BackupToCloud {
     param(
+        [string]$Root,
         [string]$FilePath,
         [string]$Remote
     )
@@ -189,15 +190,30 @@ function Publish-BackupToCloud {
         Write-Host "未設定 QUANTSAAS_BACKUP_REMOTE，已只保留本機加密備份。"
         return
     }
-    $rclone = Get-Command rclone -ErrorAction SilentlyContinue
-    if ($null -eq $rclone) {
-        throw "已設定雲端目的地，但找不到 rclone。請先安裝並設定 rclone，或清空 QUANTSAAS_BACKUP_REMOTE。"
+    $rclone = Get-RclonePath -Root $Root
+    if ([string]::IsNullOrWhiteSpace($rclone)) {
+        throw "已設定雲端目的地，但找不到 rclone。請先安裝 rclone，或清空 QUANTSAAS_BACKUP_REMOTE。"
     }
-    rclone copy $FilePath $Remote
+    & $rclone copy $FilePath $Remote
     if ($LASTEXITCODE -ne 0) {
         throw "rclone upload failed, exit code: $LASTEXITCODE"
     }
     Write-Host "已上傳到雲端：$Remote"
+}
+
+function Get-RclonePath {
+    param(
+        [string]$Root
+    )
+    $local = Join-Path $Root ".tools\rclone\rclone.exe"
+    if (Test-Path $local) {
+        return $local
+    }
+    $command = Get-Command rclone -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        return $command.Source
+    }
+    return ""
 }
 
 function Write-JsonFile {

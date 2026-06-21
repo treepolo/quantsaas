@@ -75,7 +75,7 @@ New-Item -ItemType Directory -Force -Path $stateDir | Out-Null
 Set-Content -Path $statePath -Encoding UTF8 -Value (Get-Date).ToUniversalTime().ToString("o")
 
 if ($Upload) {
-    Publish-BackupToCloud -FilePath $encryptedPath -Remote $Remote
+    Publish-BackupToCloud -Root $root -FilePath $encryptedPath -Remote $Remote
 }
 
 Write-Host ""
