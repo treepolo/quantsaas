@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SOXL21 離線試算</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #1d2430;
+      --muted: #667085;
+      --line: #d8dee8;
+      --accent: #0f766e;
+      --accent-ink: #ffffff;
+      --danger: #b42318;
+      --ok: #067647;
+      --warn: #b54708;
+      --shadow: 0 10px 30px rgba(16, 24, 40, 0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111418;
+        --panel: #181d24;
+        --ink: #edf1f7;
+        --muted: #a3adbd;
+        --line: #313946;
+        --accent: #14b8a6;
+        --accent-ink: #062522;
+        --shadow: 0 14px 38px rgba(0, 0, 0, 0.34);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.5;
+      letter-spacing: 0;
+    }
+    main {
+      width: min(1100px, calc(100% - 28px));
+      margin: 0 auto;
+      padding: 22px 0 42px;
+    }
+    header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 18px;
+    }
+    h1 {
+      font-size: 28px;
+      line-height: 1.15;
+      margin: 0;
+      font-weight: 760;
+    }
+    h2 {
+      margin: 0 0 14px;
+      font-size: 18px;
+      line-height: 1.25;
+    }
+    .sub {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 16px;
+      align-items: start;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .result {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 86px;
+    }
+    .metric strong {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      font-weight: 620;
+      margin-bottom: 6px;
+    }
+    .metric span {
+      display: block;
+      font-size: 25px;
+      line-height: 1.1;
+      font-weight: 780;
+      word-break: break-word;
+    }
+    .metric small {
+      display: block;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 6px;
+      font-weight: 650;
+    }
+    input[type="text"],
+    input[type="number"],
+    input[type="password"],
+    input[type="date"],
+    input[type="file"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--ink);
+      border-radius: 7px;
+      padding: 10px 11px;
+      font: inherit;
+      min-height: 42px;
+    }
+    input[type="file"] { padding: 8px; }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .stack { display: grid; gap: 10px; }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    button {
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--ink);
+      border-radius: 7px;
+      min-height: 40px;
+      padding: 9px 12px;
+      font: inherit;
+      font-weight: 680;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--accent-ink);
+    }
+    button.danger { color: var(--danger); }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+    .status {
+      border-left: 4px solid var(--line);
+      padding: 10px 12px;
+      background: color-mix(in srgb, var(--panel), var(--bg) 35%);
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 14px;
+      margin: 0 0 14px;
+      white-space: pre-wrap;
+    }
+    .status.ok { border-left-color: var(--ok); color: var(--ok); }
+    .status.warn { border-left-color: var(--warn); color: var(--warn); }
+    .status.error { border-left-color: var(--danger); color: var(--danger); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 6px;
+      text-align: left;
+      vertical-align: middle;
+    }
+    th { color: var(--muted); font-size: 12px; }
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 9px;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .footer {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 14px;
+    }
+    @media (max-width: 820px) {
+      main { width: min(100% - 20px, 720px); padding-top: 16px; }
+      header { display: block; }
+      .grid, .result, .row { grid-template-columns: 1fr; }
+      h1 { font-size: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>SOXL21 離線試算</h1>
+        <p class="sub">離線讀取加密資料包與手動價格紀錄，計算最新基準模型目標權重。</p>
+      </div>
+      <span id="storeBadge" class="pill">尚未載入資料</span>
+    </header>
+
+    <div id="message" class="status warn">請先匯入資料包，或使用此瀏覽器已保存的資料。</div>
+
+    <section class="panel">
+      <h2>最新結果</h2>
+      <div class="result">
+        <div class="metric">
+          <strong>最新日期</strong>
+          <span id="latestDate">--</span>
+          <small id="latestTime">--</small>
+        </div>
+        <div class="metric">
+          <strong>最新收盤價</strong>
+          <span id="latestClose">--</span>
+          <small id="sourceSummary">--</small>
+        </div>
+        <div class="metric">
+          <strong>市場狀態</strong>
+          <span id="marketState">--</span>
+          <small>依日線收盤資料計算</small>
+        </div>
+        <div class="metric">
+          <strong>基準模型目標權重</strong>
+          <span id="targetWeight">--</span>
+          <small id="targetDelta">--</small>
+        </div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <h2>資料匯入</h2>
+        <div class="stack">
+          <div>
+            <label for="password">加密密碼</label>
+            <input id="password" type="password" autocomplete="current-password">
+          </div>
+          <div class="row">
+            <div>
+              <label for="bundleFile">加密資料包或明文資料包</label>
+              <input id="bundleFile" type="file" accept=".json,.enc,application/json">
+            </div>
+            <div>
+              <label for="manualFile">加密手動價格或明文 JSONL</label>
+              <input id="manualFile" type="file" accept=".jsonl,.enc,.json,text/plain,application/json">
+            </div>
+          </div>
+          <div class="actions">
+            <button class="primary" id="importBundle">匯入資料包</button>
+            <button id="importManual">匯入手動價格</button>
+            <button id="recalculate">重新試算</button>
+            <button class="danger" id="clearLocal">清除此瀏覽器資料</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>手動價格</h2>
+        <div class="row">
+          <div>
+            <label for="manualDate">日期</label>
+            <input id="manualDate" type="date">
+          </div>
+          <div>
+            <label for="manualClose">收盤價</label>
+            <input id="manualClose" type="number" min="0" step="0.000001" inputmode="decimal">
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="addManual">新增/覆蓋</button>
+          <button id="exportManualPlain">匯出明文紀錄</button>
+          <button id="exportManualEncrypted">匯出加密紀錄</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <h2>手動紀錄</h2>
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>收盤價</th>
+              <th>來源</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="manualRows">
+            <tr><td colspan="4">尚無手動價格</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="footer">此頁面會把資料存於目前瀏覽器。加密備份仍需自行保存或上傳。</p>
+    </section>
+  </main>
+
+  <script>
+    "use strict";
+
+    const STORAGE_BUNDLE = "quantsaas.soxl21.bundle.v1";
+    const STORAGE_MANUAL = "quantsaas.soxl21.manual.v1";
+    const STORAGE_RESULT = "quantsaas.soxl21.result.v1";
+
+    const constants = {
+      microSignalEMABars: 21,
+      microSignalStdDevBars: 21,
+      microVolRatioShortBars: 16,
+      microVolRatioLongBars: 112,
+      minStrategyBars: 113
+    };
+
+    const hardBounds = {
+      micro_reserve_pct: [0.10, 0.45],
+      beta: [0.20, 8.00],
+      gamma: [0.00, 5.00],
+      w_mean: [-3.00, 3.00],
+      w_momentum: [-3.00, 3.00],
+      w_breakout: [-3.00, 3.00],
+      dust_usd: [5.00, 25.00],
+      wedge_delta_threshold: [0.01, 0.15],
+      wedge_vol_ratio_threshold: [1.10, 2.50],
+      macro_bear_multiplier: [1.00, 2.50],
+      macro_bull_multiplier: [0.20, 1.00],
+      extra_deploy_pct: [0.00, 0.60],
+      soft_release_months: [3, 36],
+      soft_release_pct: [0.00, 0.25],
+      hard_release_max_pct: [0.00, 0.50]
+    };
+
+    const defaultChromosome = {
+      micro_reserve_pct: 0.25,
+      beta: 2.00,
+      gamma: 1.00,
+      w_mean: 1.00,
+      w_momentum: -0.50,
+      w_breakout: 0.75,
+      dust_usd: 10.10,
+      wedge_delta_threshold: 0.04,
+      wedge_vol_ratio_threshold: 1.60,
+      macro_bear_multiplier: 1.40,
+      macro_bull_multiplier: 0.60,
+      extra_deploy_pct: 0.20,
+      soft_release_months: 12,
+      soft_release_pct: 0.08,
+      hard_release_max_pct: 0.15
+    };
+
+    const state = {
+      bundle: loadJSON(STORAGE_BUNDLE),
+      manual: loadJSON(STORAGE_MANUAL) || [],
+      result: loadJSON(STORAGE_RESULT)
+    };
+
+    const el = id => document.getElementById(id);
+
+    function loadJSON(key) {
+      try {
+        const raw = localStorage.getItem(key);
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function saveJSON(key, value) {
+      localStorage.setItem(key, JSON.stringify(value));
+    }
+
+    function setMessage(text, type = "warn") {
+      const node = el("message");
+      node.textContent = text;
+      node.className = `status ${type}`;
+    }
+
+    function clamp(v, lo, hi) {
+      if (lo > hi) [lo, hi] = [hi, lo];
+      return Math.max(lo, Math.min(hi, v));
+    }
+
+    function roundToUSDT(v) {
+      return Math.round(v * 100) / 100;
+    }
+
+    function tail(values, period) {
+      if (!values.length) return [];
+      if (!period || period >= values.length) return values;
+      return values.slice(values.length - period);
+    }
+
+    function ema(values, period) {
+      if (!values.length) return 0;
+      if (period <= 1) return values[values.length - 1];
+      const alpha = 2 / (period + 1);
+      let out = values[0];
+      for (let i = 1; i < values.length; i++) {
+        out = alpha * values[i] + (1 - alpha) * out;
+      }
+      return out;
+    }
+
+    function stdDev(values, period) {
+      const window = tail(values, period);
+      if (window.length < 2) return 0;
+      const mean = window.reduce((sum, v) => sum + v, 0) / window.length;
+      const variance = window.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / (window.length - 1);
+      return Math.sqrt(variance);
+    }
+
+    function mavAbsChange(closes, period) {
+      const window = tail(closes, period);
+      if (window.length < 2) return 0;
+      let sum = 0;
+      for (let i = 1; i < window.length; i++) sum += Math.abs(window[i] - window[i - 1]);
+      return sum / (window.length - 1);
+    }
+
+    function rollingHigh(values, period) {
+      const window = tail(values, period);
+      if (!window.length) return 0;
+      return Math.max(...window);
+    }
+
+    function computeVolatilityRatio(closes) {
+      if (closes.length < 2) return 1;
+      const short = mavAbsChange(closes, constants.microVolRatioShortBars);
+      const long = mavAbsChange(closes, constants.microVolRatioLongBars);
+      if (short <= 0 || long <= 0) return 1;
+      return clamp(short / long, 0.1, 3.0);
+    }
+
+    function computeMarketState(closes) {
+      if (closes.length < constants.microSignalEMABars + 1) {
+        return { state: "QUIET", betaMultiplier: 0.65, isQuiet: true, volatilityRatio: 1, trendSlope: 0, drawdownRatio: 0 };
+      }
+      const price = closes[closes.length - 1];
+      const emaFast = ema(closes, constants.microSignalEMABars);
+      const emaSlow = ema(closes, constants.microVolRatioLongBars);
+      const trendSlope = emaSlow > 0 ? emaFast / emaSlow - 1 : 0;
+      const prev = closes[closes.length - 1 - constants.microSignalEMABars];
+      const logReturnN = prev > 0 ? Math.log(price / prev) : 0;
+      const emaDeviation = emaFast > 0 ? price / emaFast - 1 : 0;
+      const volatilityRatio = computeVolatilityRatio(closes);
+      const high = rollingHigh(closes, constants.microVolRatioLongBars);
+      const drawdownRatio = high > 0 ? price / high - 1 : 0;
+      if (isShock(closes, volatilityRatio)) {
+        return { state: "SHOCK", betaMultiplier: 1.4, isQuiet: false, volatilityRatio, trendSlope, drawdownRatio };
+      }
+      if (trendSlope < -0.03 || drawdownRatio < -0.20) {
+        return { state: "BEAR_TREND", betaMultiplier: 1.15, isQuiet: false, volatilityRatio, trendSlope, drawdownRatio };
+      }
+      if (trendSlope > 0.03 && logReturnN > 0) {
+        return { state: "BULL_TREND", betaMultiplier: 1.0, isQuiet: false, volatilityRatio, trendSlope, drawdownRatio };
+      }
+      const quiet = volatilityRatio < 0.75 && Math.abs(emaDeviation) < 0.015;
+      return {
+        state: "QUIET",
+        betaMultiplier: quiet ? 0.65 : 1.0,
+        isQuiet: quiet,
+        volatilityRatio,
+        trendSlope,
+        drawdownRatio
+      };
+    }
+
+    function isShock(closes, volatilityRatio) {
+      if (volatilityRatio > 1.8) return true;
+      if (closes.length < constants.microSignalStdDevBars + 2) return false;
+      const logReturns = [];
+      for (let i = 1; i < closes.length; i++) {
+        if (closes[i - 1] > 0 && closes[i] > 0) logReturns.push(Math.log(closes[i] / closes[i - 1]));
+      }
+      if (logReturns.length < 2) return false;
+      const latest = Math.abs(logReturns[logReturns.length - 1]);
+      const sigma = stdDev(logReturns, constants.microSignalStdDevBars);
+      return sigma > 0 && latest > 2.5 * sigma;
+    }
+
+    function computeMicroSignal(closes, c) {
+      if (closes.length < constants.microSignalEMABars + 1) return null;
+      const price = closes[closes.length - 1];
+      if (price <= 0) return null;
+      const basis = ema(closes, constants.microSignalEMABars);
+      if (basis <= 0) return null;
+      const logReturns = [];
+      for (let i = 1; i < closes.length; i++) {
+        if (closes[i - 1] > 0 && closes[i] > 0) logReturns.push(Math.log(closes[i] / closes[i - 1]));
+      }
+      const sigma = Math.max(stdDev(logReturns, constants.microSignalStdDevBars), 0.001);
+      if (sigma <= 0) return null;
+      const meanReversion = (price / basis - 1) / sigma;
+      const prev = closes[closes.length - 1 - constants.microSignalEMABars];
+      const momentum = prev > 0 ? Math.log(price / prev) : 0;
+      const high = rollingHigh(closes, constants.microVolRatioLongBars);
+      const breakout = high > 0 ? price / high - 1 : 0;
+      return c.w_mean * meanReversion + c.w_momentum * momentum + c.w_breakout * breakout;
+    }
+
+    function computeMicroDecision(closes, price, portfolio, totalEquity, spendableUSDT, c, market) {
+      if (price <= 0 || totalEquity <= 0) return emptyDecision();
+      const signal = computeMicroSignal(closes, c);
+      if (signal === null) return emptyDecision();
+      const volatilityRatio = market.volatilityRatio > 0 ? market.volatilityRatio : computeVolatilityRatio(closes);
+      const dust = c.dust_usd > 0 ? c.dust_usd : 10.1;
+      const marketBeta = market.betaMultiplier > 0 ? market.betaMultiplier : 1;
+      const currentWeight = clamp((portfolio.floatAsset || 0) * price / totalEquity, 0, 1);
+      const effectiveBeta = Math.max(0.01, c.beta * marketBeta);
+      const inventoryBias = currentWeight - 0.5;
+      const exponent = effectiveBeta * signal + c.gamma * inventoryBias;
+      const targetWeight = clamp(1 / (1 + Math.exp(exponent)), 0, 1);
+      const deltaWeight = targetWeight - currentWeight;
+      const theoreticalUSD = deltaWeight * totalEquity;
+      let [orderUSD, forced] = filterMicroOrder(theoreticalUSD, deltaWeight, volatilityRatio, market.isQuiet, c, dust);
+      let action = "";
+      if (orderUSD > 0) {
+        action = "BUY";
+        orderUSD = Math.min(orderUSD, spendableUSDT);
+      } else if (orderUSD < 0) {
+        action = "SELL";
+      }
+      if (Math.abs(orderUSD) < dust && !forced) {
+        orderUSD = 0;
+        action = "";
+      }
+      return { action, signal, currentWeight, targetWeight, deltaWeight, theoreticalUSD, orderUSDT: roundToUSDT(orderUSD), volatilityRatio };
+    }
+
+    function emptyDecision() {
+      return { action: "", signal: 0, currentWeight: 0, targetWeight: 0, deltaWeight: 0, theoreticalUSD: 0, orderUSDT: 0, volatilityRatio: 0 };
+    }
+
+    function filterMicroOrder(theoreticalUSD, deltaWeight, volatilityRatio, isQuiet, c, dust) {
+      const absUSD = Math.abs(theoreticalUSD);
+      if (absUSD >= dust) return [theoreticalUSD, false];
+      if (absUSD <= 0 || isQuiet) return [0, false];
+      const wedgeDelta = c.wedge_delta_threshold > 0 ? c.wedge_delta_threshold : 0.04;
+      const wedgeVol = c.wedge_vol_ratio_threshold > 0 ? c.wedge_vol_ratio_threshold : 1.6;
+      const breaksWedge = Math.abs(deltaWeight) >= wedgeDelta || volatilityRatio >= wedgeVol;
+      if (!breaksWedge) return [0, false];
+      return [theoreticalUSD > 0 ? dust : -dust, true];
+    }
+
+    function step(input, params) {
+      const runtime = input.runtime || {};
+      if (input.closes.length < constants.minStrategyBars || input.timestamps.length === 0) {
+        return { runtime, diagnostics: {}, intents: [], transfers: [] };
+      }
+      const c = clampChromosome(params.chromosome);
+      const price = input.closes[input.closes.length - 1];
+      if (price <= 0) return { runtime, diagnostics: {}, intents: [], transfers: [] };
+      let totalEquity = input.portfolio.totalEquity;
+      if (totalEquity <= 0) {
+        totalEquity = input.portfolio.cash + (input.portfolio.deadAsset + input.portfolio.floatAsset + input.portfolio.coldAsset) * price;
+      }
+      const reserveFloor = totalEquity * c.micro_reserve_pct;
+      const spendableUSDT = Math.max(0, input.portfolio.cash - reserveFloor);
+      const market = computeMarketState(input.closes);
+      const macro = computeMacroDecision(input, runtime, params, market, spendableUSDT, reserveFloor, c);
+      const micro = computeMicroDecision(input.closes, price, input.portfolio, totalEquity, spendableUSDT, c, market);
+      const transfers = computeReleases(input.portfolio, price, micro, c, market);
+      const intents = [];
+      if (macro.intent) intents.push(macro.intent);
+      if (micro.action && micro.orderUSDT !== 0) {
+        intents.push(micro.action === "BUY"
+          ? { action: "BUY", lotType: "FLOATING", amountUSDT: Math.abs(micro.orderUSDT) }
+          : { action: "SELL", lotType: "FLOATING", qtyAsset: Math.abs(micro.orderUSDT) / price });
+      }
+      const nextRuntime = {
+        lastProcessedBarTime: input.timestamps[input.timestamps.length - 1],
+        lastMacroYearMonth: macro.yearMonth || runtime.lastMacroYearMonth || "",
+        lastMarketState: market.state
+      };
+      return {
+        runtime: nextRuntime,
+        diagnostics: {
+          target_weight: micro.targetWeight,
+          current_weight: micro.currentWeight,
+          delta_weight: micro.deltaWeight,
+          signal: micro.signal,
+          volatility_ratio: micro.volatilityRatio,
+          market_trend_slope: market.trendSlope,
+          market_drawdown: market.drawdownRatio
+        },
+        intents,
+        transfers
+      };
+    }
+
+    function computeMacroDecision(input, runtime, params, market, spendableUSDT, reserveFloor, c) {
+      const ts = input.timestamps[input.timestamps.length - 1];
+      const ym = yearMonthFromMs(ts);
+      if (!ym || ym === (runtime.lastMacroYearMonth || "")) return { yearMonth: ym, intent: null };
+      const multiplier = macroRegimeMultiplier(market, c);
+      const monthly = params.spawn.policy.monthly_inject_usdt || 0;
+      const extraDeploy = Math.max(0, input.portfolio.cash - reserveFloor) * clamp(c.extra_deploy_pct, 0, 0.60);
+      const budget = monthly * multiplier + extraDeploy;
+      const amount = roundToUSDT(Math.min(budget, spendableUSDT));
+      const dust = c.dust_usd > 0 ? c.dust_usd : 10.1;
+      if (amount < dust) return { yearMonth: ym, intent: null };
+      return { yearMonth: ym, intent: { action: "BUY", lotType: "BASE", amountUSDT: amount } };
+    }
+
+    function macroRegimeMultiplier(market, c) {
+      const bear = c.macro_bear_multiplier || 1.4;
+      const bull = c.macro_bull_multiplier || 0.6;
+      if (market.state === "BULL_TREND") return clamp(bull, 0.2, 1.0);
+      if (market.state === "BEAR_TREND") return clamp(bear, 1.0, 2.5);
+      if (market.state === "SHOCK") return market.drawdownRatio < -0.20 ? 1.8 : 1.0;
+      return 1.0;
+    }
+
+    function computeReleases(portfolio, price, micro, c, market) {
+      if (price <= 0 || micro.action !== "SELL" || micro.orderUSDT >= 0) return [];
+      const targetSell = Math.abs(micro.orderUSDT) / price;
+      const transfers = [];
+      if (market.state === "BULL_TREND" || market.state === "SHOCK") {
+        const released = Math.min((portfolio.deadAsset || 0) * c.soft_release_pct, targetSell);
+        if (released > 0) transfers.push({ amount: released });
+      }
+      const releasedSum = transfers.reduce((sum, t) => sum + t.amount, 0);
+      const availableFloat = (portfolio.floatAsset || 0) + releasedSum;
+      if (availableFloat >= targetSell) return transfers;
+      const required = targetSell - availableFloat;
+      const hard = Math.min((portfolio.deadAsset || 0) * c.hard_release_max_pct, required);
+      if (hard > 0) transfers.push({ amount: hard });
+      return transfers;
+    }
+
+    function applyOutput(portfolio, output, price) {
+      const next = { ...portfolio };
+      for (const transfer of output.transfers || []) {
+        const amount = Math.min(transfer.amount, next.deadAsset);
+        next.deadAsset -= amount;
+        next.floatAsset += amount;
+      }
+      for (const intent of output.intents || []) {
+        if (intent.action === "BUY" && intent.amountUSDT > 0 && price > 0) {
+          const amount = Math.min(intent.amountUSDT, next.cash);
+          const qty = amount / price;
+          next.cash -= amount;
+          if (intent.lotType === "BASE") next.deadAsset += qty;
+          else next.floatAsset += qty;
+        } else if (intent.action === "SELL" && intent.qtyAsset > 0) {
+          const qty = Math.min(intent.qtyAsset, next.floatAsset);
+          next.floatAsset -= qty;
+          next.cash += qty * price;
+        }
+      }
+      return next;
+    }
+
+    function runModel(bundle, manual) {
+      const bars = mergeBars(bundle.bars || [], manual || []);
+      if (!bars.length) throw new Error("沒有可用資料");
+      const params = parseParams(bundle.param_pack);
+      const executionMode = normalizeExecutionMode(bundle.execution_mode);
+      let portfolio = {
+        cash: params.spawn.policy.initial_usdt,
+        deadAsset: 0,
+        floatAsset: 0,
+        coldAsset: params.spawn.policy.cold_sealed_btc || 0,
+        totalEquity: 0
+      };
+      let runtime = {};
+      let pending = null;
+      let lastYM = yearMonthFromMs(bars[0].open_time_ms);
+      const closes = [];
+      const timestamps = [];
+      const points = [];
+      let prevTarget = 0;
+      let hasPrevTarget = false;
+      for (let i = 0; i < bars.length; i++) {
+        const bar = bars[i];
+        if (bar.close <= 0) continue;
+        const ym = yearMonthFromMs(bar.open_time_ms);
+        if (i > 0 && ym !== lastYM && params.spawn.policy.monthly_inject_usdt > 0) {
+          portfolio.cash += params.spawn.policy.monthly_inject_usdt;
+          lastYM = ym;
+        }
+        if (executionMode === "close_next_open" && pending) {
+          portfolio = applyOutput(portfolio, pending, bar.open > 0 ? bar.open : bar.close);
+          pending = null;
+        }
+        closes.push(bar.close);
+        timestamps.push(bar.open_time_ms);
+        portfolio.totalEquity = portfolio.cash + (portfolio.deadAsset + portfolio.floatAsset + portfolio.coldAsset) * bar.close;
+        const output = step({
+          symbol: bundle.symbol || "SOXL",
+          interval: bundle.interval || "1d",
+          closes,
+          timestamps,
+          portfolio,
+          runtime
+        }, params);
+        const target = safeNumber(output.diagnostics.target_weight);
+        const emptyOutput = step({
+          symbol: bundle.symbol || "SOXL",
+          interval: bundle.interval || "1d",
+          closes,
+          timestamps,
+          portfolio: { cash: portfolio.totalEquity, deadAsset: 0, floatAsset: 0, coldAsset: 0, totalEquity: portfolio.totalEquity },
+          runtime: {}
+        }, params);
+        runtime = output.runtime || {};
+        if (executionMode === "close_next_open") pending = output;
+        else portfolio = applyOutput(portfolio, output, bar.close);
+        const equity = portfolio.cash + (portfolio.deadAsset + portfolio.floatAsset + portfolio.coldAsset) * bar.close;
+        points.push({
+          date: barDate(bar),
+          timeMs: bar.open_time_ms,
+          close: bar.close,
+          state: runtime.lastMarketState || "",
+          targetWeight: target,
+          targetWeightChange: hasPrevTarget ? target - prevTarget : 0,
+          emptyTargetWeight: safeNumber(emptyOutput.diagnostics.target_weight),
+          equity
+        });
+        prevTarget = target;
+        hasPrevTarget = true;
+      }
+      if (!points.length) throw new Error("試算沒有產生結果");
+      return points[points.length - 1];
+    }
+
+    function parseParams(raw) {
+      const params = raw || {};
+      const chromosome = clampChromosome(params.sigmoid_dca_config || defaultChromosome);
+      const spawn = params.spawn_point || {};
+      const policy = spawn.policy || {};
+      const normalized = {
+        policy: {
+          initial_usdt: policy.initial_usdt > 0 ? policy.initial_usdt : 1000,
+          monthly_inject_usdt: policy.monthly_inject_usdt >= 0 ? policy.monthly_inject_usdt : 100,
+          cold_sealed_btc: policy.cold_sealed_btc || 0
+        }
+      };
+      return { chromosome, spawn: normalized };
+    }
+
+    function clampChromosome(input) {
+      const out = { ...defaultChromosome, ...(input || {}) };
+      for (const [key, [lo, hi]] of Object.entries(hardBounds)) {
+        out[key] = clamp(Number(out[key] ?? defaultChromosome[key]), lo, hi);
+      }
+      out.soft_release_months = Math.trunc(out.soft_release_months);
+      if (out.macro_bear_multiplier < out.macro_bull_multiplier) out.macro_bear_multiplier = out.macro_bull_multiplier;
+      return out;
+    }
+
+    function mergeBars(baseBars, manual) {
+      const byDate = new Map();
+      for (const raw of baseBars || []) {
+        const bar = normalizeBar(raw);
+        if (bar.close > 0) byDate.set(barDate(bar), bar);
+      }
+      const references = Array.from(byDate.values()).sort((a, b) => a.open_time_ms - b.open_time_ms);
+      for (const item of manual || []) {
+        const date = normalizeDate(item.date);
+        const close = Number(item.close);
+        if (!date || !(close > 0)) continue;
+        const openTime = item.open_time_ms || inferOpenTimeMs(references, date);
+        const bar = { date, open_time_ms: openTime, open: close, high: close, low: close, close, volume: 0, manual: true };
+        byDate.set(date, bar);
+        references.push(bar);
+      }
+      return Array.from(byDate.values()).sort((a, b) => a.open_time_ms - b.open_time_ms);
+    }
+
+    function normalizeBar(raw) {
+      const close = Number(raw.close ?? raw.Close ?? 0);
+      return {
+        date: normalizeDate(raw.date || ""),
+        open_time_ms: Number(raw.open_time_ms ?? raw.OpenTimeMs ?? raw.openTimeMs ?? 0),
+        open: Number(raw.open ?? raw.Open ?? close),
+        high: Number(raw.high ?? raw.High ?? close),
+        low: Number(raw.low ?? raw.Low ?? close),
+        close,
+        volume: Number(raw.volume ?? raw.Volume ?? 0),
+        manual: Boolean(raw.manual)
+      };
+    }
+
+    function inferOpenTimeMs(reference, date) {
+      const parsed = new Date(`${date}T00:00:00Z`);
+      if (Number.isNaN(parsed.getTime())) return Date.now();
+      let h = 0, m = 0, s = 0;
+      if (reference.length) {
+        reference.sort((a, b) => a.open_time_ms - b.open_time_ms);
+        const last = new Date(reference[reference.length - 1].open_time_ms);
+        h = last.getUTCHours();
+        m = last.getUTCMinutes();
+        s = last.getUTCSeconds();
+      }
+      return Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate(), h, m, s);
+    }
+
+    function normalizeDate(value) {
+      if (!value) return "";
+      if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value).trim();
+      return date.toISOString().slice(0, 10);
+    }
+
+    function barDate(bar) {
+      return normalizeDate(bar.date) || new Date(bar.open_time_ms).toISOString().slice(0, 10);
+    }
+
+    function yearMonthFromMs(ms) {
+      if (!ms) return "";
+      const d = new Date(ms);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    }
+
+    function normalizeExecutionMode(mode) {
+      return mode === "close_next_open" ? "close_next_open" : "close_same_bar";
+    }
+
+    function safeNumber(v) {
+      return Number.isFinite(v) ? v : 0;
+    }
+
+    function displayState(value) {
+      return {
+        BULL_TREND: "趨勢牛",
+        BEAR_TREND: "趨勢熊",
+        QUIET: "安靜態",
+        SHOCK: "衝擊態"
+      }[value] || "未判定";
+    }
+
+    function fmtPct(v) {
+      return `${(v * 100).toFixed(4)}%`;
+    }
+
+    function fmtPrice(v) {
+      return Number(v).toLocaleString("zh-TW", { maximumFractionDigits: 6 });
+    }
+
+    async function importBundle() {
+      const file = el("bundleFile").files[0];
+      if (!file) throw new Error("請選擇資料包檔案");
+      const parsed = await readMaybeEncrypted(file);
+      if (!parsed || parsed.strategy_id !== "sigmoid-dca") throw new Error("資料包格式不正確");
+      state.bundle = parsed;
+      saveJSON(STORAGE_BUNDLE, parsed);
+      setMessage("資料包已匯入並保存於此瀏覽器。", "ok");
+      recalculate();
+    }
+
+    async function importManual() {
+      const file = el("manualFile").files[0];
+      if (!file) throw new Error("請選擇手動價格檔案");
+      const text = await readMaybeEncryptedText(file);
+      const rows = parseManualText(text);
+      state.manual = mergeManual(state.manual, rows);
+      saveJSON(STORAGE_MANUAL, state.manual);
+      setMessage("手動價格已匯入。", "ok");
+      renderManualRows();
+      recalculate();
+    }
+
+    async function readMaybeEncrypted(file) {
+      const text = await readMaybeEncryptedText(file);
+      return JSON.parse(text);
+    }
+
+    async function readMaybeEncryptedText(file) {
+      const text = await file.text();
+      const trimmed = text.trim();
+      if (!trimmed) throw new Error("檔案是空的");
+      const parsed = JSON.parse(trimmed);
+      if (parsed && parsed.ciphertext && parsed.salt && parsed.nonce) {
+        const password = el("password").value;
+        if (!password) throw new Error("請先輸入加密密碼");
+        return await decryptBundle(parsed, password);
+      }
+      return trimmed;
+    }
+
+    function parseManualText(text) {
+      const trimmed = text.trim();
+      if (!trimmed) return [];
+      if (trimmed.startsWith("[")) return JSON.parse(trimmed);
+      return trimmed.split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    }
+
+    function mergeManual(a, b) {
+      const map = new Map();
+      for (const item of [...(a || []), ...(b || [])]) {
+        const date = normalizeDate(item.date);
+        const close = Number(item.close);
+        if (date && close > 0) map.set(date, { date, close, source: item.source || "manual", created_at: item.created_at || new Date().toISOString() });
+      }
+      return Array.from(map.values()).sort((x, y) => x.date.localeCompare(y.date));
+    }
+
+    async function decryptBundle(encrypted, password) {
+      const salt = base64ToBytes(encrypted.salt);
+      const nonce = base64ToBytes(encrypted.nonce);
+      const ciphertext = base64ToBytes(encrypted.ciphertext);
+      const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+      const key = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: encrypted.iterations || 310000, hash: "SHA-256" },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["decrypt"]
+      );
+      const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: nonce }, key, ciphertext);
+      return new TextDecoder().decode(plain);
+    }
+
+    async function encryptText(text, password) {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const nonce = crypto.getRandomValues(new Uint8Array(12));
+      const keyMaterial = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+      const key = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 310000, hash: "SHA-256" },
+        keyMaterial,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt"]
+      );
+      const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv: nonce }, key, new TextEncoder().encode(text));
+      return {
+        version: 1,
+        created_at: new Date().toISOString(),
+        algorithm: "AES-256-GCM",
+        kdf: "PBKDF2-SHA256",
+        iterations: 310000,
+        salt: bytesToBase64(salt),
+        nonce: bytesToBase64(nonce),
+        ciphertext: bytesToBase64(new Uint8Array(ciphertext))
+      };
+    }
+
+    function base64ToBytes(value) {
+      const binary = atob(value);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return bytes;
+    }
+
+    function bytesToBase64(bytes) {
+      let binary = "";
+      for (const b of bytes) binary += String.fromCharCode(b);
+      return btoa(binary);
+    }
+
+    function addManualPrice() {
+      const date = normalizeDate(el("manualDate").value);
+      const close = Number(el("manualClose").value);
+      if (!date || !(close > 0)) throw new Error("請輸入日期與正數收盤價");
+      state.manual = mergeManual(state.manual, [{ date, close, source: "manual", created_at: new Date().toISOString() }]);
+      saveJSON(STORAGE_MANUAL, state.manual);
+      renderManualRows();
+      recalculate();
+      setMessage("手動價格已保存於此瀏覽器。", "ok");
+    }
+
+    function recalculate() {
+      if (!state.bundle) {
+        renderState();
+        throw new Error("尚未匯入資料包");
+      }
+      const result = runModel(state.bundle, state.manual);
+      state.result = result;
+      saveJSON(STORAGE_RESULT, result);
+      renderState();
+      setMessage("試算完成。", "ok");
+    }
+
+    function renderState() {
+      const bundle = state.bundle;
+      const result = state.result;
+      el("storeBadge").textContent = bundle ? `${bundle.instrument_id || "SOXL"} / ${bundle.interval || "1d"} / 已保存` : "尚未載入資料";
+      if (!result) {
+        el("latestDate").textContent = "--";
+        el("latestTime").textContent = "--";
+        el("latestClose").textContent = "--";
+        el("sourceSummary").textContent = bundle ? `${(bundle.bars || []).length} 筆資料` : "--";
+        el("marketState").textContent = "--";
+        el("targetWeight").textContent = "--";
+        el("targetDelta").textContent = "--";
+        return;
+      }
+      el("latestDate").textContent = result.date;
+      el("latestTime").textContent = new Date(result.timeMs).toISOString();
+      el("latestClose").textContent = fmtPrice(result.close);
+      el("sourceSummary").textContent = `${(bundle.bars || []).length} 筆資料，${state.manual.length} 筆手動`;
+      el("marketState").textContent = displayState(result.state);
+      el("targetWeight").textContent = fmtPct(result.targetWeight);
+      el("targetDelta").textContent = `相較前一筆 ${result.targetWeightChange >= 0 ? "+" : ""}${fmtPct(result.targetWeightChange)}`;
+      el("manualDate").value = result.date;
+    }
+
+    function renderManualRows() {
+      const body = el("manualRows");
+      body.innerHTML = "";
+      if (!state.manual.length) {
+        body.innerHTML = `<tr><td colspan="4">尚無手動價格</td></tr>`;
+        return;
+      }
+      for (const row of [...state.manual].sort((a, b) => b.date.localeCompare(a.date))) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="mono">${row.date}</td>
+          <td>${fmtPrice(row.close)}</td>
+          <td>${row.source || "manual"}</td>
+          <td><button data-date="${row.date}" class="danger">刪除</button></td>
+        `;
+        tr.querySelector("button").addEventListener("click", () => {
+          state.manual = state.manual.filter(item => item.date !== row.date);
+          saveJSON(STORAGE_MANUAL, state.manual);
+          renderManualRows();
+          if (state.bundle) recalculate();
+        });
+        body.appendChild(tr);
+      }
+    }
+
+    function download(filename, text, type = "application/json") {
+      const blob = new Blob([text], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function exportManualEncrypted() {
+      const password = el("password").value;
+      if (!password) throw new Error("請先輸入加密密碼");
+      const text = state.manual.map(row => JSON.stringify(row)).join("\n") + "\n";
+      const encrypted = await encryptText(text, password);
+      download("soxl-21-manual-prices.jsonl.enc", JSON.stringify(encrypted, null, 2) + "\n");
+    }
+
+    function bind(id, fn) {
+      el(id).addEventListener("click", async () => {
+        try {
+          await fn();
+        } catch (err) {
+          setMessage(err.message || String(err), "error");
+        }
+      });
+    }
+
+    bind("importBundle", importBundle);
+    bind("importManual", importManual);
+    bind("recalculate", recalculate);
+    bind("addManual", addManualPrice);
+    bind("exportManualPlain", () => {
+      const text = state.manual.map(row => JSON.stringify(row)).join("\n") + "\n";
+      download("soxl-21-manual-prices.jsonl", text, "text/plain");
+    });
+    bind("exportManualEncrypted", exportManualEncrypted);
+    bind("clearLocal", () => {
+      localStorage.removeItem(STORAGE_BUNDLE);
+      localStorage.removeItem(STORAGE_MANUAL);
+      localStorage.removeItem(STORAGE_RESULT);
+      state.bundle = null;
+      state.manual = [];
+      state.result = null;
+      renderManualRows();
+      renderState();
+      setMessage("此瀏覽器保存的資料已清除。", "warn");
+    });
+
+    renderManualRows();
+    renderState();
+    if (state.bundle) {
+      try {
+        recalculate();
+      } catch (err) {
+        setMessage(err.message || String(err), "error");
+      }
+    }
+  </script>
+</body>
+</html>
