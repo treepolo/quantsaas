@@ -49,6 +49,8 @@ type CreateRequest struct {
 	SpawnPoint     *quant.SpawnPoint `json:"spawn_point"`
 	InitialCapital *float64          `json:"initial_capital"`
 	MonthlyDCA     *float64          `json:"monthly_dca"`
+	FeeRate        *float64          `json:"fee_rate"`
+	SpreadRate     *float64          `json:"spread_rate"`
 }
 
 type EquitySnapshot struct {
@@ -92,6 +94,8 @@ type Response struct {
 	BenchmarkReturn      float64            `json:"benchmark_return"`
 	BenchmarkMaxDrawdown float64            `json:"benchmark_max_drawdown"`
 	BenchmarkFinalEquity float64            `json:"benchmark_final_equity"`
+	FeeRate              float64            `json:"fee_rate"`
+	SpreadRate           float64            `json:"spread_rate"`
 	NAV                  []EquitySnapshot   `json:"nav"`
 	Windows              map[string]float64 `json:"windows"`
 	WindowDetails        []WindowResult     `json:"window_details"`
@@ -227,14 +231,16 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		return nil, fmt.Errorf("尚未匯入 %s %s 的 K 線資料", req.Symbol, req.Interval)
 	}
 
-	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn)
+	costs := backtestCosts(req)
+	path := ga.RunSigmoidDCAPathBacktestWithModeAndCosts(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs)
 	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 		UseOpenExecution:  req.ExecutionMode == marketdata.ExecutionModeCloseNextOpen,
+		Costs:             costs,
 	})
 	alpha := path.Metrics.ROI - baseline.ROI
-	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn)
+	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs)
 
 	return &Response{
 		ID:                   runID,
@@ -254,6 +260,8 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		BenchmarkReturn:      baseline.ROI,
 		BenchmarkMaxDrawdown: baseline.MaxDrawdown,
 		BenchmarkFinalEquity: baseline.FinalEquity,
+		FeeRate:              costs.FeeRate,
+		SpreadRate:           costs.SpreadRate,
 		NAV:                  mergeNAV(path.NAV, baseline),
 		Windows:              windows,
 		WindowDetails:        windowDetails,
@@ -426,6 +434,12 @@ func (s *Service) validateBasicRequest(ctx context.Context, req CreateRequest) e
 	if req.StartTimeMs > 0 && req.EndTimeMs > 0 && req.StartTimeMs > req.EndTimeMs {
 		return errors.New("start_time_ms must be earlier than end_time_ms")
 	}
+	if err := validateCostRate("fee_rate", req.FeeRate); err != nil {
+		return err
+	}
+	if err := validateCostRate("spread_rate", req.SpreadRate); err != nil {
+		return err
+	}
 	if req.StrategyID != sigmoiddca.StrategyID {
 		return fmt.Errorf("尚不支援的策略: %s", req.StrategyID)
 	}
@@ -433,6 +447,19 @@ func (s *Service) validateBasicRequest(ctx context.Context, req CreateRequest) e
 	case SourceChampion, SourceCandidate, SourceCustom:
 	default:
 		return fmt.Errorf("不支援的回測來源: %s", req.Source)
+	}
+	return nil
+}
+
+func validateCostRate(name string, value *float64) error {
+	if value == nil {
+		return nil
+	}
+	if math.IsNaN(*value) || math.IsInf(*value, 0) || *value < 0 {
+		return fmt.Errorf("%s must be zero or positive", name)
+	}
+	if *value > 0.2 {
+		return fmt.Errorf("%s is too large", name)
 	}
 	return nil
 }
@@ -509,16 +536,28 @@ func normalizeSpawnPoint(spawn *quant.SpawnPoint) error {
 	return nil
 }
 
-func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint) (map[string]float64, []WindowResult) {
+func backtestCosts(req CreateRequest) quant.ExecutionCostConfig {
+	costs := quant.ExecutionCostConfig{}
+	if req.FeeRate != nil {
+		costs.FeeRate = *req.FeeRate
+	}
+	if req.SpreadRate != nil {
+		costs.SpreadRate = *req.SpreadRate
+	}
+	return quant.NormalizeExecutionCosts(costs)
+}
+
+func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig) (map[string]float64, []WindowResult) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
 	for _, window := range windows {
-		metrics := ga.RunSigmoidDCASingleBacktestWithMode(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn)
+		metrics := ga.RunSigmoidDCASingleBacktestWithModeAndCosts(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn, costs)
 		baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 			UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
+			Costs:             costs,
 		})
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown)

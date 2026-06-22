@@ -9,6 +9,7 @@ type GhostDCAConfig struct {
 	InitialUSDT       float64
 	MonthlyInjectUSDT float64
 	UseOpenExecution  bool
+	Costs             ExecutionCostConfig
 }
 
 type GhostDCAResult struct {
@@ -41,7 +42,7 @@ func SimulateGhostDCAFrom(bars []Bar, evalStartMs int64, cfg GhostDCAConfig) Gho
 	if initialPrice <= 0 {
 		return GhostDCAResult{}
 	}
-	btc := cfg.InitialUSDT / initialPrice
+	btc, _ := BuyQuantityForCash(cfg.InitialUSDT, initialPrice, cfg.Costs)
 	evalInjected := 0.0
 	flows := make([]TimedCashFlow, 0)
 	times := make([]int64, 0, len(bars))
@@ -61,7 +62,8 @@ func SimulateGhostDCAFrom(bars []Bar, evalStartMs int64, cfg GhostDCAConfig) Gho
 			if executionPrice <= 0 {
 				return GhostDCAResult{}
 			}
-			btc += cfg.MonthlyInjectUSDT / executionPrice
+			qty, _ := BuyQuantityForCash(cfg.MonthlyInjectUSDT, executionPrice, cfg.Costs)
+			btc += qty
 			if bar.OpenTime > evalStartMs {
 				evalInjected += cfg.MonthlyInjectUSDT
 				flows = append(flows, TimedCashFlow{TimeMs: bar.OpenTime, Amount: cfg.MonthlyInjectUSDT})

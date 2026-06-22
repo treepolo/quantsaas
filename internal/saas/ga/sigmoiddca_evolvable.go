@@ -235,6 +235,10 @@ func RunSigmoidDCASingleBacktestWithMode(bars []quant.Bar, evalStartMs int64, in
 	return RunSigmoidDCAPathBacktestWithMode(bars, evalStartMs, interval, executionMode, chromosome, spawn).Metrics
 }
 
+func RunSigmoidDCASingleBacktestWithModeAndCosts(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig) BacktestMetrics {
+	return RunSigmoidDCAPathBacktestWithModeAndCosts(bars, evalStartMs, interval, executionMode, chromosome, spawn, costs).Metrics
+}
+
 type PathTraceConfig struct {
 	Trace         func(TraceEvent)
 	Mode          TraceMode
@@ -261,11 +265,20 @@ func RunSigmoidDCAPathBacktestWithMode(bars []quant.Bar, evalStartMs int64, inte
 	return RunSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{})
 }
 
+func RunSigmoidDCAPathBacktestWithModeAndCosts(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig) SigmoidDCAPathResult {
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs)
+}
+
 func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
 	return RunSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionModeCloseSameBar, chromosome, spawn, traceCfg)
 }
 
 func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{})
+}
+
+func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig) SigmoidDCAPathResult {
+	costs = quant.NormalizeExecutionCosts(costs)
 	executionMode = normalizeBacktestExecutionMode(executionMode)
 	if len(bars) == 0 || bars[0].Close <= 0 || executionMode == executionModePreclose10m {
 		return SigmoidDCAPathResult{}
@@ -318,7 +331,7 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			if bar.Open <= 0 {
 				return SigmoidDCAPathResult{}
 			}
-			portfolio = applyBacktestOutput(portfolio, pendingOutput, bar.Open)
+			portfolio = applyBacktestOutputWithCosts(portfolio, pendingOutput, bar.Open, costs)
 			hasPendingOutput = false
 		}
 
@@ -354,7 +367,7 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			pendingOutput = output
 			hasPendingOutput = true
 		} else {
-			portfolio = applyBacktestOutput(portfolio, output, bar.Close)
+			portfolio = applyBacktestOutputWithCosts(portfolio, output, bar.Close, costs)
 		}
 
 		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
@@ -495,6 +508,10 @@ func lastBacktestPointTime(points []BacktestPoint) int64 {
 }
 
 func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.StrategyOutput, price float64) quant.PortfolioSnapshot {
+	return applyBacktestOutputWithCosts(portfolio, output, price, quant.ExecutionCostConfig{})
+}
+
+func applyBacktestOutputWithCosts(portfolio quant.PortfolioSnapshot, output quant.StrategyOutput, price float64, costs quant.ExecutionCostConfig) quant.PortfolioSnapshot {
 	for _, transfer := range output.LotTransfers {
 		if transfer.FromLotType == quant.LotTypeDeadStack && transfer.ToLotType == quant.LotTypeFloating {
 			amount := math.Min(transfer.Amount, portfolio.DeadBTC)
@@ -506,8 +523,11 @@ func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.Strateg
 		switch {
 		case intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 && price > 0:
 			amount := math.Min(intent.AmountUSDT, portfolio.USDTBalance)
-			qty := amount / price
-			portfolio.USDTBalance -= amount
+			qty, spent := quant.BuyQuantityForCash(amount, price, costs)
+			if qty <= 0 || spent <= 0 {
+				continue
+			}
+			portfolio.USDTBalance -= spent
 			if intent.LotType == quant.LotTypeDeadStack {
 				portfolio.DeadBTC += qty
 			} else {
@@ -515,8 +535,12 @@ func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.Strateg
 			}
 		case intent.Action == quant.ActionSell && intent.QtyAsset > 0:
 			qty := math.Min(intent.QtyAsset, portfolio.FloatBTC)
+			proceeds := quant.SellProceedsForQuantity(qty, price, costs)
+			if qty <= 0 || proceeds <= 0 {
+				continue
+			}
 			portfolio.FloatBTC -= qty
-			portfolio.USDTBalance += qty * price
+			portfolio.USDTBalance += proceeds
 		}
 	}
 	return portfolio

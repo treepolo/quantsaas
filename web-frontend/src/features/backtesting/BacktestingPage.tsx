@@ -279,6 +279,8 @@ export function BacktestingPage() {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [initialCapital, setInitialCapital] = useState(10000);
   const [monthlyDCA, setMonthlyDCA] = useState(1000);
+  const [feeRate, setFeeRate] = useState(0.001);
+  const [spreadRate, setSpreadRate] = useState(0.0005);
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
   const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];
@@ -297,6 +299,8 @@ export function BacktestingPage() {
         end_time_ms: dateEndMs(backtestEnd),
         initial_capital: initialCapital,
         monthly_dca: monthlyDCA,
+        fee_rate: feeRate,
+        spread_rate: spreadRate,
         source
       };
       if (source === "candidate") {
@@ -461,6 +465,8 @@ export function BacktestingPage() {
           <DateInput label="回測結束日" value={backtestEnd} onChange={setBacktestEnd} />
           <NumberInput label="初始資金" value={initialCapital} min={1} onChange={setInitialCapital} />
           <NumberInput label="每月投入 / 定投金額" value={monthlyDCA} min={0} onChange={setMonthlyDCA} />
+          <NumberInput label="手續費率" value={feeRate} min={0} step={0.0001} onChange={setFeeRate} />
+          <NumberInput label="價差 / 滑價率" value={spreadRate} min={0} step={0.0001} onChange={setSpreadRate} />
 
           {source === "candidate" ? (
             <div className="md:col-span-2">
@@ -518,7 +524,9 @@ export function BacktestingPage() {
               ["期末權益", formatMoney(result.final_equity), "text-slate-100"],
               ["定投總報酬", formatPercent(result.benchmark_return ?? 0), "text-slate-100"],
               ["定投最大回撤", formatPercent(result.benchmark_max_drawdown ?? 0), "text-[#fecaca]"],
-              ["定投期末權益", formatMoney(result.benchmark_final_equity ?? result.benchmark), "text-slate-100"]
+              ["定投期末權益", formatMoney(result.benchmark_final_equity ?? result.benchmark), "text-slate-100"],
+              ["手續費率", formatPercent(result.fee_rate ?? 0), "text-slate-100"],
+              ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"]
             ].map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>
@@ -721,7 +729,7 @@ function DateInput({ label, value, onChange }: { label: string; value: string; o
   );
 }
 
-function NumberInput({ label, value, min, onChange }: { label: string; value: number; min: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, min, step = 1, onChange }: { label: string; value: number; min: number; step?: number; onChange: (value: number) => void }) {
   return (
     <label>
       <span className="mb-2 block text-sm text-slate-300">{label}</span>
@@ -729,7 +737,7 @@ function NumberInput({ label, value, min, onChange }: { label: string; value: nu
         className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
         type="number"
         min={min}
-        step="1"
+        step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
       />
