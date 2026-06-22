@@ -69,6 +69,8 @@ type EpochConfig struct {
 	SpawnMode          string
 	LotStepSize        float64
 	LotMinQty          float64
+	InitialCapital     float64
+	MonthlyDCA         float64
 	Costs              quant.ExecutionCostConfig
 	OnProgress         func(EpochProgress)
 	OnTrace            func(TraceEvent)
@@ -139,6 +141,8 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		"execution_mode":  cfg.ExecutionMode,
 		"population":      e.popSize(cfg),
 		"max_generations": e.maxGenerations(cfg),
+		"initial_capital": e.initialCapital(cfg),
+		"monthly_dca":     e.monthlyDCA(cfg),
 		"fee_rate":        cfg.Costs.FeeRate,
 		"spread_rate":     cfg.Costs.SpreadRate,
 		"trace_mode":      cfg.TraceMode,
@@ -288,19 +292,21 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		spawnMode = "inherit"
 	}
 	raw, err := json.Marshal(map[string]any{
-		"strategy_id":    e.evolvable.StrategyID(),
-		"symbol":         cfg.Pair,
-		"instrument_id":  cfg.InstrumentID,
-		"data_source":    cfg.DataSource,
-		"interval":       cfg.Interval,
-		"execution_mode": cfg.ExecutionMode,
-		"train_start_ms": cfg.StartTimeMs,
-		"train_end_ms":   cfg.EndTimeMs,
-		"fee_rate":       quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
-		"spread_rate":    quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
-		"spawn_mode":     spawnMode,
-		"population":     e.popSize(cfg),
-		"generations":    e.maxGenerations(cfg),
+		"strategy_id":     e.evolvable.StrategyID(),
+		"symbol":          cfg.Pair,
+		"instrument_id":   cfg.InstrumentID,
+		"data_source":     cfg.DataSource,
+		"interval":        cfg.Interval,
+		"execution_mode":  cfg.ExecutionMode,
+		"train_start_ms":  cfg.StartTimeMs,
+		"train_end_ms":    cfg.EndTimeMs,
+		"initial_capital": e.initialCapital(cfg),
+		"monthly_dca":     e.monthlyDCA(cfg),
+		"fee_rate":        quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
+		"spread_rate":     quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
+		"spawn_mode":      spawnMode,
+		"population":      e.popSize(cfg),
+		"generations":     e.maxGenerations(cfg),
 	})
 	if err != nil {
 		return []byte(`{}`)
@@ -339,8 +345,8 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 	if spawn == nil {
 		defaultSpawn := quant.SpawnPoint{
 			Policy: quant.CapitalPolicy{
-				InitialUSDT:       1000,
-				MonthlyInjectUSDT: 100,
+				InitialUSDT:       e.initialCapital(cfg),
+				MonthlyInjectUSDT: e.monthlyDCA(cfg),
 			},
 			Risk: quant.RiskBounds{
 				MaxDrawdownPct: 0.88,
@@ -389,6 +395,20 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		DCABaselines:   baselines,
 		AggregateCache: map[string]any{},
 	}, nil
+}
+
+func (e *EvolutionEngine) initialCapital(cfg EpochConfig) float64 {
+	if cfg.InitialCapital > 0 {
+		return cfg.InitialCapital
+	}
+	return 1000000
+}
+
+func (e *EvolutionEngine) monthlyDCA(cfg EpochConfig) float64 {
+	if cfg.MonthlyDCA > 0 {
+		return cfg.MonthlyDCA
+	}
+	return 0
 }
 
 func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochConfig, rng RandomSource) ([]individual, error) {

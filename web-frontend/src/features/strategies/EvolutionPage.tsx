@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
-import { formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
+import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
 import { evolutionApi, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
@@ -22,6 +22,8 @@ const traceModeOptions: Array<[TraceMode, string, string]> = [
   ["detailed", "詳細", "顯示資料視窗、個體評估與世代資訊"],
   ["full", "逐筆", "顯示策略步進事件，會拖慢運算"]
 ];
+
+const SEARCH_INITIAL_CAPITAL = 1_000_000;
 
 function dateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -363,6 +365,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [endDate, setEndDate] = useState(dateInputValue(new Date()));
   const [population, setPopulation] = useState(300);
   const [generations, setGenerations] = useState(25);
+  const [monthlyDCA, setMonthlyDCA] = useState(0);
   const [feeRate, setFeeRate] = useState(0.001);
   const [spreadRate, setSpreadRate] = useState(0.0005);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
@@ -405,6 +408,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
         execution_mode: executionMode,
         train_start_ms: dayStartMs(startDate),
         train_end_ms: dayEndMs(endDate),
+        monthly_dca: monthlyDCA,
         fee_rate: feeRate,
         spread_rate: spreadRate,
         pop_size: population,
@@ -496,6 +500,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <Metric label="資料範圍" value={`${msToDateInput(running.train_start_ms) || "-"} ~ ${msToDateInput(running.train_end_ms) || "-"}`} />
                 <Metric label="進度" value={`${progressPct}%`} />
                 <Metric label="已評估" value={planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")} />
+                <Metric label="初始本金" value={formatMoney(running.initial_capital ?? SEARCH_INITIAL_CAPITAL)} />
+                <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
                 <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
                 <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
@@ -540,6 +546,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
           <NumberInput label="族群數" min={10} max={500} value={population} onChange={setPopulation} />
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
+          <ReadOnlyMetric label="初始本金" value={formatMoney(SEARCH_INITIAL_CAPITAL)} />
+          <NumberInput label="每月投入" min={0} max={1000000000} value={monthlyDCA} onChange={setMonthlyDCA} />
           <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
           <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
@@ -594,6 +602,15 @@ function NumberInput({ label, value, min, max, step = 1, onChange }: { label: st
       <span className="mb-2 block text-sm text-slate-300">{label}</span>
       <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
+  );
+}
+
+function ReadOnlyMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <span className="mb-2 block text-sm text-slate-300">{label}</span>
+      <div className="flex h-11 items-center rounded-lg border border-white/[0.04] bg-white/[0.03] px-3 font-mono text-sm text-slate-200">{value}</div>
+    </div>
   );
 }
 
@@ -833,6 +850,8 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                     <InfoRow label="資料週期" value={searchConfig.interval ?? genome.interval ?? "未記錄"} />
                     <InfoRow label="開始日期" value={formatSearchDate(searchConfig.train_start_ms)} />
                     <InfoRow label="結束日期" value={formatSearchDate(searchConfig.train_end_ms)} />
+                    <InfoRow label="初始本金" value={searchConfig.initial_capital !== undefined ? formatMoney(searchConfig.initial_capital) : "未記錄"} />
+                    <InfoRow label="每月投入" value={searchConfig.monthly_dca !== undefined ? formatMoney(searchConfig.monthly_dca) : "未記錄"} />
                     <InfoRow label="手續費率" value={searchConfig.fee_rate !== undefined ? formatPercent(searchConfig.fee_rate) : "未記錄"} />
                     <InfoRow label="價差 / 滑價率" value={searchConfig.spread_rate !== undefined ? formatPercent(searchConfig.spread_rate) : "未記錄"} />
                     <InfoRow label="執行假設" value={searchConfig.execution_mode ?? genome.execution_mode ?? "未記錄"} />

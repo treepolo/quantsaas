@@ -407,6 +407,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		Interval             string  `json:"interval"`
 		PopSize              int     `json:"pop_size"`
 		MaxGenerations       int     `json:"max_generations"`
+		InitialCapital       float64 `json:"initial_capital"`
+		MonthlyDCA           float64 `json:"monthly_dca"`
 		FeeRate              float64 `json:"fee_rate"`
 		SpreadRate           float64 `json:"spread_rate"`
 		SpawnMode            string  `json:"spawn_mode"`
@@ -487,6 +489,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"execution_mode":            firstNonEmpty(task.ExecutionMode, cfg.ExecutionMode),
 		"train_start_ms":            firstNonZero(task.TrainStartMs, cfg.TrainStartMs),
 		"train_end_ms":              firstNonZero(task.TrainEndMs, cfg.TrainEndMs),
+		"initial_capital":           cfg.InitialCapital,
+		"monthly_dca":               cfg.MonthlyDCA,
 		"fee_rate":                  cfg.FeeRate,
 		"spread_rate":               cfg.SpreadRate,
 		"interval":                  cfg.Interval,

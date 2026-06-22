@@ -32,6 +32,8 @@ export type EvolutionTask = {
   execution_mode?: string;
   train_start_ms?: number;
   train_end_ms?: number;
+  initial_capital?: number;
+  monthly_dca?: number;
   fee_rate?: number;
   spread_rate?: number;
   interval?: string;
@@ -82,6 +84,8 @@ export type GenomeRecord = {
     execution_mode?: string;
     train_start_ms?: number;
     train_end_ms?: number;
+    initial_capital?: number;
+    monthly_dca?: number;
     fee_rate?: number;
     spread_rate?: number;
     spawn_mode?: string;
@@ -105,6 +109,7 @@ export type CreateTaskInput = {
   execution_mode?: string;
   train_start_ms?: number;
   train_end_ms?: number;
+  monthly_dca?: number;
   fee_rate?: number;
   spread_rate?: number;
   pop_size: number;

@@ -56,14 +56,16 @@ func TestTournamentRarelySelectsFatal(t *testing.T) {
 	}
 }
 
-func TestSearchConfigIncludesExecutionCosts(t *testing.T) {
+func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	engine := NewEvolutionEngine(fakeEvolvable{}, nil)
 	raw := engine.searchConfig(EpochConfig{
-		Pair:          "SOXL",
-		InstrumentID:  "SOXL",
-		DataSource:    "yahoo",
-		Interval:      "1d",
-		ExecutionMode: "close_next_open",
+		Pair:           "SOXL",
+		InstrumentID:   "SOXL",
+		DataSource:     "yahoo",
+		Interval:       "1d",
+		ExecutionMode:  "close_next_open",
+		InitialCapital: 1000000,
+		MonthlyDCA:     250,
 		Costs: quant.ExecutionCostConfig{
 			FeeRate:    0.001,
 			SpreadRate: 0.0005,
@@ -79,6 +81,12 @@ func TestSearchConfigIncludesExecutionCosts(t *testing.T) {
 	}
 	if cfg["spread_rate"] != 0.0005 {
 		t.Fatalf("spread_rate = %v, want 0.0005", cfg["spread_rate"])
+	}
+	if cfg["initial_capital"] != float64(1000000) {
+		t.Fatalf("initial_capital = %v, want 1000000", cfg["initial_capital"])
+	}
+	if cfg["monthly_dca"] != float64(250) {
+		t.Fatalf("monthly_dca = %v, want 250", cfg["monthly_dca"])
 	}
 }
 

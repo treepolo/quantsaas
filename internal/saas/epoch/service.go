@@ -25,6 +25,8 @@ const (
 	TaskStatusDone      = "completed"
 	TaskStatusFailed    = "failed"
 	TaskStatusCancelled = "cancelled"
+
+	SearchInitialUSDT = 1000000
 )
 
 type Service struct {
@@ -53,6 +55,8 @@ type CreateTaskRequest struct {
 	MaxGenerations       int               `json:"max_generations"`
 	SpawnMode            string            `json:"spawn_mode"`
 	SpawnPoint           *quant.SpawnPoint `json:"spawn_point"`
+	InitialCapital       float64           `json:"initial_capital"`
+	MonthlyDCA           *float64          `json:"monthly_dca"`
 	FeeRate              *float64          `json:"fee_rate"`
 	SpreadRate           *float64          `json:"spread_rate"`
 	TestMode             bool              `json:"test_mode"`
@@ -102,6 +106,7 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 		s.mu.Unlock()
 		return nil, err
 	}
+	applySearchCapital(req, spawn)
 	if err := validateSpawnPoint(spawn); err != nil {
 		s.mu.Unlock()
 		return nil, err
@@ -204,6 +209,8 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		SpawnMode:          req.SpawnMode,
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
+		InitialCapital:     searchInitialCapital(req),
+		MonthlyDCA:         searchMonthlyDCA(req),
 		Costs:              searchCosts(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
@@ -366,6 +373,8 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		SpawnMode:          req.SpawnMode,
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
+		InitialCapital:     searchInitialCapital(req),
+		MonthlyDCA:         searchMonthlyDCA(req),
 		Costs:              searchCosts(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
@@ -474,6 +483,8 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"execution_mode":       req.ExecutionMode,
 		"train_start_ms":       req.TrainStartMs,
 		"train_end_ms":         req.TrainEndMs,
+		"initial_capital":      searchInitialCapital(req),
+		"monthly_dca":          searchMonthlyDCA(req),
 		"fee_rate":             searchCosts(req).FeeRate,
 		"spread_rate":          searchCosts(req).SpreadRate,
 		"spawn_mode":           req.SpawnMode,
@@ -559,6 +570,7 @@ func (s *Service) refreshStandardizedChampion(ctx context.Context, req CreateTas
 func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTaskRequest, record saasstore.GeneRecord) (*standardizedChampion, error) {
 	params := sigmoiddca.ParseParamsFromParamPack([]byte(record.ParamPack))
 	spawn := params.Spawn
+	applySearchCapital(req, &spawn)
 	if err := validateSpawnPoint(&spawn); err != nil {
 		return nil, err
 	}
@@ -575,6 +587,8 @@ func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTask
 		SpawnMode:          req.SpawnMode,
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
+		InitialCapital:     searchInitialCapital(req),
+		MonthlyDCA:         searchMonthlyDCA(req),
 		Costs:              searchCosts(req),
 		SpawnPointOverride: &spawn,
 		TraceMode:          ga.TraceModeSummary,
@@ -701,6 +715,11 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 	if req.SpawnMode == "" {
 		req.SpawnMode = "inherit"
 	}
+	req.InitialCapital = SearchInitialUSDT
+	if req.MonthlyDCA == nil {
+		zero := 0.0
+		req.MonthlyDCA = &zero
+	}
 	req.ContinuousMode = strings.ToLower(strings.TrimSpace(req.ContinuousMode))
 	if req.ContinuousMode != "" && req.ContinuousIterations == 0 && !req.ContinuousUnlimited {
 		req.ContinuousIterations = 2
@@ -747,6 +766,12 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 	}
 	if err := validateCostRate("spread_rate", req.SpreadRate); err != nil {
 		return err
+	}
+	if req.InitialCapital != SearchInitialUSDT {
+		return fmt.Errorf("initial_capital must be %.0f", float64(SearchInitialUSDT))
+	}
+	if req.MonthlyDCA != nil && *req.MonthlyDCA < 0 {
+		return errors.New("monthly_dca must be zero or positive")
 	}
 	switch req.ContinuousMode {
 	case "", "standardized_best", "random":
@@ -800,6 +825,28 @@ func searchCosts(req CreateTaskRequest) quant.ExecutionCostConfig {
 	return quant.NormalizeExecutionCosts(costs)
 }
 
+func searchInitialCapital(req CreateTaskRequest) float64 {
+	if req.InitialCapital > 0 {
+		return req.InitialCapital
+	}
+	return SearchInitialUSDT
+}
+
+func searchMonthlyDCA(req CreateTaskRequest) float64 {
+	if req.MonthlyDCA != nil && *req.MonthlyDCA > 0 {
+		return *req.MonthlyDCA
+	}
+	return 0
+}
+
+func applySearchCapital(req CreateTaskRequest, spawn *quant.SpawnPoint) {
+	if spawn == nil {
+		return
+	}
+	spawn.Policy.InitialUSDT = searchInitialCapital(req)
+	spawn.Policy.MonthlyInjectUSDT = searchMonthlyDCA(req)
+}
+
 func validateCostRate(name string, value *float64) error {
 	if value == nil {
 		return nil
@@ -825,8 +872,8 @@ func supportsInterval(supported []string, interval string) bool {
 func defaultSpawnPoint() *quant.SpawnPoint {
 	return &quant.SpawnPoint{
 		Policy: quant.CapitalPolicy{
-			InitialUSDT:       1000,
-			MonthlyInjectUSDT: 100,
+			InitialUSDT:       SearchInitialUSDT,
+			MonthlyInjectUSDT: 0,
 		},
 		Risk: quant.RiskBounds{
 			MaxDrawdownPct: 0.88,
@@ -862,8 +909,6 @@ func validateSpawnPoint(spawn *quant.SpawnPoint) error {
 func randomSpawnPoint() quant.SpawnPoint {
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	spawn := *defaultSpawnPoint()
-	spawn.Policy.InitialUSDT = 500 + rng.Float64()*4500
-	spawn.Policy.MonthlyInjectUSDT = 50 + rng.Float64()*450
 	spawn.Risk.MaxDrawdownPct = 0.50 + rng.Float64()*0.38
 	return spawn
 }
