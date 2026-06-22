@@ -2,6 +2,7 @@ package ga
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"quantsaas/internal/quant"
@@ -52,6 +53,32 @@ func TestTournamentRarelySelectsFatal(t *testing.T) {
 	}
 	if fatalCount >= 50 {
 		t.Fatalf("fatal selected %d times, want < 50", fatalCount)
+	}
+}
+
+func TestSearchConfigIncludesExecutionCosts(t *testing.T) {
+	engine := NewEvolutionEngine(fakeEvolvable{}, nil)
+	raw := engine.searchConfig(EpochConfig{
+		Pair:          "SOXL",
+		InstrumentID:  "SOXL",
+		DataSource:    "yahoo",
+		Interval:      "1d",
+		ExecutionMode: "close_next_open",
+		Costs: quant.ExecutionCostConfig{
+			FeeRate:    0.001,
+			SpreadRate: 0.0005,
+		},
+	})
+
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("search config json invalid: %v", err)
+	}
+	if cfg["fee_rate"] != 0.001 {
+		t.Fatalf("fee_rate = %v, want 0.001", cfg["fee_rate"])
+	}
+	if cfg["spread_rate"] != 0.0005 {
+		t.Fatalf("spread_rate = %v, want 0.0005", cfg["spread_rate"])
 	}
 }
 

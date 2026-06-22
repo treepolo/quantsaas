@@ -363,6 +363,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [endDate, setEndDate] = useState(dateInputValue(new Date()));
   const [population, setPopulation] = useState(300);
   const [generations, setGenerations] = useState(25);
+  const [feeRate, setFeeRate] = useState(0.001);
+  const [spreadRate, setSpreadRate] = useState(0.0005);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>("detailed");
   const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">("");
@@ -403,6 +405,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
         execution_mode: executionMode,
         train_start_ms: dayStartMs(startDate),
         train_end_ms: dayEndMs(endDate),
+        fee_rate: feeRate,
+        spread_rate: spreadRate,
         pop_size: population,
         max_generations: generations,
         spawn_mode: spawnMode,
@@ -492,6 +496,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <Metric label="資料範圍" value={`${msToDateInput(running.train_start_ms) || "-"} ~ ${msToDateInput(running.train_end_ms) || "-"}`} />
                 <Metric label="進度" value={`${progressPct}%`} />
                 <Metric label="已評估" value={planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")} />
+                <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
+                <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
                 <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
                 {running.standard_champion_gene_id ? <Metric label="標準化冠軍" value={`#${running.standard_champion_gene_id} / ${(running.standard_champion_score ?? 0).toFixed(4)}`} /> : null}
                 <Metric label="最大回撤" value={running.max_drawdown !== undefined ? formatPercent(running.max_drawdown) : "等待回報"} danger />
@@ -534,6 +540,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
           <NumberInput label="族群數" min={10} max={500} value={population} onChange={setPopulation} />
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
+          <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
+          <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
           <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
           {!continuousUnlimited ? <NumberInput label="連續輪數" min={1} max={100} value={continuousIterations} onChange={setContinuousIterations} /> : <div />}
           <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
@@ -580,11 +588,11 @@ function Select({ label, value, onChange, options }: { label: string; value: str
   );
 }
 
-function NumberInput({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, min, max, step = 1, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }) {
   return (
     <label>
       <span className="mb-2 block text-sm text-slate-300">{label}</span>
-      <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} max={max} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 font-mono text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
 }
@@ -825,6 +833,8 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                     <InfoRow label="資料週期" value={searchConfig.interval ?? genome.interval ?? "未記錄"} />
                     <InfoRow label="開始日期" value={formatSearchDate(searchConfig.train_start_ms)} />
                     <InfoRow label="結束日期" value={formatSearchDate(searchConfig.train_end_ms)} />
+                    <InfoRow label="手續費率" value={searchConfig.fee_rate !== undefined ? formatPercent(searchConfig.fee_rate) : "未記錄"} />
+                    <InfoRow label="價差 / 滑價率" value={searchConfig.spread_rate !== undefined ? formatPercent(searchConfig.spread_rate) : "未記錄"} />
                     <InfoRow label="執行假設" value={searchConfig.execution_mode ?? genome.execution_mode ?? "未記錄"} />
                     <InfoRow label="起始方式" value={searchConfig.spawn_mode ?? "未記錄"} />
                     <InfoRow label="族群數" value={searchConfig.population?.toLocaleString("zh-TW") ?? "未記錄"} />

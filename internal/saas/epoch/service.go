@@ -53,6 +53,8 @@ type CreateTaskRequest struct {
 	MaxGenerations       int               `json:"max_generations"`
 	SpawnMode            string            `json:"spawn_mode"`
 	SpawnPoint           *quant.SpawnPoint `json:"spawn_point"`
+	FeeRate              *float64          `json:"fee_rate"`
+	SpreadRate           *float64          `json:"spread_rate"`
 	TestMode             bool              `json:"test_mode"`
 	TraceMode            ga.TraceMode      `json:"trace_mode"`
 	ContinuousMode       string            `json:"continuous_mode"`
@@ -202,6 +204,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		SpawnMode:          req.SpawnMode,
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
+		Costs:              searchCosts(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
@@ -363,6 +366,7 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		SpawnMode:          req.SpawnMode,
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
+		Costs:              searchCosts(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
@@ -470,6 +474,8 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"execution_mode":       req.ExecutionMode,
 		"train_start_ms":       req.TrainStartMs,
 		"train_end_ms":         req.TrainEndMs,
+		"fee_rate":             searchCosts(req).FeeRate,
+		"spread_rate":          searchCosts(req).SpreadRate,
 		"spawn_mode":           req.SpawnMode,
 		"population":           req.PopSize,
 		"generations":          req.MaxGenerations,
@@ -569,6 +575,7 @@ func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTask
 		SpawnMode:          req.SpawnMode,
 		LotStepSize:        spawn.Risk.LotStep,
 		LotMinQty:          spawn.Risk.LotMin,
+		Costs:              searchCosts(req),
 		SpawnPointOverride: &spawn,
 		TraceMode:          ga.TraceModeSummary,
 	}, []byte(record.ParamPack))
@@ -735,6 +742,12 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 	if req.TrainStartMs > 0 && req.TrainEndMs > 0 && req.TrainStartMs > req.TrainEndMs {
 		return errors.New("train_start_ms must be earlier than train_end_ms")
 	}
+	if err := validateCostRate("fee_rate", req.FeeRate); err != nil {
+		return err
+	}
+	if err := validateCostRate("spread_rate", req.SpreadRate); err != nil {
+		return err
+	}
 	switch req.ContinuousMode {
 	case "", "standardized_best", "random":
 	default:
@@ -772,6 +785,30 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 	}
 	if req.MaxGenerations < 5 || req.MaxGenerations > 50 {
 		return errors.New("max_generations 必須介於 5 到 50")
+	}
+	return nil
+}
+
+func searchCosts(req CreateTaskRequest) quant.ExecutionCostConfig {
+	costs := quant.ExecutionCostConfig{}
+	if req.FeeRate != nil {
+		costs.FeeRate = *req.FeeRate
+	}
+	if req.SpreadRate != nil {
+		costs.SpreadRate = *req.SpreadRate
+	}
+	return quant.NormalizeExecutionCosts(costs)
+}
+
+func validateCostRate(name string, value *float64) error {
+	if value == nil {
+		return nil
+	}
+	if *value < 0 {
+		return fmt.Errorf("%s must be zero or positive", name)
+	}
+	if *value > 0.2 {
+		return fmt.Errorf("%s is too large", name)
 	}
 	return nil
 }

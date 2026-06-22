@@ -69,6 +69,7 @@ type EpochConfig struct {
 	SpawnMode          string
 	LotStepSize        float64
 	LotMinQty          float64
+	Costs              quant.ExecutionCostConfig
 	OnProgress         func(EpochProgress)
 	OnTrace            func(TraceEvent)
 	TraceMode          TraceMode
@@ -138,6 +139,8 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		"execution_mode":  cfg.ExecutionMode,
 		"population":      e.popSize(cfg),
 		"max_generations": e.maxGenerations(cfg),
+		"fee_rate":        cfg.Costs.FeeRate,
+		"spread_rate":     cfg.Costs.SpreadRate,
 		"trace_mode":      cfg.TraceMode,
 	})
 	plan, err := e.buildEvaluablePlan(ctx, cfg)
@@ -293,6 +296,8 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		"execution_mode": cfg.ExecutionMode,
 		"train_start_ms": cfg.StartTimeMs,
 		"train_end_ms":   cfg.EndTimeMs,
+		"fee_rate":       quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
+		"spread_rate":    quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
 		"spawn_mode":     spawnMode,
 		"population":     e.popSize(cfg),
 		"generations":    e.maxGenerations(cfg),
@@ -329,6 +334,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		"bars":     len(bars),
 	})
 	windows := quant.BuildCrucibleWindows(bars, 1200)
+	costs := quant.NormalizeExecutionCosts(cfg.Costs)
 	spawn := cfg.SpawnPointOverride
 	if spawn == nil {
 		defaultSpawn := quant.SpawnPoint{
@@ -351,6 +357,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 			UseOpenExecution:  usesNextOpenExecution(cfg.ExecutionMode),
+			Costs:             costs,
 		})
 		baselines = append(baselines, DCABaseline{
 			FinalEquity:   dca.FinalEquity,
@@ -375,6 +382,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		ExecutionMode:  cfg.ExecutionMode,
 		TemplateName:   e.evolvable.StrategyID(),
 		Spawn:          spawn,
+		Costs:          costs,
 		LotStep:        cfg.LotStepSize,
 		LotMin:         cfg.LotMinQty,
 		Windows:        windows,

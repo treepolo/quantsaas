@@ -398,23 +398,25 @@ func championCacheKey(strategyID string) string {
 
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
-		Pair                 string `json:"pair"`
-		InstrumentID         string `json:"instrument_id"`
-		DataSource           string `json:"data_source"`
-		ExecutionMode        string `json:"execution_mode"`
-		TrainStartMs         int64  `json:"train_start_ms"`
-		TrainEndMs           int64  `json:"train_end_ms"`
-		Interval             string `json:"interval"`
-		PopSize              int    `json:"pop_size"`
-		MaxGenerations       int    `json:"max_generations"`
-		SpawnMode            string `json:"spawn_mode"`
-		TestMode             bool   `json:"test_mode"`
-		TraceMode            string `json:"trace_mode"`
-		ContinuousMode       string `json:"continuous_mode"`
-		ContinuousIterations int    `json:"continuous_iterations"`
-		ContinuousUnlimited  bool   `json:"continuous_unlimited"`
-		StandardStartMs      int64  `json:"standard_start_ms"`
-		StandardEndMs        int64  `json:"standard_end_ms"`
+		Pair                 string  `json:"pair"`
+		InstrumentID         string  `json:"instrument_id"`
+		DataSource           string  `json:"data_source"`
+		ExecutionMode        string  `json:"execution_mode"`
+		TrainStartMs         int64   `json:"train_start_ms"`
+		TrainEndMs           int64   `json:"train_end_ms"`
+		Interval             string  `json:"interval"`
+		PopSize              int     `json:"pop_size"`
+		MaxGenerations       int     `json:"max_generations"`
+		FeeRate              float64 `json:"fee_rate"`
+		SpreadRate           float64 `json:"spread_rate"`
+		SpawnMode            string  `json:"spawn_mode"`
+		TestMode             bool    `json:"test_mode"`
+		TraceMode            string  `json:"trace_mode"`
+		ContinuousMode       string  `json:"continuous_mode"`
+		ContinuousIterations int     `json:"continuous_iterations"`
+		ContinuousUnlimited  bool    `json:"continuous_unlimited"`
+		StandardStartMs      int64   `json:"standard_start_ms"`
+		StandardEndMs        int64   `json:"standard_end_ms"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -485,6 +487,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"execution_mode":            firstNonEmpty(task.ExecutionMode, cfg.ExecutionMode),
 		"train_start_ms":            firstNonZero(task.TrainStartMs, cfg.TrainStartMs),
 		"train_end_ms":              firstNonZero(task.TrainEndMs, cfg.TrainEndMs),
+		"fee_rate":                  cfg.FeeRate,
+		"spread_rate":               cfg.SpreadRate,
 		"interval":                  cfg.Interval,
 		"spawn_mode":                cfg.SpawnMode,
 		"test_mode":                 cfg.TestMode,

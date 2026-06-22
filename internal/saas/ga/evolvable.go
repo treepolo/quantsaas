@@ -23,6 +23,7 @@ type EvaluablePlan struct {
 	ExecutionMode  string
 	TemplateName   string
 	Spawn          *quant.SpawnPoint
+	Costs          quant.ExecutionCostConfig
 	LotStep        float64
 	LotMin         float64
 	Windows        []quant.CrucibleWindow

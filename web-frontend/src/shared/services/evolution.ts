@@ -32,6 +32,8 @@ export type EvolutionTask = {
   execution_mode?: string;
   train_start_ms?: number;
   train_end_ms?: number;
+  fee_rate?: number;
+  spread_rate?: number;
   interval?: string;
   spawn_mode?: "inherit" | "random_once" | "manual";
   test_mode?: boolean;
@@ -80,6 +82,8 @@ export type GenomeRecord = {
     execution_mode?: string;
     train_start_ms?: number;
     train_end_ms?: number;
+    fee_rate?: number;
+    spread_rate?: number;
     spawn_mode?: string;
     population?: number;
     generations?: number;
@@ -101,6 +105,8 @@ export type CreateTaskInput = {
   execution_mode?: string;
   train_start_ms?: number;
   train_end_ms?: number;
+  fee_rate?: number;
+  spread_rate?: number;
   pop_size: number;
   max_generations: number;
   spawn_mode: "inherit" | "random_once" | "manual";
