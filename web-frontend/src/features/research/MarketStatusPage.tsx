@@ -39,6 +39,8 @@ type SimulationSettings = {
   startDate: string;
   initialCapital: number;
   monthlyDCA: number;
+  feeRate: number;
+  spreadRate: number;
 };
 
 type ScaleMode = "absolute" | "log";
@@ -58,7 +60,9 @@ function defaultSettings(): SimulationSettings {
   return {
     startDate: date.toISOString().slice(0, 10),
     initialCapital: 10000,
-    monthlyDCA: 1000
+    monthlyDCA: 1000,
+    feeRate: 0.001,
+    spreadRate: 0.0005
   };
 }
 
@@ -205,7 +209,9 @@ export function MarketStatusPage() {
         instrument_id: instrumentId,
         simulation_start_ms: dayStartMs(settings.startDate),
         simulation_initial_capital: settings.initialCapital,
-        simulation_monthly_dca: settings.monthlyDCA
+        simulation_monthly_dca: settings.monthlyDCA,
+        simulation_fee_rate: settings.feeRate,
+        simulation_spread_rate: settings.spreadRate
       }),
     enabled: Boolean(instrumentId),
     refetchInterval: 60_000
@@ -385,6 +391,9 @@ export function MarketStatusPage() {
               <Metric label="基準模型權重變化" value={signedPercent(model?.latest_model_target_weight_change)} />
               <Metric label="空倉參考目標權重" value={model ? formatPercent(model.latest_empty_reference_target_weight) : "-"} />
               <Metric label="空倉參考權重變化" value={signedPercent(model?.latest_empty_reference_target_weight_change)} />
+              <Metric label="調倉門檻" value={model ? formatPercent(model.rebalance_threshold ?? 0) : "-"} />
+              <Metric label="手續費率" value={model ? formatPercent(model.fee_rate ?? 0) : "-"} />
+              <Metric label="價差 / 滑價率" value={model ? formatPercent(model.spread_rate ?? 0) : "-"} />
             </div>
           </Card>
 
@@ -413,6 +422,8 @@ export function MarketStatusPage() {
                 </label>
                 <NumberInput label="初始資金" min={1} value={settings.initialCapital} onChange={(value) => setSettings((prev) => ({ ...prev, initialCapital: value }))} />
                 <NumberInput label="每月定投金額" min={0} value={settings.monthlyDCA} onChange={(value) => setSettings((prev) => ({ ...prev, monthlyDCA: value }))} />
+                <NumberInput label="手續費率" min={0} step={0.0001} value={settings.feeRate} onChange={(value) => setSettings((prev) => ({ ...prev, feeRate: value }))} />
+                <NumberInput label="價差 / 滑價率" min={0} step={0.0001} value={settings.spreadRate} onChange={(value) => setSettings((prev) => ({ ...prev, spreadRate: value }))} />
               </div>
               {simulation ? (
                 <div className="grid gap-3 md:grid-cols-4">
@@ -465,11 +476,11 @@ function Metric({ label, value, highlight = false, danger = false }: { label: st
   );
 }
 
-function NumberInput({ label, value, min, onChange }: { label: string; value: number; min: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, min, step = 1, onChange }: { label: string; value: number; min: number; step?: number; onChange: (value: number) => void }) {
   return (
     <label>
       <span className="mb-2 block text-sm text-slate-300">{label}</span>
-      <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} step="1" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+      <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={min} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
     </label>
   );
 }

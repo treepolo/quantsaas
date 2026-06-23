@@ -546,7 +546,8 @@ export function BacktestingPage() {
               ["定投最大回撤", formatPercent(result.benchmark_max_drawdown ?? 0), "text-[#fecaca]"],
               ["定投期末權益", formatMoney(result.benchmark_final_equity ?? result.benchmark), "text-slate-100"],
               ["手續費率", formatPercent(result.fee_rate ?? 0), "text-slate-100"],
-              ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"]
+              ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"],
+              ["調倉門檻", formatPercent(result.rebalance_threshold ?? 0), "text-slate-100"]
             ].map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>

@@ -98,6 +98,7 @@ type Response struct {
 	BenchmarkFinalEquity float64            `json:"benchmark_final_equity"`
 	FeeRate              float64            `json:"fee_rate"`
 	SpreadRate           float64            `json:"spread_rate"`
+	RebalanceThreshold   float64            `json:"rebalance_threshold"`
 	NAV                  []EquitySnapshot   `json:"nav"`
 	Windows              map[string]float64 `json:"windows"`
 	WindowDetails        []WindowResult     `json:"window_details"`
@@ -264,6 +265,7 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		BenchmarkFinalEquity: baseline.FinalEquity,
 		FeeRate:              costs.FeeRate,
 		SpreadRate:           costs.SpreadRate,
+		RebalanceThreshold:   params.Chromosome.RebalanceThreshold,
 		NAV:                  mergeNAV(path.NAV, baseline),
 		Windows:              windows,
 		WindowDetails:        windowDetails,

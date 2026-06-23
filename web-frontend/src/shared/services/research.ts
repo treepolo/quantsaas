@@ -54,6 +54,9 @@ export type ResearchModelSimulation = {
   latest_time: string;
   initial_capital: number;
   monthly_dca: number;
+  fee_rate: number;
+  spread_rate: number;
+  rebalance_threshold: number;
   latest_nav: number;
   previous_nav?: number;
   nav_change_pct: number;
@@ -103,6 +106,8 @@ export type ResearchStatusInput = {
   simulation_start_ms?: number;
   simulation_initial_capital?: number;
   simulation_monthly_dca?: number;
+  simulation_fee_rate?: number;
+  simulation_spread_rate?: number;
 };
 
 export const researchApi = {
@@ -112,6 +117,8 @@ export const researchApi = {
     if (input.simulation_start_ms) params.set("simulation_start_ms", String(input.simulation_start_ms));
     if (input.simulation_initial_capital) params.set("simulation_initial_capital", String(input.simulation_initial_capital));
     if (input.simulation_monthly_dca !== undefined) params.set("simulation_monthly_dca", String(input.simulation_monthly_dca));
+    if (input.simulation_fee_rate !== undefined) params.set("simulation_fee_rate", String(input.simulation_fee_rate));
+    if (input.simulation_spread_rate !== undefined) params.set("simulation_spread_rate", String(input.simulation_spread_rate));
     const query = params.toString();
     return apiFetch<ResearchStatusResponse>(`/research/status${query ? `?${query}` : ""}`);
   }

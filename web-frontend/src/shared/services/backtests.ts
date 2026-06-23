@@ -21,6 +21,7 @@ export type BacktestResult = {
   benchmark_final_equity?: number;
   fee_rate?: number;
   spread_rate?: number;
+  rebalance_threshold?: number;
   nav: EquitySnapshot[];
   windows: Record<string, number>;
 };

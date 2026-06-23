@@ -57,6 +57,8 @@ type positionSimulationQuery struct {
 	StartTimeMs    int64
 	InitialCapital float64
 	MonthlyDCA     float64
+	FeeRate        float64
+	SpreadRate     float64
 }
 
 func parsePositionSimulationQuery(c *gin.Context) positionSimulationQuery {
@@ -64,6 +66,8 @@ func parsePositionSimulationQuery(c *gin.Context) positionSimulationQuery {
 		StartTimeMs:    parseInt64Query(c, "simulation_start_ms"),
 		InitialCapital: parseFloatQuery(c, "simulation_initial_capital"),
 		MonthlyDCA:     parseFloatQuery(c, "simulation_monthly_dca"),
+		FeeRate:        parseFloatQuery(c, "simulation_fee_rate"),
+		SpreadRate:     parseFloatQuery(c, "simulation_spread_rate"),
 	}
 }
 
@@ -275,11 +279,13 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 	}
 	bars := barsFromRows(rows)
 	executionMode = marketdata.NormalizeExecutionMode(executionMode)
-	path := ga.RunSigmoidDCAPathBacktestWithMode(bars, rows[0].OpenTime, interval, executionMode, params.Chromosome, &spawn)
+	costs := researchCosts(settings)
+	path := ga.RunSigmoidDCAPathBacktestWithModeAndCosts(bars, rows[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs)
 	baseline := quant.SimulateGhostDCAFrom(bars, rows[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 		UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
+		Costs:             costs,
 	})
 	points := mergeResearchModelPoints(path.NAV, baseline)
 	if len(points) == 0 {
@@ -296,6 +302,9 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 		"latest_time":                                 latest["time"],
 		"initial_capital":                             spawn.Policy.InitialUSDT,
 		"monthly_dca":                                 spawn.Policy.MonthlyInjectUSDT,
+		"fee_rate":                                    costs.FeeRate,
+		"spread_rate":                                 costs.SpreadRate,
+		"rebalance_threshold":                         params.Chromosome.RebalanceThreshold,
 		"latest_nav":                                  latest["model_nav"],
 		"previous_nav":                                previous["model_nav"],
 		"nav_change_pct":                              latest["model_nav_change_pct"],
@@ -313,6 +322,13 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 		"points":       len(points),
 		"chart_points": points,
 	}, true
+}
+
+func researchCosts(settings positionSimulationQuery) quant.ExecutionCostConfig {
+	return quant.NormalizeExecutionCosts(quant.ExecutionCostConfig{
+		FeeRate:    settings.FeeRate,
+		SpreadRate: settings.SpreadRate,
+	})
 }
 
 func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, symbol string, settings positionSimulationQuery) (gin.H, bool) {

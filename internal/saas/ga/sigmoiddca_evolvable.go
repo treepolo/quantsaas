@@ -366,7 +366,8 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			RuntimeState: state,
 			Spawn:        params.Spawn,
 		}, params)
-		modelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
+		rawModelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
+		modelTargetWeight := totalTargetWeight(portfolio, bar.Close, portfolio.TotalEquity, rawModelTargetWeight)
 		output = applyRebalanceThreshold(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
 		emptyReferenceOutput := sigmoiddca.Step(quant.StrategyInput{
 			Symbol:     "BTCUSDT",
@@ -380,7 +381,11 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			RuntimeState: map[string]any{},
 			Spawn:        params.Spawn,
 		}, params)
-		emptyReferenceTargetWeight := diagnosticValue(emptyReferenceOutput.Diagnostics, "target_weight")
+		rawEmptyReferenceTargetWeight := diagnosticValue(emptyReferenceOutput.Diagnostics, "target_weight")
+		emptyReferenceTargetWeight := totalTargetWeight(quant.PortfolioSnapshot{
+			USDTBalance: portfolio.TotalEquity,
+			TotalEquity: portfolio.TotalEquity,
+		}, bar.Close, portfolio.TotalEquity, rawEmptyReferenceTargetWeight)
 		state = output.RuntimeState
 		if usesNextOpenExecution(executionMode) {
 			pendingOutput = output
@@ -390,7 +395,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		}
 
 		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
-		practicalTargetWeight := floatingWeight(portfolio, bar.Close, equity)
+		practicalTargetWeight := totalAssetWeight(portfolio, bar.Close, equity)
 		if TraceEnabled(activePathTraceMode(traceCfg), TraceModeFull) {
 			tracePath(traceCfg, TraceModeFull, "strategy", "step.computed", "strategy step computed", map[string]any{
 				"generation":      traceCfg.Generation,
@@ -484,6 +489,40 @@ func floatingWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquit
 		return 0
 	}
 	return quant.ClipFloat64(portfolio.FloatBTC*price/totalEquity, 0, 1)
+}
+
+func totalAssetWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64) float64 {
+	if price <= 0 {
+		return 0
+	}
+	if totalEquity <= 0 {
+		totalEquity = portfolio.TotalEquity
+	}
+	if totalEquity <= 0 {
+		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
+	}
+	if totalEquity <= 0 {
+		return 0
+	}
+	totalAsset := portfolio.DeadBTC + portfolio.FloatBTC + portfolio.ColdSealedBTC
+	return quant.ClipFloat64(totalAsset*price/totalEquity, 0, 1)
+}
+
+func totalTargetWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64, targetFloatingWeight float64) float64 {
+	if price <= 0 {
+		return 0
+	}
+	if totalEquity <= 0 {
+		totalEquity = portfolio.TotalEquity
+	}
+	if totalEquity <= 0 {
+		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
+	}
+	if totalEquity <= 0 {
+		return 0
+	}
+	nonFloatingWeight := (portfolio.DeadBTC + portfolio.ColdSealedBTC) * price / totalEquity
+	return quant.ClipFloat64(nonFloatingWeight+quant.ClipFloat64(targetFloatingWeight, 0, 1), 0, 1)
 }
 
 func normalizeBacktestExecutionMode(mode string) string {
