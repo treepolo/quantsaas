@@ -24,6 +24,8 @@ type BacktestPoint struct {
 	TimeMs                           int64
 	Price                            float64
 	TotalEquity                      float64
+	PracticalTargetWeight            float64
+	PracticalTargetWeightChange      float64
 	ModelTargetWeight                float64
 	ModelTargetWeightChange          float64
 	EmptyReferenceTargetWeight       float64
@@ -326,6 +328,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 	pendingOutput := quant.StrategyOutput{}
 	hasPendingOutput := false
 	prevModelTargetWeight := 0.0
+	prevPracticalTargetWeight := 0.0
 	prevEmptyReferenceTargetWeight := 0.0
 	hasPrevTargetWeight := false
 
@@ -387,6 +390,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		}
 
 		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
+		practicalTargetWeight := floatingWeight(portfolio, bar.Close, equity)
 		if TraceEnabled(activePathTraceMode(traceCfg), TraceModeFull) {
 			tracePath(traceCfg, TraceModeFull, "strategy", "step.computed", "strategy step computed", map[string]any{
 				"generation":      traceCfg.Generation,
@@ -412,9 +416,11 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 				evalInitial = equity
 				actualEvalStart = bar.OpenTime
 			}
+			practicalTargetWeightChange := 0.0
 			modelTargetWeightChange := 0.0
 			emptyReferenceTargetWeightChange := 0.0
 			if hasPrevTargetWeight {
+				practicalTargetWeightChange = practicalTargetWeight - prevPracticalTargetWeight
 				modelTargetWeightChange = modelTargetWeight - prevModelTargetWeight
 				emptyReferenceTargetWeightChange = emptyReferenceTargetWeight - prevEmptyReferenceTargetWeight
 			}
@@ -423,11 +429,14 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 				TimeMs:                           bar.OpenTime,
 				Price:                            bar.Close,
 				TotalEquity:                      equity,
+				PracticalTargetWeight:            practicalTargetWeight,
+				PracticalTargetWeightChange:      practicalTargetWeightChange,
 				ModelTargetWeight:                modelTargetWeight,
 				ModelTargetWeightChange:          modelTargetWeightChange,
 				EmptyReferenceTargetWeight:       emptyReferenceTargetWeight,
 				EmptyReferenceTargetWeightChange: emptyReferenceTargetWeightChange,
 			})
+			prevPracticalTargetWeight = practicalTargetWeight
 			prevModelTargetWeight = modelTargetWeight
 			prevEmptyReferenceTargetWeight = emptyReferenceTargetWeight
 			hasPrevTargetWeight = true
@@ -459,6 +468,22 @@ func diagnosticValue(values map[string]float64, key string) float64 {
 		return 0
 	}
 	return value
+}
+
+func floatingWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64) float64 {
+	if price <= 0 {
+		return 0
+	}
+	if totalEquity <= 0 {
+		totalEquity = portfolio.TotalEquity
+	}
+	if totalEquity <= 0 {
+		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
+	}
+	if totalEquity <= 0 {
+		return 0
+	}
+	return quant.ClipFloat64(portfolio.FloatBTC*price/totalEquity, 0, 1)
 }
 
 func normalizeBacktestExecutionMode(mode string) string {
@@ -535,7 +560,7 @@ func applyRebalanceThreshold(output quant.StrategyOutput, portfolio quant.Portfo
 	if totalEquity <= 0 {
 		return output
 	}
-	currentWeight := quant.ClipFloat64(portfolio.FloatBTC*price/totalEquity, 0, 1)
+	currentWeight := floatingWeight(portfolio, price, totalEquity)
 	if math.Abs(targetWeight-currentWeight) >= threshold {
 		return output
 	}

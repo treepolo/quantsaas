@@ -60,6 +60,8 @@ type EquitySnapshot struct {
 	Benchmark                        float64 `json:"benchmark"`
 	StrategyChangePct                float64 `json:"strategy_change_pct"`
 	BenchmarkChangePct               float64 `json:"benchmark_change_pct"`
+	PracticalTargetWeight            float64 `json:"practical_target_weight"`
+	PracticalTargetWeightChange      float64 `json:"practical_target_weight_change"`
 	ModelTargetWeight                float64 `json:"model_target_weight"`
 	ModelTargetWeightChange          float64 `json:"model_target_weight_change"`
 	EmptyReferenceTargetWeight       float64 `json:"empty_reference_target_weight"`
@@ -602,6 +604,8 @@ func mergeNAV(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []Equi
 			Benchmark:                        benchmark,
 			StrategyChangePct:                strategyChange,
 			BenchmarkChangePct:               benchmarkChange,
+			PracticalTargetWeight:            item.PracticalTargetWeight,
+			PracticalTargetWeightChange:      item.PracticalTargetWeightChange,
 			ModelTargetWeight:                item.ModelTargetWeight,
 			ModelTargetWeightChange:          item.ModelTargetWeightChange,
 			EmptyReferenceTargetWeight:       item.EmptyReferenceTargetWeight,

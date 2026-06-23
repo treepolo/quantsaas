@@ -26,10 +26,14 @@ type ChartPoint = {
   benchmark_value?: number;
   strategy_change_pct?: number;
   benchmark_change_pct?: number;
+  practical_target_weight?: number;
+  practical_target_weight_change?: number;
   model_target_weight?: number;
   model_target_weight_change?: number;
   empty_reference_target_weight?: number;
   empty_reference_target_weight_change?: number;
+  practical_target_weight_value?: number;
+  practical_target_weight_change_value?: number;
   model_target_weight_value?: number;
   model_target_weight_change_value?: number;
   empty_reference_target_weight_value?: number;
@@ -105,6 +109,8 @@ function buildSingleChartData(result: BacktestResult | null): ChartPoint[] {
     benchmark: item.benchmark ?? item.total_assets,
     strategy_change_pct: item.strategy_change_pct,
     benchmark_change_pct: item.benchmark_change_pct,
+    practical_target_weight: item.practical_target_weight,
+    practical_target_weight_change: item.practical_target_weight_change,
     model_target_weight: item.model_target_weight,
     model_target_weight_change: item.model_target_weight_change,
     empty_reference_target_weight: item.empty_reference_target_weight,
@@ -129,6 +135,8 @@ function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
         } satisfies ChartPoint);
       if (point.price === undefined) point.price = item.price;
       point[key] = item.total_assets;
+      point[`${key}_practical_target_weight`] = item.practical_target_weight;
+      point[`${key}_practical_target_weight_change`] = item.practical_target_weight_change;
       point[`${key}_model_target_weight`] = item.model_target_weight;
       point[`${key}_model_target_weight_change`] = item.model_target_weight_change;
       point[`${key}_empty_reference_target_weight`] = item.empty_reference_target_weight;
@@ -138,6 +146,8 @@ function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
         point.strategy = item.total_assets;
         point.strategy_change_pct = item.strategy_change_pct;
         point.benchmark_change_pct = item.benchmark_change_pct;
+        point.practical_target_weight = item.practical_target_weight;
+        point.practical_target_weight_change = item.practical_target_weight_change;
         point.model_target_weight = item.model_target_weight;
         point.model_target_weight_change = item.model_target_weight_change;
         point.empty_reference_target_weight = item.empty_reference_target_weight;
@@ -342,8 +352,16 @@ export function BacktestingPage() {
     () => buildMetricSeries(comparisonResults, "model_target_weight", { dataKey: "model_target_weight", name: "基準模型", color: "#38bdf8" }),
     [comparisonResults]
   );
+  const practicalWeightSeries = useMemo(
+    () => buildMetricSeries(comparisonResults, "practical_target_weight", { dataKey: "practical_target_weight", name: "實務模型", color: "#2dd4bf" }),
+    [comparisonResults]
+  );
   const modelWeightChangeSeries = useMemo(
     () => buildMetricSeries(comparisonResults, "model_target_weight_change", { dataKey: "model_target_weight_change", name: "基準模型變化", color: "#f59e0b" }),
+    [comparisonResults]
+  );
+  const practicalWeightChangeSeries = useMemo(
+    () => buildMetricSeries(comparisonResults, "practical_target_weight_change", { dataKey: "practical_target_weight_change", name: "實務模型變化", color: "#fb7185" }),
     [comparisonResults]
   );
   const emptyReferenceWeightSeries = useMemo(
@@ -381,6 +399,8 @@ export function BacktestingPage() {
       const benchmarkRawValue = Number(item.benchmark) || 0;
       const benchmarkRaw = valueMode === "relative" ? (benchmarkRawValue / baseBenchmark) * 100 : benchmarkRawValue;
       next.benchmark_value = toChartValue(benchmarkRaw, scaleMode);
+      next.practical_target_weight_value = Number(item.practical_target_weight) || 0;
+      next.practical_target_weight_change_value = Number(item.practical_target_weight_change) || 0;
       next.model_target_weight_value = Number(item.model_target_weight) || 0;
       next.model_target_weight_change_value = Number(item.model_target_weight_change) || 0;
       next.empty_reference_target_weight_value = Number(item.empty_reference_target_weight) || 0;
@@ -636,6 +656,8 @@ export function BacktestingPage() {
                   ["策略日變化", signedPercent(Number(hoveredPoint.strategy_change_pct ?? 0))],
                   ["定投淨值", formatMoney(Number(hoveredPoint.benchmark ?? 0))],
                   ["定投日變化", signedPercent(Number(hoveredPoint.benchmark_change_pct ?? 0))],
+                  ["實務模型目標權重", formatPercent(Number(hoveredPoint.practical_target_weight ?? 0))],
+                  ["實務模型權重變化", signedPercent(Number(hoveredPoint.practical_target_weight_change ?? 0))],
                   ["基準模型目標權重", formatPercent(Number(hoveredPoint.model_target_weight ?? 0))],
                   ["基準模型權重變化", signedPercent(Number(hoveredPoint.model_target_weight_change ?? 0))],
                   ["空倉參考目標權重", formatPercent(Number(hoveredPoint.empty_reference_target_weight ?? 0))],
@@ -646,6 +668,28 @@ export function BacktestingPage() {
             <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
           </Card>
 
+          <MetricChartCard
+            title="實務模型目標權重每日值"
+            description="套用調倉門檻與執行假設後，實務模型每日收盤後的浮動持倉水位。"
+            data={visibleChartData}
+            axisTicks={axisTicks}
+            hoveredPoint={hoveredPoint}
+            lines={practicalWeightSeries}
+            formatter={(value) => formatPercent(Number(value))}
+            layerProps={chartLayerProps()}
+          />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <MetricChartCard
+            title="實務模型目標權重每日變化"
+            description="今日實務模型目標權重減昨日實務模型目標權重。"
+            data={visibleChartData}
+            axisTicks={axisTicks}
+            hoveredPoint={hoveredPoint}
+            lines={practicalWeightChangeSeries}
+            formatter={(value) => signedPercent(Number(value))}
+            layerProps={chartLayerProps()}
+          />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
           <MetricChartCard
             title="基準模型目標權重每日值"
             description="從回測起點空倉開始，依模型路徑逐日產生的目標水準。"

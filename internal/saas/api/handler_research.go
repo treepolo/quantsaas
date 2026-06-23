@@ -208,10 +208,10 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 	base["_params"] = params
 	if model, ok := simulateResearchModel(rows, params, interval, champion.ExecutionMode, simulation); ok {
 		base["model_simulation"] = model
-		if latestTarget, ok := model["latest_model_target_weight"]; ok {
+		if latestTarget, ok := model["latest_practical_target_weight"]; ok {
 			base["target_weight"] = latestTarget
 		}
-		if latestDelta, ok := model["latest_model_target_weight_change"]; ok {
+		if latestDelta, ok := model["latest_practical_target_weight_change"]; ok {
 			base["delta_weight"] = latestDelta
 		}
 		base["empty_reference_target_weight"] = model["latest_empty_reference_target_weight"]
@@ -301,6 +301,9 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 		"nav_change_pct":                              latest["model_nav_change_pct"],
 		"latest_benchmark":                            latest["benchmark"],
 		"benchmark_change_pct":                        latest["benchmark_change_pct"],
+		"latest_practical_target_weight":              latest["practical_target_weight"],
+		"previous_practical_target_weight":            previous["practical_target_weight"],
+		"latest_practical_target_weight_change":       latest["practical_target_weight_change"],
 		"latest_model_target_weight":                  latest["model_target_weight"],
 		"previous_model_target_weight":                previous["model_target_weight"],
 		"latest_model_target_weight_change":           latest["model_target_weight_change"],
@@ -477,6 +480,8 @@ func mergeResearchModelPoints(strategy []ga.BacktestPoint, baseline quant.GhostD
 			"benchmark":                            benchmark,
 			"model_nav_change_pct":                 pctChange(item.TotalEquity, previousModelNAV),
 			"benchmark_change_pct":                 pctChange(benchmark, previousBenchmark),
+			"practical_target_weight":              item.PracticalTargetWeight,
+			"practical_target_weight_change":       item.PracticalTargetWeightChange,
 			"model_target_weight":                  item.ModelTargetWeight,
 			"model_target_weight_change":           item.ModelTargetWeightChange,
 			"empty_reference_target_weight":        item.EmptyReferenceTargetWeight,

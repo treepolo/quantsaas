@@ -375,10 +375,12 @@ export function MarketStatusPage() {
             <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
               <Metric label="市場狀態" value={stateLabel(activeState?.market_state)} />
               <Metric label={statusInterval === "1d" ? "最新完成日 K" : "最新完成週 K"} value={activeState?.latest_bar ? `${shortDateTime(activeState.latest_bar.time)} · ${formatNumber(activeState.latest_bar.close)}` : "-"} />
-              <Metric label="基準模型淨值" value={model ? formatMoney(model.latest_nav, "USD") : "-"} highlight />
-              <Metric label="基準模型淨值日變化" value={signedPercent(model?.nav_change_pct)} danger={(model?.nav_change_pct ?? 0) < 0} />
+              <Metric label="實務模型淨值" value={model ? formatMoney(model.latest_nav, "USD") : "-"} highlight />
+              <Metric label="實務模型淨值日變化" value={signedPercent(model?.nav_change_pct)} danger={(model?.nav_change_pct ?? 0) < 0} />
               <Metric label="定投淨值" value={model ? formatMoney(model.latest_benchmark, "USD") : "-"} />
               <Metric label="定投淨值日變化" value={signedPercent(model?.benchmark_change_pct)} danger={(model?.benchmark_change_pct ?? 0) < 0} />
+              <Metric label="實務模型目標權重" value={model ? formatPercent(model.latest_practical_target_weight) : "-"} highlight />
+              <Metric label="實務模型權重變化" value={signedPercent(model?.latest_practical_target_weight_change)} />
               <Metric label="基準模型目標權重" value={model ? formatPercent(model.latest_model_target_weight) : "-"} highlight />
               <Metric label="基準模型權重變化" value={signedPercent(model?.latest_model_target_weight_change)} />
               <Metric label="空倉參考目標權重" value={model ? formatPercent(model.latest_empty_reference_target_weight) : "-"} />
@@ -386,15 +388,19 @@ export function MarketStatusPage() {
             </div>
           </Card>
 
-          <ChartCard title="基準模型淨值走勢" description="基準模型與定投基準使用相同本金與定期入金設定。" actions={navChartControls} summary={navChartSummary} data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={navAxisFormatter} lines={[["model_nav_value", "基準模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
+          <ChartCard title="實務模型淨值走勢" description="實務模型與定投基準使用相同本金與定期入金設定。" actions={navChartControls} summary={navChartSummary} data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={navAxisFormatter} lines={[["model_nav_value", "實務模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="實務模型目標權重每日值" description="套用調倉門檻與執行假設後，實務模型每日收盤後的浮動持倉水位。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["practical_target_weight", "實務模型", "#2dd4bf"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="實務模型目標權重每日變化" description="今日實務模型目標權重減昨日實務模型目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["practical_target_weight_change", "實務模型變化", "#fb7185"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="基準模型目標權重每日值" description="基準模型路徑逐日產生的理論目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["model_target_weight", "基準模型", "#38bdf8"]]} />
+          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
+          <ChartCard title="基準模型目標權重每日變化" description="今日基準模型目標權重減昨日基準模型目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["model_target_weight_change", "基準模型變化", "#f59e0b"]]} />
           <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
           <ChartCard title="空倉參考目標權重每日值" description="每天獨立假設昨日空倉後得到的參考目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["empty_reference_target_weight", "空倉參考", "#a78bfa"]]} />
           <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
           <ChartCard title="空倉參考目標權重每日變化" description="今日空倉參考目標權重減昨日空倉參考目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["empty_reference_target_weight_change", "空倉參考變化", "#f472b6"]]} />
-          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
-          <ChartCard title="基準模型目標權重每日值" description="基準模型路徑逐日產生的目標水準。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["model_target_weight", "基準模型", "#38bdf8"]]} />
-          <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
-          <ChartCard title="基準模型目標權重每日變化" description="今日基準模型目標權重減昨日基準模型目標權重。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => signedPercent(Number(value))} lines={[["model_target_weight_change", "基準模型變化", "#f59e0b"]]} />
           <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
 
           <details className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4">
@@ -518,10 +524,12 @@ function ChartCard({
         <div className="mt-3 grid gap-2 rounded-lg border border-white/[0.04] bg-slate-950/50 p-3 text-xs md:grid-cols-3 xl:grid-cols-5">
           <Readout label="日期" value={formatFullAxisTime(hoveredPoint.time_ms)} />
           <Readout label="價位 / 點數" value={formatPrice(hoveredPoint.price)} />
-          <Readout label="基準模型淨值" value={formatMoney(hoveredPoint.model_nav, "USD")} />
-          <Readout label="基準模型淨值日變化" value={signedPercent(hoveredPoint.model_nav_change_pct)} />
+          <Readout label="實務模型淨值" value={formatMoney(hoveredPoint.model_nav, "USD")} />
+          <Readout label="實務模型淨值日變化" value={signedPercent(hoveredPoint.model_nav_change_pct)} />
           <Readout label="定投淨值" value={formatMoney(hoveredPoint.benchmark, "USD")} />
           <Readout label="定投淨值日變化" value={signedPercent(hoveredPoint.benchmark_change_pct)} />
+          <Readout label="實務模型目標權重" value={formatPercent(hoveredPoint.practical_target_weight)} />
+          <Readout label="實務模型權重變化" value={signedPercent(hoveredPoint.practical_target_weight_change)} />
           <Readout label="基準模型目標權重" value={formatPercent(hoveredPoint.model_target_weight)} />
           <Readout label="基準模型權重變化" value={signedPercent(hoveredPoint.model_target_weight_change)} />
           <Readout label="空倉參考目標權重" value={formatPercent(hoveredPoint.empty_reference_target_weight)} />

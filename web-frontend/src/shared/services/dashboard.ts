@@ -7,6 +7,8 @@ export type EquitySnapshot = {
   benchmark?: number;
   strategy_change_pct?: number;
   benchmark_change_pct?: number;
+  practical_target_weight?: number;
+  practical_target_weight_change?: number;
   model_target_weight?: number;
   model_target_weight_change?: number;
   empty_reference_target_weight?: number;

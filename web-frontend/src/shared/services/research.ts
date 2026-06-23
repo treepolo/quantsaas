@@ -40,6 +40,8 @@ export type ResearchModelPoint = {
   benchmark: number;
   model_nav_change_pct: number;
   benchmark_change_pct: number;
+  practical_target_weight: number;
+  practical_target_weight_change: number;
   model_target_weight: number;
   model_target_weight_change: number;
   empty_reference_target_weight: number;
@@ -57,6 +59,9 @@ export type ResearchModelSimulation = {
   nav_change_pct: number;
   latest_benchmark: number;
   benchmark_change_pct: number;
+  latest_practical_target_weight: number;
+  previous_practical_target_weight?: number;
+  latest_practical_target_weight_change: number;
   latest_model_target_weight: number;
   previous_model_target_weight?: number;
   latest_model_target_weight_change: number;
