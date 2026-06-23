@@ -671,7 +671,7 @@ export function BacktestingPage() {
 
           <MetricChartCard
             title="實務模型目標權重每日值"
-            description="套用調倉門檻與執行假設後，實務模型每日收盤後的浮動持倉水位。"
+            description="套用調倉門檻與執行假設後，實務模型實際採用的總倉位目標。"
             data={visibleChartData}
             axisTicks={axisTicks}
             hoveredPoint={hoveredPoint}

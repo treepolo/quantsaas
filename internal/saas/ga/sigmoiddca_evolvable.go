@@ -330,6 +330,8 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 	prevModelTargetWeight := 0.0
 	prevPracticalTargetWeight := 0.0
 	prevEmptyReferenceTargetWeight := 0.0
+	adoptedPracticalTargetWeight := 0.0
+	hasAdoptedPracticalTargetWeight := false
 	hasPrevTargetWeight := false
 
 	for i, bar := range bars {
@@ -368,6 +370,11 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		}, params)
 		rawModelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
 		modelTargetWeight := totalTargetWeight(portfolio, bar.Close, portfolio.TotalEquity, rawModelTargetWeight)
+		rebalanceAllowed := rebalanceThresholdAllows(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
+		if !hasAdoptedPracticalTargetWeight || rebalanceAllowed {
+			adoptedPracticalTargetWeight = modelTargetWeight
+			hasAdoptedPracticalTargetWeight = true
+		}
 		output = applyRebalanceThreshold(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
 		emptyReferenceOutput := sigmoiddca.Step(quant.StrategyInput{
 			Symbol:     "BTCUSDT",
@@ -395,7 +402,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		}
 
 		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
-		practicalTargetWeight := totalAssetWeight(portfolio, bar.Close, equity)
+		practicalTargetWeight := adoptedPracticalTargetWeight
 		if TraceEnabled(activePathTraceMode(traceCfg), TraceModeFull) {
 			tracePath(traceCfg, TraceModeFull, "strategy", "step.computed", "strategy step computed", map[string]any{
 				"generation":      traceCfg.Generation,
@@ -588,19 +595,7 @@ func lastBacktestPointTime(points []BacktestPoint) int64 {
 }
 
 func applyRebalanceThreshold(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, threshold float64) quant.StrategyOutput {
-	if threshold <= 0 || price <= 0 {
-		return output
-	}
-	targetWeight := diagnosticValue(output.Diagnostics, "target_weight")
-	totalEquity := portfolio.TotalEquity
-	if totalEquity <= 0 {
-		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
-	}
-	if totalEquity <= 0 {
-		return output
-	}
-	currentWeight := floatingWeight(portfolio, price, totalEquity)
-	if math.Abs(targetWeight-currentWeight) >= threshold {
+	if rebalanceThresholdAllows(output, portfolio, price, threshold) {
 		return output
 	}
 
@@ -614,6 +609,22 @@ func applyRebalanceThreshold(output quant.StrategyOutput, portfolio quant.Portfo
 	}
 	filtered.LotTransfers = nil
 	return filtered
+}
+
+func rebalanceThresholdAllows(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, threshold float64) bool {
+	if threshold <= 0 || price <= 0 {
+		return true
+	}
+	targetWeight := diagnosticValue(output.Diagnostics, "target_weight")
+	totalEquity := portfolio.TotalEquity
+	if totalEquity <= 0 {
+		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
+	}
+	if totalEquity <= 0 {
+		return true
+	}
+	currentWeight := floatingWeight(portfolio, price, totalEquity)
+	return math.Abs(targetWeight-currentWeight) >= threshold
 }
 
 func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.StrategyOutput, price float64) quant.PortfolioSnapshot {
