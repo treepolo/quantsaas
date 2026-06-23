@@ -71,6 +71,7 @@ type EpochConfig struct {
 	LotMinQty          float64
 	InitialCapital     float64
 	MonthlyDCA         float64
+	GeneOptions        GeneOptions
 	Costs              quant.ExecutionCostConfig
 	OnProgress         func(EpochProgress)
 	OnTrace            func(TraceEvent)
@@ -143,6 +144,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		"max_generations": e.maxGenerations(cfg),
 		"initial_capital": e.initialCapital(cfg),
 		"monthly_dca":     e.monthlyDCA(cfg),
+		"gene_options":    cfg.GeneOptions,
 		"fee_rate":        cfg.Costs.FeeRate,
 		"spread_rate":     cfg.Costs.SpreadRate,
 		"trace_mode":      cfg.TraceMode,
@@ -177,7 +179,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		})
 		return EpochResult{}, err
 	}
-	population = e.deduplicatePopulation(population, knownFingerprints, rng, true)
+	population = e.deduplicatePopulation(population, knownFingerprints, rng, true, cfg)
 	population = e.evaluatePopulation(ctx, population, plan, 0, cfg)
 	e.saveObservedPopulation(ctx, scope, searchConfig, population, plan, 0, cfg, knownFingerprints)
 
@@ -282,7 +284,7 @@ func (e *EvolutionEngine) EvaluateParamPack(ctx context.Context, cfg EpochConfig
 	plan.Trace = cfg.OnTrace
 	plan.TraceMode = cfg.TraceMode
 	plan.TraceModeFunc = cfg.TraceModeFunc
-	gene := e.evolvable.DecodeElite(paramPack)
+	gene := e.normalizeGene(cfg, e.evolvable.DecodeElite(paramPack))
 	return e.evolvable.Evaluate(ctx, gene, plan)
 }
 
@@ -302,6 +304,7 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		"train_end_ms":    cfg.EndTimeMs,
 		"initial_capital": e.initialCapital(cfg),
 		"monthly_dca":     e.monthlyDCA(cfg),
+		"gene_options":    cfg.GeneOptions,
 		"fee_rate":        quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
 		"spread_rate":     quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
 		"spawn_mode":      spawnMode,
@@ -389,6 +392,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		TemplateName:   e.evolvable.StrategyID(),
 		Spawn:          spawn,
 		Costs:          costs,
+		GeneOptions:    cfg.GeneOptions,
 		LotStep:        cfg.LotStepSize,
 		LotMin:         cfg.LotMinQty,
 		Windows:        windows,
@@ -409,6 +413,13 @@ func (e *EvolutionEngine) monthlyDCA(cfg EpochConfig) float64 {
 		return cfg.MonthlyDCA
 	}
 	return 0
+}
+
+func (e *EvolutionEngine) normalizeGene(cfg EpochConfig, gene Gene) Gene {
+	if normalizer, ok := e.evolvable.(GeneNormalizer); ok {
+		return normalizer.NormalizeGene(gene, cfg.GeneOptions)
+	}
+	return gene
 }
 
 func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochConfig, rng RandomSource) ([]individual, error) {
@@ -433,25 +444,25 @@ func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochCon
 
 	population := make([]individual, 0, popSize)
 	if len(elitesRaw) > 0 {
-		seed := e.evolvable.DecodeElite(elitesRaw[0])
+		seed := e.normalizeGene(cfg, e.evolvable.DecodeElite(elitesRaw[0]))
 		population = append(population, individual{Gene: seed})
 		remaining := popSize - 1
 		copyCount := int(math.Round(float64(remaining) * 0.10))
 		mutateCount := int(math.Round(float64(remaining) * 0.40))
 
 		for i := 0; i < copyCount && len(population) < popSize; i++ {
-			population = append(population, individual{Gene: e.evolvable.DecodeElite(elitesRaw[i%len(elitesRaw)])})
+			population = append(population, individual{Gene: e.normalizeGene(cfg, e.evolvable.DecodeElite(elitesRaw[i%len(elitesRaw)]))})
 		}
 		for i := 0; i < mutateCount && len(population) < popSize; i++ {
-			base := e.evolvable.DecodeElite(elitesRaw[i%len(elitesRaw)])
-			population = append(population, individual{Gene: e.evolvable.Mutate(base, 0.15, 1.5, rng)})
+			base := e.normalizeGene(cfg, e.evolvable.DecodeElite(elitesRaw[i%len(elitesRaw)]))
+			population = append(population, individual{Gene: e.normalizeGene(cfg, e.evolvable.Mutate(base, 0.15, 1.5, rng))})
 		}
 	} else if !cfg.RandomPopulation {
-		population = append(population, individual{Gene: quant.DefaultSeedChromosome})
+		population = append(population, individual{Gene: e.normalizeGene(cfg, quant.DefaultSeedChromosome)})
 	}
 
 	for len(population) < popSize {
-		population = append(population, individual{Gene: e.evolvable.Sample(rng)})
+		population = append(population, individual{Gene: e.normalizeGene(cfg, e.evolvable.Sample(rng))})
 	}
 	e.trace(cfg, TraceModeSummary, "evolution", "population.initialized", "initial population initialized", map[string]any{
 		"population":  len(population),
@@ -573,7 +584,7 @@ func (e *EvolutionEngine) saveObservedPopulation(ctx context.Context, scope Gene
 	}
 }
 
-func (e *EvolutionEngine) deduplicatePopulation(population []individual, knownFingerprints map[uint64]bool, rng RandomSource, preserveFirst bool) []individual {
+func (e *EvolutionEngine) deduplicatePopulation(population []individual, knownFingerprints map[uint64]bool, rng RandomSource, preserveFirst bool, cfg EpochConfig) []individual {
 	if len(population) == 0 || knownFingerprints == nil {
 		return population
 	}
@@ -585,8 +596,9 @@ func (e *EvolutionEngine) deduplicatePopulation(population []individual, knownFi
 			continue
 		}
 		out[i].Gene = e.uniqueGene(out[i].Gene, knownFingerprints, rng, func() Gene {
-			return e.evolvable.Sample(rng)
+			return e.normalizeGene(cfg, e.evolvable.Sample(rng))
 		})
+		out[i].Gene = e.normalizeGene(cfg, out[i].Gene)
 		knownFingerprints[e.evolvable.Fingerprint(out[i].Gene)] = true
 	}
 	return out
@@ -624,10 +636,12 @@ func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float6
 		p2 := e.tournamentSelect(population, rng)
 		child := e.evolvable.Crossover(p1.Gene, p2.Gene, rng)
 		child = e.evolvable.Mutate(child, mutProb, mutScale, rng)
+		child = e.normalizeGene(cfg, child)
 		child = e.uniqueGene(child, knownFingerprints, rng, func() Gene {
 			next := e.evolvable.Crossover(p1.Gene, p2.Gene, rng)
-			return e.evolvable.Mutate(next, mutProb, mutScale, rng)
+			return e.normalizeGene(cfg, e.evolvable.Mutate(next, mutProb, mutScale, rng))
 		})
+		child = e.normalizeGene(cfg, child)
 		e.trace(cfg, TraceModeDetailed, "evolution", "offspring.created", "offspring generated", map[string]any{
 			"generation":           generation,
 			"child":                len(next),

@@ -10,6 +10,7 @@ type Chromosome struct {
 	WMomentum              float64 `json:"w_momentum"`
 	WBreakout              float64 `json:"w_breakout"`
 	DustUSD                float64 `json:"dust_usd"`
+	RebalanceThreshold     float64 `json:"rebalance_threshold"`
 	WedgeDeltaThreshold    float64 `json:"wedge_delta_threshold"`
 	WedgeVolRatioThreshold float64 `json:"wedge_vol_ratio_threshold"`
 	MacroBearMultiplier    float64 `json:"macro_bear_multiplier"`
@@ -33,6 +34,7 @@ var HardBounds = map[string]Bound{
 	"w_momentum":                {Min: -3.00, Max: 3.00},
 	"w_breakout":                {Min: -3.00, Max: 3.00},
 	"dust_usd":                  {Min: 5.00, Max: 25.00},
+	"rebalance_threshold":       {Min: 0.00, Max: 0.20},
 	"wedge_delta_threshold":     {Min: 0.01, Max: 0.15},
 	"wedge_vol_ratio_threshold": {Min: 1.10, Max: 2.50},
 	"macro_bear_multiplier":     {Min: 1.00, Max: 2.50},
@@ -51,6 +53,7 @@ var DefaultSeedChromosome = Chromosome{
 	WMomentum:              -0.50,
 	WBreakout:              0.75,
 	DustUSD:                10.10,
+	RebalanceThreshold:     0.00,
 	WedgeDeltaThreshold:    0.04,
 	WedgeVolRatioThreshold: 1.60,
 	MacroBearMultiplier:    1.40,
@@ -69,6 +72,7 @@ var GeneSteps = map[string]float64{
 	"w_momentum":                0.10,
 	"w_breakout":                0.10,
 	"dust_usd":                  0.50,
+	"rebalance_threshold":       0.005,
 	"wedge_delta_threshold":     0.005,
 	"wedge_vol_ratio_threshold": 0.05,
 	"macro_bear_multiplier":     0.05,
@@ -87,6 +91,7 @@ func ClampChromosome(c Chromosome) Chromosome {
 	c.WMomentum = clampByName(c.WMomentum, "w_momentum")
 	c.WBreakout = clampByName(c.WBreakout, "w_breakout")
 	c.DustUSD = clampByName(c.DustUSD, "dust_usd")
+	c.RebalanceThreshold = clampByName(c.RebalanceThreshold, "rebalance_threshold")
 	c.WedgeDeltaThreshold = clampByName(c.WedgeDeltaThreshold, "wedge_delta_threshold")
 	c.WedgeVolRatioThreshold = clampByName(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold")
 	c.MacroBearMultiplier = clampByName(c.MacroBearMultiplier, "macro_bear_multiplier")

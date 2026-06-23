@@ -43,29 +43,30 @@ type Service struct {
 }
 
 type CreateTaskRequest struct {
-	StrategyID           string            `json:"strategy_id"`
-	Pair                 string            `json:"pair"`
-	InstrumentID         string            `json:"instrument_id"`
-	DataSource           string            `json:"data_source"`
-	ExecutionMode        string            `json:"execution_mode"`
-	TrainStartMs         int64             `json:"train_start_ms"`
-	TrainEndMs           int64             `json:"train_end_ms"`
-	Interval             string            `json:"interval"`
-	PopSize              int               `json:"pop_size"`
-	MaxGenerations       int               `json:"max_generations"`
-	SpawnMode            string            `json:"spawn_mode"`
-	SpawnPoint           *quant.SpawnPoint `json:"spawn_point"`
-	InitialCapital       float64           `json:"initial_capital"`
-	MonthlyDCA           *float64          `json:"monthly_dca"`
-	FeeRate              *float64          `json:"fee_rate"`
-	SpreadRate           *float64          `json:"spread_rate"`
-	TestMode             bool              `json:"test_mode"`
-	TraceMode            ga.TraceMode      `json:"trace_mode"`
-	ContinuousMode       string            `json:"continuous_mode"`
-	ContinuousIterations int               `json:"continuous_iterations"`
-	ContinuousUnlimited  bool              `json:"continuous_unlimited"`
-	StandardStartMs      int64             `json:"standard_start_ms"`
-	StandardEndMs        int64             `json:"standard_end_ms"`
+	StrategyID               string            `json:"strategy_id"`
+	Pair                     string            `json:"pair"`
+	InstrumentID             string            `json:"instrument_id"`
+	DataSource               string            `json:"data_source"`
+	ExecutionMode            string            `json:"execution_mode"`
+	TrainStartMs             int64             `json:"train_start_ms"`
+	TrainEndMs               int64             `json:"train_end_ms"`
+	Interval                 string            `json:"interval"`
+	PopSize                  int               `json:"pop_size"`
+	MaxGenerations           int               `json:"max_generations"`
+	SpawnMode                string            `json:"spawn_mode"`
+	SpawnPoint               *quant.SpawnPoint `json:"spawn_point"`
+	InitialCapital           float64           `json:"initial_capital"`
+	MonthlyDCA               *float64          `json:"monthly_dca"`
+	EvolveRebalanceThreshold bool              `json:"evolve_rebalance_threshold"`
+	FeeRate                  *float64          `json:"fee_rate"`
+	SpreadRate               *float64          `json:"spread_rate"`
+	TestMode                 bool              `json:"test_mode"`
+	TraceMode                ga.TraceMode      `json:"trace_mode"`
+	ContinuousMode           string            `json:"continuous_mode"`
+	ContinuousIterations     int               `json:"continuous_iterations"`
+	ContinuousUnlimited      bool              `json:"continuous_unlimited"`
+	StandardStartMs          int64             `json:"standard_start_ms"`
+	StandardEndMs            int64             `json:"standard_end_ms"`
 }
 
 type standardizedChampion struct {
@@ -211,6 +212,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		LotMinQty:          spawn.Risk.LotMin,
 		InitialCapital:     searchInitialCapital(req),
 		MonthlyDCA:         searchMonthlyDCA(req),
+		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
@@ -375,6 +377,7 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		LotMinQty:          spawn.Risk.LotMin,
 		InitialCapital:     searchInitialCapital(req),
 		MonthlyDCA:         searchMonthlyDCA(req),
+		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
@@ -475,27 +478,29 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		return 0, nil
 	}
 	searchConfig := map[string]any{
-		"strategy_id":          req.StrategyID,
-		"symbol":               req.Pair,
-		"instrument_id":        req.InstrumentID,
-		"data_source":          req.DataSource,
-		"interval":             req.Interval,
-		"execution_mode":       req.ExecutionMode,
-		"train_start_ms":       req.TrainStartMs,
-		"train_end_ms":         req.TrainEndMs,
-		"initial_capital":      searchInitialCapital(req),
-		"monthly_dca":          searchMonthlyDCA(req),
-		"fee_rate":             searchCosts(req).FeeRate,
-		"spread_rate":          searchCosts(req).SpreadRate,
-		"spawn_mode":           req.SpawnMode,
-		"population":           req.PopSize,
-		"generations":          req.MaxGenerations,
-		"source":               "cancelled_task",
-		"cancelled_task_id":    taskID,
-		"continuous_mode":      req.ContinuousMode,
-		"standard_start_ms":    req.StandardStartMs,
-		"standard_end_ms":      req.StandardEndMs,
-		"continuous_unlimited": req.ContinuousUnlimited,
+		"strategy_id":                req.StrategyID,
+		"symbol":                     req.Pair,
+		"instrument_id":              req.InstrumentID,
+		"data_source":                req.DataSource,
+		"interval":                   req.Interval,
+		"execution_mode":             req.ExecutionMode,
+		"train_start_ms":             req.TrainStartMs,
+		"train_end_ms":               req.TrainEndMs,
+		"initial_capital":            searchInitialCapital(req),
+		"monthly_dca":                searchMonthlyDCA(req),
+		"gene_options":               searchGeneOptions(req),
+		"evolve_rebalance_threshold": req.EvolveRebalanceThreshold,
+		"fee_rate":                   searchCosts(req).FeeRate,
+		"spread_rate":                searchCosts(req).SpreadRate,
+		"spawn_mode":                 req.SpawnMode,
+		"population":                 req.PopSize,
+		"generations":                req.MaxGenerations,
+		"source":                     "cancelled_task",
+		"cancelled_task_id":          taskID,
+		"continuous_mode":            req.ContinuousMode,
+		"standard_start_ms":          req.StandardStartMs,
+		"standard_end_ms":            req.StandardEndMs,
+		"continuous_unlimited":       req.ContinuousUnlimited,
 	}
 	configRaw, _ := json.Marshal(searchConfig)
 	windowScore, _ := json.Marshal(result.WindowScores)
@@ -589,6 +594,7 @@ func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTask
 		LotMinQty:          spawn.Risk.LotMin,
 		InitialCapital:     searchInitialCapital(req),
 		MonthlyDCA:         searchMonthlyDCA(req),
+		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		SpawnPointOverride: &spawn,
 		TraceMode:          ga.TraceModeSummary,
@@ -837,6 +843,12 @@ func searchMonthlyDCA(req CreateTaskRequest) float64 {
 		return *req.MonthlyDCA
 	}
 	return 0
+}
+
+func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
+	return ga.GeneOptions{
+		EvolveRebalanceThreshold: req.EvolveRebalanceThreshold,
+	}
 }
 
 func applySearchCapital(req CreateTaskRequest, spawn *quant.SpawnPoint) {

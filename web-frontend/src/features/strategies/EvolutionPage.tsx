@@ -366,6 +366,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [population, setPopulation] = useState(300);
   const [generations, setGenerations] = useState(25);
   const [monthlyDCA, setMonthlyDCA] = useState(0);
+  const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(false);
   const [feeRate, setFeeRate] = useState(0.001);
   const [spreadRate, setSpreadRate] = useState(0.0005);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
@@ -409,6 +410,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
         train_start_ms: dayStartMs(startDate),
         train_end_ms: dayEndMs(endDate),
         monthly_dca: monthlyDCA,
+        evolve_rebalance_threshold: evolveRebalanceThreshold,
         fee_rate: feeRate,
         spread_rate: spreadRate,
         pop_size: population,
@@ -502,6 +504,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <Metric label="已評估" value={planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")} />
                 <Metric label="初始本金" value={formatMoney(running.initial_capital ?? SEARCH_INITIAL_CAPITAL)} />
                 <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
+                <Metric label="調倉門檻" value={running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
                 <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
                 <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
@@ -548,6 +551,10 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
           <ReadOnlyMetric label="初始本金" value={formatMoney(SEARCH_INITIAL_CAPITAL)} />
           <NumberInput label="每月投入" min={0} max={1000000000} value={monthlyDCA} onChange={setMonthlyDCA} />
+          <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
+            <input type="checkbox" checked={evolveRebalanceThreshold} onChange={(event) => setEvolveRebalanceThreshold(event.target.checked)} />
+            演化調倉門檻
+          </label>
           <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
           <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
@@ -852,6 +859,7 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                     <InfoRow label="結束日期" value={formatSearchDate(searchConfig.train_end_ms)} />
                     <InfoRow label="初始本金" value={searchConfig.initial_capital !== undefined ? formatMoney(searchConfig.initial_capital) : "未記錄"} />
                     <InfoRow label="每月投入" value={searchConfig.monthly_dca !== undefined ? formatMoney(searchConfig.monthly_dca) : "未記錄"} />
+                    <InfoRow label="調倉門檻" value={searchConfig.evolve_rebalance_threshold || searchConfig.gene_options?.EvolveRebalanceThreshold || searchConfig.gene_options?.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                     <InfoRow label="手續費率" value={searchConfig.fee_rate !== undefined ? formatPercent(searchConfig.fee_rate) : "未記錄"} />
                     <InfoRow label="價差 / 滑價率" value={searchConfig.spread_rate !== undefined ? formatPercent(searchConfig.spread_rate) : "未記錄"} />
                     <InfoRow label="執行假設" value={searchConfig.execution_mode ?? genome.execution_mode ?? "未記錄"} />

@@ -24,6 +24,7 @@ type EvaluablePlan struct {
 	TemplateName   string
 	Spawn          *quant.SpawnPoint
 	Costs          quant.ExecutionCostConfig
+	GeneOptions    GeneOptions
 	LotStep        float64
 	LotMin         float64
 	Windows        []quant.CrucibleWindow
@@ -49,6 +50,14 @@ type BacktestMetrics struct {
 	MaxDrawdown   float64
 	FinalEquity   float64
 	TotalInjected float64
+}
+
+type GeneOptions struct {
+	EvolveRebalanceThreshold bool
+}
+
+type GeneNormalizer interface {
+	NormalizeGene(c Gene, options GeneOptions) Gene
 }
 
 type EvolvableStrategy interface {

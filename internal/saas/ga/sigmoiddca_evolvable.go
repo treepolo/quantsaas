@@ -52,6 +52,7 @@ func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 		WMomentum:              sampleRange(rng, "w_momentum"),
 		WBreakout:              sampleRange(rng, "w_breakout"),
 		DustUSD:                sampleRange(rng, "dust_usd"),
+		RebalanceThreshold:     sampleRange(rng, "rebalance_threshold"),
 		WedgeDeltaThreshold:    sampleRange(rng, "wedge_delta_threshold"),
 		WedgeVolRatioThreshold: sampleRange(rng, "wedge_vol_ratio_threshold"),
 		MacroBearMultiplier:    sampleRange(rng, "macro_bear_multiplier"),
@@ -73,6 +74,7 @@ func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng Rando
 	c.WMomentum = mutateFloat(c.WMomentum, "w_momentum", prob, scale, rng)
 	c.WBreakout = mutateFloat(c.WBreakout, "w_breakout", prob, scale, rng)
 	c.DustUSD = mutateFloat(c.DustUSD, "dust_usd", prob, scale, rng)
+	c.RebalanceThreshold = mutateFloat(c.RebalanceThreshold, "rebalance_threshold", prob, scale, rng)
 	c.WedgeDeltaThreshold = mutateFloat(c.WedgeDeltaThreshold, "wedge_delta_threshold", prob, scale, rng)
 	c.WedgeVolRatioThreshold = mutateFloat(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold", prob, scale, rng)
 	c.MacroBearMultiplier = mutateFloat(c.MacroBearMultiplier, "macro_bear_multiplier", prob, scale, rng)
@@ -95,6 +97,7 @@ func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
 	c.WMomentum = pick(rng, a.WMomentum, b.WMomentum)
 	c.WBreakout = pick(rng, a.WBreakout, b.WBreakout)
 	c.DustUSD = pick(rng, a.DustUSD, b.DustUSD)
+	c.RebalanceThreshold = pick(rng, a.RebalanceThreshold, b.RebalanceThreshold)
 	c.WedgeDeltaThreshold = pick(rng, a.WedgeDeltaThreshold, b.WedgeDeltaThreshold)
 	c.WedgeVolRatioThreshold = pick(rng, a.WedgeVolRatioThreshold, b.WedgeVolRatioThreshold)
 	c.MacroBearMultiplier = pick(rng, a.MacroBearMultiplier, b.MacroBearMultiplier)
@@ -116,6 +119,7 @@ func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
 	writeQuantized(h, c.WMomentum)
 	writeQuantized(h, c.WBreakout)
 	writeQuantized(h, c.DustUSD)
+	writeQuantized(h, c.RebalanceThreshold)
 	writeQuantized(h, c.WedgeDeltaThreshold)
 	writeQuantized(h, c.WedgeVolRatioThreshold)
 	writeQuantized(h, c.MacroBearMultiplier)
@@ -127,8 +131,19 @@ func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
 	return h.Sum64()
 }
 
+func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
+	c := asChromosome(g)
+	if !options.EvolveRebalanceThreshold {
+		c.RebalanceThreshold = 0
+	}
+	return quant.ClampChromosome(c)
+}
+
 func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan EvaluablePlan) (FitnessResult, error) {
 	c := asChromosome(g)
+	if !plan.GeneOptions.EvolveRebalanceThreshold {
+		c.RebalanceThreshold = 0
+	}
 	result := FitnessResult{}
 	for i, window := range plan.Windows {
 		if err := ctx.Err(); err != nil {
@@ -349,6 +364,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			Spawn:        params.Spawn,
 		}, params)
 		modelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
+		output = applyRebalanceThreshold(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
 		emptyReferenceOutput := sigmoiddca.Step(quant.StrategyInput{
 			Symbol:     "BTCUSDT",
 			Interval:   interval,
@@ -505,6 +521,35 @@ func lastBacktestPointTime(points []BacktestPoint) int64 {
 		return 0
 	}
 	return points[len(points)-1].TimeMs
+}
+
+func applyRebalanceThreshold(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, threshold float64) quant.StrategyOutput {
+	if threshold <= 0 || price <= 0 {
+		return output
+	}
+	targetWeight := diagnosticValue(output.Diagnostics, "target_weight")
+	totalEquity := portfolio.TotalEquity
+	if totalEquity <= 0 {
+		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
+	}
+	if totalEquity <= 0 {
+		return output
+	}
+	currentWeight := quant.ClipFloat64(portfolio.FloatBTC*price/totalEquity, 0, 1)
+	if math.Abs(targetWeight-currentWeight) >= threshold {
+		return output
+	}
+
+	filtered := output
+	filtered.Intents = make([]quant.TradeIntent, 0, len(output.Intents))
+	for _, intent := range output.Intents {
+		if intent.Engine == quant.EngineMicro {
+			continue
+		}
+		filtered.Intents = append(filtered.Intents, intent)
+	}
+	filtered.LotTransfers = nil
+	return filtered
 }
 
 func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.StrategyOutput, price float64) quant.PortfolioSnapshot {

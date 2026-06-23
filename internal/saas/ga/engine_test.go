@@ -66,6 +66,9 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 		ExecutionMode:  "close_next_open",
 		InitialCapital: 1000000,
 		MonthlyDCA:     250,
+		GeneOptions: GeneOptions{
+			EvolveRebalanceThreshold: true,
+		},
 		Costs: quant.ExecutionCostConfig{
 			FeeRate:    0.001,
 			SpreadRate: 0.0005,
@@ -87,6 +90,13 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	}
 	if cfg["monthly_dca"] != float64(250) {
 		t.Fatalf("monthly_dca = %v, want 250", cfg["monthly_dca"])
+	}
+	geneOptions, ok := cfg["gene_options"].(map[string]any)
+	if !ok {
+		t.Fatalf("gene_options = %T, want object", cfg["gene_options"])
+	}
+	if geneOptions["EvolveRebalanceThreshold"] != true {
+		t.Fatalf("EvolveRebalanceThreshold = %v, want true", geneOptions["EvolveRebalanceThreshold"])
 	}
 }
 

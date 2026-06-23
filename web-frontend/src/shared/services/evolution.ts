@@ -34,6 +34,7 @@ export type EvolutionTask = {
   train_end_ms?: number;
   initial_capital?: number;
   monthly_dca?: number;
+  evolve_rebalance_threshold?: boolean;
   fee_rate?: number;
   spread_rate?: number;
   interval?: string;
@@ -86,6 +87,11 @@ export type GenomeRecord = {
     train_end_ms?: number;
     initial_capital?: number;
     monthly_dca?: number;
+    evolve_rebalance_threshold?: boolean;
+    gene_options?: {
+      EvolveRebalanceThreshold?: boolean;
+      evolve_rebalance_threshold?: boolean;
+    };
     fee_rate?: number;
     spread_rate?: number;
     spawn_mode?: string;
@@ -110,6 +116,7 @@ export type CreateTaskInput = {
   train_start_ms?: number;
   train_end_ms?: number;
   monthly_dca?: number;
+  evolve_rebalance_threshold?: boolean;
   fee_rate?: number;
   spread_rate?: number;
   pop_size: number;
