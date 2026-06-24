@@ -32,6 +32,7 @@ const (
 
 	yahooUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 QuantSaaS/0.1"
 	yahooMinRequestInterval = 1200 * time.Millisecond
+	yahooDailyReadyDelay    = 90 * time.Minute
 )
 
 var (
@@ -956,7 +957,8 @@ func isCompletedMarketDailyRow(instrumentID string, symbol string, openTimeMs in
 	if now.IsZero() {
 		return true
 	}
-	return !marketDailyCloseAt(instrumentID, symbol, time.UnixMilli(openTimeMs)).After(now.UTC())
+	readyAt := marketDailyCloseAt(instrumentID, symbol, time.UnixMilli(openTimeMs)).Add(yahooDailyReadyDelay)
+	return !readyAt.After(now.UTC())
 }
 
 func marketDailyCloseAt(instrumentID string, symbol string, value time.Time) time.Time {

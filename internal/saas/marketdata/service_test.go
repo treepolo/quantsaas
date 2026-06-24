@@ -102,8 +102,12 @@ func TestNormalizeYahooDailyRowsDropsRegularOpenBeforeMarketClose(t *testing.T) 
 		t.Fatalf("normalized len = %d, want 0 before US market close", len(normalized))
 	}
 	normalized = normalizeYahooRowsForStorage(ImportRequest{InstrumentID: "SOXL", DataSource: DataSourceYahoo, Symbol: "SOXL", Interval: "1d"}, rows, time.Date(2026, 6, 18, 21, 0, 0, 0, time.UTC))
+	if len(normalized) != 0 {
+		t.Fatalf("normalized len = %d, want 0 before Yahoo ready delay", len(normalized))
+	}
+	normalized = normalizeYahooRowsForStorage(ImportRequest{InstrumentID: "SOXL", DataSource: DataSourceYahoo, Symbol: "SOXL", Interval: "1d"}, rows, time.Date(2026, 6, 18, 22, 0, 0, 0, time.UTC))
 	if len(normalized) != 1 {
-		t.Fatalf("normalized len after close = %d, want 1", len(normalized))
+		t.Fatalf("normalized len after ready delay = %d, want 1", len(normalized))
 	}
 }
 
