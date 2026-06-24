@@ -11,6 +11,8 @@ type Chromosome struct {
 	WBreakout              float64 `json:"w_breakout"`
 	DustUSD                float64 `json:"dust_usd"`
 	RebalanceThreshold     float64 `json:"rebalance_threshold"`
+	ForceFullThreshold     float64 `json:"force_full_threshold"`
+	ForceEmptyThreshold    float64 `json:"force_empty_threshold"`
 	WedgeDeltaThreshold    float64 `json:"wedge_delta_threshold"`
 	WedgeVolRatioThreshold float64 `json:"wedge_vol_ratio_threshold"`
 	MacroBearMultiplier    float64 `json:"macro_bear_multiplier"`
@@ -35,6 +37,8 @@ var HardBounds = map[string]Bound{
 	"w_breakout":                {Min: -3.00, Max: 3.00},
 	"dust_usd":                  {Min: 5.00, Max: 25.00},
 	"rebalance_threshold":       {Min: 0.00, Max: 0.20},
+	"force_full_threshold":      {Min: 0.00, Max: 1.00},
+	"force_empty_threshold":     {Min: 0.00, Max: 1.00},
 	"wedge_delta_threshold":     {Min: 0.01, Max: 0.15},
 	"wedge_vol_ratio_threshold": {Min: 1.10, Max: 2.50},
 	"macro_bear_multiplier":     {Min: 1.00, Max: 2.50},
@@ -54,6 +58,8 @@ var DefaultSeedChromosome = Chromosome{
 	WBreakout:              0.75,
 	DustUSD:                10.10,
 	RebalanceThreshold:     0.00,
+	ForceFullThreshold:     1.00,
+	ForceEmptyThreshold:    0.00,
 	WedgeDeltaThreshold:    0.04,
 	WedgeVolRatioThreshold: 1.60,
 	MacroBearMultiplier:    1.40,
@@ -73,6 +79,8 @@ var GeneSteps = map[string]float64{
 	"w_breakout":                0.10,
 	"dust_usd":                  0.50,
 	"rebalance_threshold":       0.005,
+	"force_full_threshold":      0.01,
+	"force_empty_threshold":     0.01,
 	"wedge_delta_threshold":     0.005,
 	"wedge_vol_ratio_threshold": 0.05,
 	"macro_bear_multiplier":     0.05,
@@ -92,6 +100,8 @@ func ClampChromosome(c Chromosome) Chromosome {
 	c.WBreakout = clampByName(c.WBreakout, "w_breakout")
 	c.DustUSD = clampByName(c.DustUSD, "dust_usd")
 	c.RebalanceThreshold = clampByName(c.RebalanceThreshold, "rebalance_threshold")
+	c.ForceFullThreshold = clampByName(c.ForceFullThreshold, "force_full_threshold")
+	c.ForceEmptyThreshold = clampByName(c.ForceEmptyThreshold, "force_empty_threshold")
 	c.WedgeDeltaThreshold = clampByName(c.WedgeDeltaThreshold, "wedge_delta_threshold")
 	c.WedgeVolRatioThreshold = clampByName(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold")
 	c.MacroBearMultiplier = clampByName(c.MacroBearMultiplier, "macro_bear_multiplier")
@@ -104,6 +114,9 @@ func ClampChromosome(c Chromosome) Chromosome {
 	if c.MacroBearMultiplier < c.MacroBullMultiplier {
 		c.MacroBearMultiplier = c.MacroBullMultiplier
 	}
+	if c.ForceFullThreshold < c.ForceEmptyThreshold {
+		c.ForceFullThreshold = c.ForceEmptyThreshold
+	}
 	return c
 }
 
@@ -114,6 +127,9 @@ func ValidateChromosome(c Chromosome) error {
 	}
 	if c.MacroBearMultiplier < c.MacroBullMultiplier {
 		return fmt.Errorf("macro_bear_multiplier must be >= macro_bull_multiplier")
+	}
+	if c.ForceFullThreshold < c.ForceEmptyThreshold {
+		return fmt.Errorf("force_full_threshold must be >= force_empty_threshold")
 	}
 	return nil
 }

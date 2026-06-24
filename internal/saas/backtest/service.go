@@ -99,6 +99,13 @@ type Response struct {
 	FeeRate              float64            `json:"fee_rate"`
 	SpreadRate           float64            `json:"spread_rate"`
 	RebalanceThreshold   float64            `json:"rebalance_threshold"`
+	ForceFullThreshold   float64            `json:"force_full_threshold"`
+	ForceEmptyThreshold  float64            `json:"force_empty_threshold"`
+	PositionStructure    string             `json:"position_structure"`
+	TradeCount           int                `json:"trade_count"`
+	WMean                float64            `json:"w_mean"`
+	WMomentum            float64            `json:"w_momentum"`
+	WBreakout            float64            `json:"w_breakout"`
 	NAV                  []EquitySnapshot   `json:"nav"`
 	Windows              map[string]float64 `json:"windows"`
 	WindowDetails        []WindowResult     `json:"window_details"`
@@ -235,7 +242,7 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 	}
 
 	costs := backtestCosts(req)
-	path := ga.RunSigmoidDCAPathBacktestWithModeAndCosts(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs)
+	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
 	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
@@ -243,7 +250,7 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		Costs:             costs,
 	})
 	alpha := path.Metrics.ROI - baseline.ROI
-	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs)
+	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
 
 	return &Response{
 		ID:                   runID,
@@ -266,6 +273,13 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		FeeRate:              costs.FeeRate,
 		SpreadRate:           costs.SpreadRate,
 		RebalanceThreshold:   params.Chromosome.RebalanceThreshold,
+		ForceFullThreshold:   params.Chromosome.ForceFullThreshold,
+		ForceEmptyThreshold:  params.Chromosome.ForceEmptyThreshold,
+		PositionStructure:    params.PositionStructure,
+		TradeCount:           path.Metrics.TradeCount,
+		WMean:                params.Chromosome.WMean,
+		WMomentum:            params.Chromosome.WMomentum,
+		WBreakout:            params.Chromosome.WBreakout,
 		NAV:                  mergeNAV(path.NAV, baseline),
 		Windows:              windows,
 		WindowDetails:        windowDetails,
@@ -491,9 +505,10 @@ func parseCustomParams(raw json.RawMessage) (sigmoiddca.Params, error) {
 			return params, fmt.Errorf("自訂參數內容不正確")
 		}
 		params.Chromosome = quant.ClampChromosome(params.Chromosome)
+		params.PositionStructure = sigmoiddca.NormalizePositionStructure(params.PositionStructure)
 		return params, nil
 	}
-	var chromosome quant.Chromosome
+	chromosome := quant.DefaultSeedChromosome
 	if err := json.Unmarshal(raw, &chromosome); err != nil {
 		return params, fmt.Errorf("自訂參數內容不正確")
 	}
@@ -551,12 +566,12 @@ func backtestCosts(req CreateRequest) quant.ExecutionCostConfig {
 	return quant.NormalizeExecutionCosts(costs)
 }
 
-func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig) (map[string]float64, []WindowResult) {
+func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) (map[string]float64, []WindowResult) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
 	for _, window := range windows {
-		metrics := ga.RunSigmoidDCASingleBacktestWithModeAndCosts(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn, costs)
+		metrics := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn, costs, positionStructure).Metrics
 		baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,

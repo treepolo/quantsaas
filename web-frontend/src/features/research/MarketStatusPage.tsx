@@ -398,6 +398,17 @@ export function MarketStatusPage() {
           </Card>
 
           <ChartCard title="實務模型淨值走勢" description="實務模型與定投基準使用相同本金與定期入金設定。" actions={navChartControls} summary={navChartSummary} data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={navAxisFormatter} lines={[["model_nav_value", "實務模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />
+          <Card className="p-4">
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-4">
+              <Metric label="強制滿倉門檻" value={model ? formatPercent(model.force_full_threshold ?? 1) : "-"} />
+              <Metric label="強制空倉門檻" value={model ? formatPercent(model.force_empty_threshold ?? 0) : "-"} />
+              <Metric label="倉位結構" value={model?.position_structure === "floating_only" ? "純浮動模型" : "雙層模型"} />
+              <Metric label="交易次數" value={(model?.trade_count ?? 0).toLocaleString("zh-TW")} />
+              <Metric label="均值回歸訊號" value={model?.w_mean === 0 ? "停用" : formatNumber(model?.w_mean)} />
+              <Metric label="動能訊號" value={model?.w_momentum === 0 ? "停用" : formatNumber(model?.w_momentum)} />
+              <Metric label="突破訊號" value={model?.w_breakout === 0 ? "停用" : formatNumber(model?.w_breakout)} />
+            </div>
+          </Card>
           <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />
           <ChartCard title="實務模型目標權重每日值" description="套用調倉門檻與執行假設後，實務模型實際採用的總倉位目標。" data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={(value) => formatPercent(Number(value))} lines={[["practical_target_weight", "實務模型", "#2dd4bf"]]} />
           <ChartRangeSlider range={range} total={chartData.length} startLabel={formatFullAxisTime(chartData[range?.start ?? 0]?.time_ms ?? 0)} endLabel={formatFullAxisTime(chartData[range?.end ?? 0]?.time_ms ?? 0)} onChange={setRange} onReset={resetRange} />

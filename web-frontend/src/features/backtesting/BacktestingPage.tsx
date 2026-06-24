@@ -183,6 +183,11 @@ function formatPrice(value: number | undefined) {
   return value.toLocaleString("zh-TW", { maximumFractionDigits: 4 });
 }
 
+function formatNumber(value: number | undefined) {
+  if (value === undefined || !Number.isFinite(value)) return "-";
+  return value.toLocaleString("zh-TW", { maximumFractionDigits: 4 });
+}
+
 function signedPercent(value: number | undefined) {
   if (value === undefined || !Number.isFinite(value)) return "-";
   const prefix = value > 0 ? "+" : "";
@@ -548,6 +553,22 @@ export function BacktestingPage() {
               ["手續費率", formatPercent(result.fee_rate ?? 0), "text-slate-100"],
               ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"],
               ["調倉門檻", formatPercent(result.rebalance_threshold ?? 0), "text-slate-100"]
+            ].map(([label, value, color]) => (
+              <Card key={label} className="p-4">
+                <div className="text-sm text-slate-500">{label}</div>
+                <div className={cn("mt-2 font-mono text-2xl font-semibold", color)}>{value}</div>
+              </Card>
+            ))}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {[
+              ["強制滿倉門檻", formatPercent(result.force_full_threshold ?? 1), "text-slate-100"],
+              ["強制空倉門檻", formatPercent(result.force_empty_threshold ?? 0), "text-slate-100"],
+              ["倉位結構", result.position_structure === "floating_only" ? "純浮動模型" : "雙層模型", "text-slate-100"],
+              ["交易次數", (result.trade_count ?? 0).toLocaleString("zh-TW"), "text-slate-100"],
+              ["均值回歸訊號", result.w_mean === 0 ? "停用" : formatNumber(result.w_mean), "text-slate-100"],
+              ["動能訊號", result.w_momentum === 0 ? "停用" : formatNumber(result.w_momentum), "text-slate-100"],
+              ["突破訊號", result.w_breakout === 0 ? "停用" : formatNumber(result.w_breakout), "text-slate-100"]
             ].map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>

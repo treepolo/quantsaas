@@ -67,8 +67,15 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 		InitialCapital: 1000000,
 		MonthlyDCA:     250,
 		GeneOptions: GeneOptions{
-			EvolveRebalanceThreshold: true,
+			EvolveRebalanceThreshold:  true,
+			EvolveForceFullThreshold:  true,
+			EvolveForceEmptyThreshold: true,
+			EnableWMean:               true,
+			EnableWMomentum:           true,
+			EnableWBreakout:           true,
+			PositionStructure:         "floating_only",
 		},
+		TradePenalty: 0.002,
 		Costs: quant.ExecutionCostConfig{
 			FeeRate:    0.001,
 			SpreadRate: 0.0005,
@@ -98,6 +105,12 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	if geneOptions["EvolveRebalanceThreshold"] != true {
 		t.Fatalf("EvolveRebalanceThreshold = %v, want true", geneOptions["EvolveRebalanceThreshold"])
 	}
+	if geneOptions["PositionStructure"] != "floating_only" {
+		t.Fatalf("PositionStructure = %v, want floating_only", geneOptions["PositionStructure"])
+	}
+	if cfg["trade_penalty"] != 0.002 {
+		t.Fatalf("trade_penalty = %v, want 0.002", cfg["trade_penalty"])
+	}
 }
 
 type fakeEvolvable struct{}
@@ -110,8 +123,10 @@ func (fakeEvolvable) Fingerprint(Gene) uint64                                  {
 func (fakeEvolvable) Evaluate(context.Context, Gene, EvaluablePlan) (FitnessResult, error) {
 	return FitnessResult{}, nil
 }
-func (fakeEvolvable) DecodeElite([]byte) Gene                              { return "elite" }
-func (fakeEvolvable) EncodeResult(Gene, *quant.SpawnPoint) ([]byte, error) { return nil, nil }
+func (fakeEvolvable) DecodeElite([]byte) Gene { return "elite" }
+func (fakeEvolvable) EncodeResult(Gene, *quant.SpawnPoint, GeneOptions) ([]byte, error) {
+	return nil, nil
+}
 func (fakeEvolvable) Verify(context.Context, Gene, *quant.SpawnPoint, []quant.Bar, float64, float64) (BacktestMetrics, error) {
 	return BacktestMetrics{}, nil
 }

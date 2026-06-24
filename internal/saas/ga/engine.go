@@ -73,6 +73,7 @@ type EpochConfig struct {
 	MonthlyDCA         float64
 	GeneOptions        GeneOptions
 	Costs              quant.ExecutionCostConfig
+	TradePenalty       float64
 	OnProgress         func(EpochProgress)
 	OnTrace            func(TraceEvent)
 	TraceMode          TraceMode
@@ -133,6 +134,7 @@ func NewEvolutionEngine(evolvable EvolvableStrategy, store GenomeStore) *Evoluti
 
 func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochResult, error) {
 	cfg.TraceMode = NormalizeTraceMode(cfg.TraceMode)
+	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	e.trace(cfg, TraceModeSummary, "evolution", "epoch.start", "epoch started", map[string]any{
 		"pair":            cfg.Pair,
@@ -147,6 +149,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		"gene_options":    cfg.GeneOptions,
 		"fee_rate":        cfg.Costs.FeeRate,
 		"spread_rate":     cfg.Costs.SpreadRate,
+		"trade_penalty":   cfg.TradePenalty,
 		"trace_mode":      cfg.TraceMode,
 	})
 	plan, err := e.buildEvaluablePlan(ctx, cfg)
@@ -225,7 +228,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		}
 
 		if cfg.OnProgress != nil {
-			paramPack, _ := e.evolvable.EncodeResult(best.Gene, plan.Spawn)
+			paramPack, _ := e.evolvable.EncodeResult(best.Gene, plan.Spawn, cfg.GeneOptions)
 			cfg.OnProgress(EpochProgress{
 				Generation:          generation,
 				BestFitness:         bestScore,
@@ -254,7 +257,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		best = population[0]
 	}
 
-	paramPack, err := e.evolvable.EncodeResult(best.Gene, plan.Spawn)
+	paramPack, err := e.evolvable.EncodeResult(best.Gene, plan.Spawn, cfg.GeneOptions)
 	if err != nil {
 		return EpochResult{}, err
 	}
@@ -277,6 +280,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 
 func (e *EvolutionEngine) EvaluateParamPack(ctx context.Context, cfg EpochConfig, paramPack []byte) (FitnessResult, error) {
 	cfg.TraceMode = NormalizeTraceMode(cfg.TraceMode)
+	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	plan, err := e.buildEvaluablePlan(ctx, cfg)
 	if err != nil {
 		return FitnessResult{}, err
@@ -289,6 +293,7 @@ func (e *EvolutionEngine) EvaluateParamPack(ctx context.Context, cfg EpochConfig
 }
 
 func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
+	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	spawnMode := cfg.SpawnMode
 	if spawnMode == "" {
 		spawnMode = "inherit"
@@ -307,6 +312,7 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		"gene_options":    cfg.GeneOptions,
 		"fee_rate":        quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
 		"spread_rate":     quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
+		"trade_penalty":   cfg.TradePenalty,
 		"spawn_mode":      spawnMode,
 		"population":      e.popSize(cfg),
 		"generations":     e.maxGenerations(cfg),
@@ -318,6 +324,7 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 }
 
 func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfig) (EvaluablePlan, error) {
+	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	e.trace(cfg, TraceModeSummary, "market_data", "klines.load", "loading historical bars", map[string]any{
 		"pair":          cfg.Pair,
 		"instrument_id": cfg.InstrumentID,
@@ -392,6 +399,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		TemplateName:   e.evolvable.StrategyID(),
 		Spawn:          spawn,
 		Costs:          costs,
+		TradePenalty:   math.Max(0, cfg.TradePenalty),
 		GeneOptions:    cfg.GeneOptions,
 		LotStep:        cfg.LotStepSize,
 		LotMin:         cfg.LotMinQty,
@@ -557,7 +565,7 @@ func (e *EvolutionEngine) saveObservedPopulation(ctx context.Context, scope Gene
 	observations := make([]GeneObservation, 0, len(population))
 	for i, item := range population {
 		fingerprint := e.evolvable.Fingerprint(item.Gene)
-		paramPack, err := e.evolvable.EncodeResult(item.Gene, plan.Spawn)
+		paramPack, err := e.evolvable.EncodeResult(item.Gene, plan.Spawn, cfg.GeneOptions)
 		if err != nil {
 			continue
 		}

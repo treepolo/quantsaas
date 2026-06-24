@@ -24,6 +24,7 @@ type EvaluablePlan struct {
 	TemplateName   string
 	Spawn          *quant.SpawnPoint
 	Costs          quant.ExecutionCostConfig
+	TradePenalty   float64
 	GeneOptions    GeneOptions
 	LotStep        float64
 	LotMin         float64
@@ -50,10 +51,17 @@ type BacktestMetrics struct {
 	MaxDrawdown   float64
 	FinalEquity   float64
 	TotalInjected float64
+	TradeCount    int
 }
 
 type GeneOptions struct {
-	EvolveRebalanceThreshold bool
+	EvolveRebalanceThreshold  bool
+	EvolveForceFullThreshold  bool
+	EvolveForceEmptyThreshold bool
+	EnableWMean               bool
+	EnableWMomentum           bool
+	EnableWBreakout           bool
+	PositionStructure         string
 }
 
 type GeneNormalizer interface {
@@ -68,7 +76,7 @@ type EvolvableStrategy interface {
 	Fingerprint(c Gene) uint64
 	Evaluate(ctx context.Context, c Gene, plan EvaluablePlan) (FitnessResult, error)
 	DecodeElite(raw []byte) Gene
-	EncodeResult(c Gene, spawn *quant.SpawnPoint) ([]byte, error)
+	EncodeResult(c Gene, spawn *quant.SpawnPoint, options GeneOptions) ([]byte, error)
 	Verify(ctx context.Context, c Gene, spawn *quant.SpawnPoint, bars []quant.Bar, lotStep float64, lotMin float64) (BacktestMetrics, error)
 }
 

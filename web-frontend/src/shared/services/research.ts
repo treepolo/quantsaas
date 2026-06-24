@@ -57,6 +57,13 @@ export type ResearchModelSimulation = {
   fee_rate: number;
   spread_rate: number;
   rebalance_threshold: number;
+  force_full_threshold?: number;
+  force_empty_threshold?: number;
+  position_structure?: "dual_layer" | "floating_only";
+  trade_count?: number;
+  w_mean?: number;
+  w_momentum?: number;
+  w_breakout?: number;
   latest_nav: number;
   previous_nav?: number;
   nav_change_pct: number;

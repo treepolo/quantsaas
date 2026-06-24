@@ -367,6 +367,13 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [generations, setGenerations] = useState(25);
   const [monthlyDCA, setMonthlyDCA] = useState(0);
   const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(false);
+  const [evolveForceFullThreshold, setEvolveForceFullThreshold] = useState(false);
+  const [evolveForceEmptyThreshold, setEvolveForceEmptyThreshold] = useState(false);
+  const [enableWMean, setEnableWMean] = useState(true);
+  const [enableWMomentum, setEnableWMomentum] = useState(true);
+  const [enableWBreakout, setEnableWBreakout] = useState(true);
+  const [positionStructure, setPositionStructure] = useState<"dual_layer" | "floating_only">("dual_layer");
+  const [tradePenalty, setTradePenalty] = useState(0);
   const [feeRate, setFeeRate] = useState(0.001);
   const [spreadRate, setSpreadRate] = useState(0.0005);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
@@ -411,6 +418,13 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
         train_end_ms: dayEndMs(endDate),
         monthly_dca: monthlyDCA,
         evolve_rebalance_threshold: evolveRebalanceThreshold,
+        evolve_force_full_threshold: evolveForceFullThreshold,
+        evolve_force_empty_threshold: evolveForceEmptyThreshold,
+        enable_w_mean: enableWMean,
+        enable_w_momentum: enableWMomentum,
+        enable_w_breakout: enableWBreakout,
+        position_structure: positionStructure,
+        trade_penalty: tradePenalty,
         fee_rate: feeRate,
         spread_rate: spreadRate,
         pop_size: population,
@@ -454,6 +468,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!enableWMean && !enableWMomentum && !enableWBreakout) return;
     createMutation.mutate();
   }
 
@@ -581,6 +596,25 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             </div>
           </div>
           {executionMode === "preclose_10m" ? <div className="md:col-span-2 text-xs text-[#fde68a]">這個模式需要收盤前快照資料；缺資料時任務可能無法產生有效結果。</div> : null}
+          <Select label="倉位結構" value={positionStructure} onChange={(value) => setPositionStructure(value as "dual_layer" | "floating_only")} options={[["dual_layer", "雙層模型"], ["floating_only", "純浮動模型"]]} />
+          <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
+            <input type="checkbox" checked={evolveForceFullThreshold} onChange={(event) => setEvolveForceFullThreshold(event.target.checked)} />
+            演化強制滿倉門檻
+          </label>
+          <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
+            <input type="checkbox" checked={evolveForceEmptyThreshold} onChange={(event) => setEvolveForceEmptyThreshold(event.target.checked)} />
+            演化強制空倉門檻
+          </label>
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <div className="mb-2 text-sm font-semibold text-slate-300">啟用市場訊號</div>
+            <div className="grid gap-2 md:grid-cols-3">
+              <label className="flex items-center gap-3 text-sm text-slate-300"><input type="checkbox" checked={enableWMean} onChange={(event) => setEnableWMean(event.target.checked)} />均值回歸</label>
+              <label className="flex items-center gap-3 text-sm text-slate-300"><input type="checkbox" checked={enableWMomentum} onChange={(event) => setEnableWMomentum(event.target.checked)} />動能</label>
+              <label className="flex items-center gap-3 text-sm text-slate-300"><input type="checkbox" checked={enableWBreakout} onChange={(event) => setEnableWBreakout(event.target.checked)} />突破</label>
+            </div>
+            {!enableWMean && !enableWMomentum && !enableWBreakout ? <div className="mt-2 text-xs text-[#fecaca]">至少要啟用一個市場訊號。</div> : null}
+          </div>
+          <NumberInput label="每次交易懲罰" min={0} max={1} step={0.0001} value={tradePenalty} onChange={setTradePenalty} />
           <ParameterLandscape query={landscapeQuery} />
           <div className="md:col-span-2">
             <Button type="submit" loading={createMutation.isPending}>開始搜尋</Button>
@@ -860,6 +894,11 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                     <InfoRow label="初始本金" value={searchConfig.initial_capital !== undefined ? formatMoney(searchConfig.initial_capital) : "未記錄"} />
                     <InfoRow label="每月投入" value={searchConfig.monthly_dca !== undefined ? formatMoney(searchConfig.monthly_dca) : "未記錄"} />
                     <InfoRow label="調倉門檻" value={searchConfig.evolve_rebalance_threshold || searchConfig.gene_options?.EvolveRebalanceThreshold || searchConfig.gene_options?.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
+                    <InfoRow label="強制滿倉門檻" value={searchConfig.evolve_force_full_threshold || searchConfig.gene_options?.EvolveForceFullThreshold ? "參與演化" : "固定為 100%"} />
+                    <InfoRow label="強制空倉門檻" value={searchConfig.evolve_force_empty_threshold || searchConfig.gene_options?.EvolveForceEmptyThreshold ? "參與演化" : "固定為 0%"} />
+                    <InfoRow label="倉位結構" value={(searchConfig.position_structure ?? searchConfig.gene_options?.PositionStructure) === "floating_only" ? "純浮動模型" : "雙層模型"} />
+                    <InfoRow label="啟用訊號" value={`${searchConfig.enable_w_mean ?? searchConfig.gene_options?.EnableWMean ?? true ? "均值" : "-"} / ${searchConfig.enable_w_momentum ?? searchConfig.gene_options?.EnableWMomentum ?? true ? "動能" : "-"} / ${searchConfig.enable_w_breakout ?? searchConfig.gene_options?.EnableWBreakout ?? true ? "突破" : "-"}`} />
+                    <InfoRow label="每次交易懲罰" value={searchConfig.trade_penalty !== undefined ? Number(searchConfig.trade_penalty).toFixed(4) : "0.0000"} />
                     <InfoRow label="手續費率" value={searchConfig.fee_rate !== undefined ? formatPercent(searchConfig.fee_rate) : "未記錄"} />
                     <InfoRow label="價差 / 滑價率" value={searchConfig.spread_rate !== undefined ? formatPercent(searchConfig.spread_rate) : "未記錄"} />
                     <InfoRow label="執行假設" value={searchConfig.execution_mode ?? genome.execution_mode ?? "未記錄"} />

@@ -43,30 +43,37 @@ type Service struct {
 }
 
 type CreateTaskRequest struct {
-	StrategyID               string            `json:"strategy_id"`
-	Pair                     string            `json:"pair"`
-	InstrumentID             string            `json:"instrument_id"`
-	DataSource               string            `json:"data_source"`
-	ExecutionMode            string            `json:"execution_mode"`
-	TrainStartMs             int64             `json:"train_start_ms"`
-	TrainEndMs               int64             `json:"train_end_ms"`
-	Interval                 string            `json:"interval"`
-	PopSize                  int               `json:"pop_size"`
-	MaxGenerations           int               `json:"max_generations"`
-	SpawnMode                string            `json:"spawn_mode"`
-	SpawnPoint               *quant.SpawnPoint `json:"spawn_point"`
-	InitialCapital           float64           `json:"initial_capital"`
-	MonthlyDCA               *float64          `json:"monthly_dca"`
-	EvolveRebalanceThreshold bool              `json:"evolve_rebalance_threshold"`
-	FeeRate                  *float64          `json:"fee_rate"`
-	SpreadRate               *float64          `json:"spread_rate"`
-	TestMode                 bool              `json:"test_mode"`
-	TraceMode                ga.TraceMode      `json:"trace_mode"`
-	ContinuousMode           string            `json:"continuous_mode"`
-	ContinuousIterations     int               `json:"continuous_iterations"`
-	ContinuousUnlimited      bool              `json:"continuous_unlimited"`
-	StandardStartMs          int64             `json:"standard_start_ms"`
-	StandardEndMs            int64             `json:"standard_end_ms"`
+	StrategyID                string            `json:"strategy_id"`
+	Pair                      string            `json:"pair"`
+	InstrumentID              string            `json:"instrument_id"`
+	DataSource                string            `json:"data_source"`
+	ExecutionMode             string            `json:"execution_mode"`
+	TrainStartMs              int64             `json:"train_start_ms"`
+	TrainEndMs                int64             `json:"train_end_ms"`
+	Interval                  string            `json:"interval"`
+	PopSize                   int               `json:"pop_size"`
+	MaxGenerations            int               `json:"max_generations"`
+	SpawnMode                 string            `json:"spawn_mode"`
+	SpawnPoint                *quant.SpawnPoint `json:"spawn_point"`
+	InitialCapital            float64           `json:"initial_capital"`
+	MonthlyDCA                *float64          `json:"monthly_dca"`
+	EvolveRebalanceThreshold  bool              `json:"evolve_rebalance_threshold"`
+	EvolveForceFullThreshold  bool              `json:"evolve_force_full_threshold"`
+	EvolveForceEmptyThreshold bool              `json:"evolve_force_empty_threshold"`
+	EnableWMean               *bool             `json:"enable_w_mean"`
+	EnableWMomentum           *bool             `json:"enable_w_momentum"`
+	EnableWBreakout           *bool             `json:"enable_w_breakout"`
+	PositionStructure         string            `json:"position_structure"`
+	TradePenalty              float64           `json:"trade_penalty"`
+	FeeRate                   *float64          `json:"fee_rate"`
+	SpreadRate                *float64          `json:"spread_rate"`
+	TestMode                  bool              `json:"test_mode"`
+	TraceMode                 ga.TraceMode      `json:"trace_mode"`
+	ContinuousMode            string            `json:"continuous_mode"`
+	ContinuousIterations      int               `json:"continuous_iterations"`
+	ContinuousUnlimited       bool              `json:"continuous_unlimited"`
+	StandardStartMs           int64             `json:"standard_start_ms"`
+	StandardEndMs             int64             `json:"standard_end_ms"`
 }
 
 type standardizedChampion struct {
@@ -214,6 +221,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		MonthlyDCA:         searchMonthlyDCA(req),
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
+		TradePenalty:       searchTradePenalty(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
@@ -379,6 +387,7 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		MonthlyDCA:         searchMonthlyDCA(req),
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
+		TradePenalty:       searchTradePenalty(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
@@ -478,29 +487,36 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		return 0, nil
 	}
 	searchConfig := map[string]any{
-		"strategy_id":                req.StrategyID,
-		"symbol":                     req.Pair,
-		"instrument_id":              req.InstrumentID,
-		"data_source":                req.DataSource,
-		"interval":                   req.Interval,
-		"execution_mode":             req.ExecutionMode,
-		"train_start_ms":             req.TrainStartMs,
-		"train_end_ms":               req.TrainEndMs,
-		"initial_capital":            searchInitialCapital(req),
-		"monthly_dca":                searchMonthlyDCA(req),
-		"gene_options":               searchGeneOptions(req),
-		"evolve_rebalance_threshold": req.EvolveRebalanceThreshold,
-		"fee_rate":                   searchCosts(req).FeeRate,
-		"spread_rate":                searchCosts(req).SpreadRate,
-		"spawn_mode":                 req.SpawnMode,
-		"population":                 req.PopSize,
-		"generations":                req.MaxGenerations,
-		"source":                     "cancelled_task",
-		"cancelled_task_id":          taskID,
-		"continuous_mode":            req.ContinuousMode,
-		"standard_start_ms":          req.StandardStartMs,
-		"standard_end_ms":            req.StandardEndMs,
-		"continuous_unlimited":       req.ContinuousUnlimited,
+		"strategy_id":                  req.StrategyID,
+		"symbol":                       req.Pair,
+		"instrument_id":                req.InstrumentID,
+		"data_source":                  req.DataSource,
+		"interval":                     req.Interval,
+		"execution_mode":               req.ExecutionMode,
+		"train_start_ms":               req.TrainStartMs,
+		"train_end_ms":                 req.TrainEndMs,
+		"initial_capital":              searchInitialCapital(req),
+		"monthly_dca":                  searchMonthlyDCA(req),
+		"gene_options":                 searchGeneOptions(req),
+		"evolve_rebalance_threshold":   req.EvolveRebalanceThreshold,
+		"evolve_force_full_threshold":  req.EvolveForceFullThreshold,
+		"evolve_force_empty_threshold": req.EvolveForceEmptyThreshold,
+		"enable_w_mean":                boolValue(req.EnableWMean),
+		"enable_w_momentum":            boolValue(req.EnableWMomentum),
+		"enable_w_breakout":            boolValue(req.EnableWBreakout),
+		"position_structure":           normalizedPositionStructure(req.PositionStructure),
+		"trade_penalty":                searchTradePenalty(req),
+		"fee_rate":                     searchCosts(req).FeeRate,
+		"spread_rate":                  searchCosts(req).SpreadRate,
+		"spawn_mode":                   req.SpawnMode,
+		"population":                   req.PopSize,
+		"generations":                  req.MaxGenerations,
+		"source":                       "cancelled_task",
+		"cancelled_task_id":            taskID,
+		"continuous_mode":              req.ContinuousMode,
+		"standard_start_ms":            req.StandardStartMs,
+		"standard_end_ms":              req.StandardEndMs,
+		"continuous_unlimited":         req.ContinuousUnlimited,
 	}
 	configRaw, _ := json.Marshal(searchConfig)
 	windowScore, _ := json.Marshal(result.WindowScores)
@@ -596,6 +612,7 @@ func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTask
 		MonthlyDCA:         searchMonthlyDCA(req),
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
+		TradePenalty:       searchTradePenalty(req),
 		SpawnPointOverride: &spawn,
 		TraceMode:          ga.TraceModeSummary,
 	}, []byte(record.ParamPack))
@@ -726,6 +743,19 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 		zero := 0.0
 		req.MonthlyDCA = &zero
 	}
+	if req.EnableWMean == nil {
+		value := true
+		req.EnableWMean = &value
+	}
+	if req.EnableWMomentum == nil {
+		value := true
+		req.EnableWMomentum = &value
+	}
+	if req.EnableWBreakout == nil {
+		value := true
+		req.EnableWBreakout = &value
+	}
+	req.PositionStructure = normalizedPositionStructure(req.PositionStructure)
 	req.ContinuousMode = strings.ToLower(strings.TrimSpace(req.ContinuousMode))
 	if req.ContinuousMode != "" && req.ContinuousIterations == 0 && !req.ContinuousUnlimited {
 		req.ContinuousIterations = 2
@@ -778,6 +808,15 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 	}
 	if req.MonthlyDCA != nil && *req.MonthlyDCA < 0 {
 		return errors.New("monthly_dca must be zero or positive")
+	}
+	if !boolValue(req.EnableWMean) && !boolValue(req.EnableWMomentum) && !boolValue(req.EnableWBreakout) {
+		return errors.New("at least one signal must be enabled")
+	}
+	if req.TradePenalty < 0 {
+		return errors.New("trade_penalty must be zero or positive")
+	}
+	if req.TradePenalty > 1 {
+		return errors.New("trade_penalty is too large")
 	}
 	switch req.ContinuousMode {
 	case "", "standardized_best", "random":
@@ -847,8 +886,29 @@ func searchMonthlyDCA(req CreateTaskRequest) float64 {
 
 func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
 	return ga.GeneOptions{
-		EvolveRebalanceThreshold: req.EvolveRebalanceThreshold,
+		EvolveRebalanceThreshold:  req.EvolveRebalanceThreshold,
+		EvolveForceFullThreshold:  req.EvolveForceFullThreshold,
+		EvolveForceEmptyThreshold: req.EvolveForceEmptyThreshold,
+		EnableWMean:               boolValue(req.EnableWMean),
+		EnableWMomentum:           boolValue(req.EnableWMomentum),
+		EnableWBreakout:           boolValue(req.EnableWBreakout),
+		PositionStructure:         normalizedPositionStructure(req.PositionStructure),
 	}
+}
+
+func searchTradePenalty(req CreateTaskRequest) float64 {
+	if req.TradePenalty > 0 {
+		return req.TradePenalty
+	}
+	return 0
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
+}
+
+func normalizedPositionStructure(value string) string {
+	return sigmoiddca.NormalizePositionStructure(value)
 }
 
 func applySearchCapital(req CreateTaskRequest, spawn *quant.SpawnPoint) {

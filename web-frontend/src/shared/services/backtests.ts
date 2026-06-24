@@ -22,6 +22,13 @@ export type BacktestResult = {
   fee_rate?: number;
   spread_rate?: number;
   rebalance_threshold?: number;
+  force_full_threshold?: number;
+  force_empty_threshold?: number;
+  position_structure?: "dual_layer" | "floating_only";
+  trade_count?: number;
+  w_mean?: number;
+  w_momentum?: number;
+  w_breakout?: number;
   nav: EquitySnapshot[];
   windows: Record<string, number>;
 };

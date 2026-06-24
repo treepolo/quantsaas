@@ -280,7 +280,7 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 	bars := barsFromRows(rows)
 	executionMode = marketdata.NormalizeExecutionMode(executionMode)
 	costs := researchCosts(settings)
-	path := ga.RunSigmoidDCAPathBacktestWithModeAndCosts(bars, rows[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs)
+	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars, rows[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
 	baseline := quant.SimulateGhostDCAFrom(bars, rows[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
@@ -305,6 +305,13 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 		"fee_rate":                                    costs.FeeRate,
 		"spread_rate":                                 costs.SpreadRate,
 		"rebalance_threshold":                         params.Chromosome.RebalanceThreshold,
+		"force_full_threshold":                        params.Chromosome.ForceFullThreshold,
+		"force_empty_threshold":                       params.Chromosome.ForceEmptyThreshold,
+		"position_structure":                          params.PositionStructure,
+		"trade_count":                                 path.Metrics.TradeCount,
+		"w_mean":                                      params.Chromosome.WMean,
+		"w_momentum":                                  params.Chromosome.WMomentum,
+		"w_breakout":                                  params.Chromosome.WBreakout,
 		"latest_nav":                                  latest["model_nav"],
 		"previous_nav":                                previous["model_nav"],
 		"nav_change_pct":                              latest["model_nav_change_pct"],
@@ -319,8 +326,8 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 		"latest_empty_reference_target_weight":        latest["empty_reference_target_weight"],
 		"previous_empty_reference_target_weight":      previous["empty_reference_target_weight"],
 		"latest_empty_reference_target_weight_change": latest["empty_reference_target_weight_change"],
-		"points":       len(points),
-		"chart_points": points,
+		"points":                                      len(points),
+		"chart_points":                                points,
 	}, true
 }
 

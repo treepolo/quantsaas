@@ -29,9 +29,15 @@ func Step(input quant.StrategyInput, params Params) quant.StrategyOutput {
 	spendableUSDT := math.Max(0, input.Portfolio.USDTBalance-reserveFloor)
 
 	market := quant.ComputeMarketState(input.Closes)
-	macroIntent, macroYearMonth, macroDiag := computeMacroIntent(input, state, params, market, spendableUSDT, reserveFloor)
 	microIntent, microDecision := computeMicroIntent(input, params, market, totalEquity, spendableUSDT)
-	transfers := computeDeadRelease(input, params, market, microDecision)
+	macroIntent := quant.TradeIntent{}
+	macroYearMonth := ""
+	macroDiag := map[string]float64{}
+	var transfers []quant.LotTransfer
+	if !params.FloatingOnly() {
+		macroIntent, macroYearMonth, macroDiag = computeMacroIntent(input, state, params, market, spendableUSDT, reserveFloor)
+		transfers = computeDeadRelease(input, params, market, microDecision)
+	}
 
 	intents := make([]quant.TradeIntent, 0, 2)
 	if macroIntent.Action != "" {

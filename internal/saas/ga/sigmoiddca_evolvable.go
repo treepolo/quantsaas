@@ -41,6 +41,19 @@ func NewSigmoidDCAEvolvable() SigmoidDCAEvolvable {
 	return SigmoidDCAEvolvable{}
 }
 
+func NormalizeGeneOptions(options GeneOptions) GeneOptions {
+	if options.PositionStructure == "" {
+		options.PositionStructure = sigmoiddca.PositionStructureDualLayer
+	}
+	options.PositionStructure = sigmoiddca.NormalizePositionStructure(options.PositionStructure)
+	if !options.EnableWMean && !options.EnableWMomentum && !options.EnableWBreakout {
+		options.EnableWMean = true
+		options.EnableWMomentum = true
+		options.EnableWBreakout = true
+	}
+	return options
+}
+
 func (SigmoidDCAEvolvable) StrategyID() string {
 	return sigmoiddca.StrategyID
 }
@@ -55,6 +68,8 @@ func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 		WBreakout:              sampleRange(rng, "w_breakout"),
 		DustUSD:                sampleRange(rng, "dust_usd"),
 		RebalanceThreshold:     sampleRange(rng, "rebalance_threshold"),
+		ForceFullThreshold:     sampleRange(rng, "force_full_threshold"),
+		ForceEmptyThreshold:    sampleRange(rng, "force_empty_threshold"),
 		WedgeDeltaThreshold:    sampleRange(rng, "wedge_delta_threshold"),
 		WedgeVolRatioThreshold: sampleRange(rng, "wedge_vol_ratio_threshold"),
 		MacroBearMultiplier:    sampleRange(rng, "macro_bear_multiplier"),
@@ -77,6 +92,8 @@ func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng Rando
 	c.WBreakout = mutateFloat(c.WBreakout, "w_breakout", prob, scale, rng)
 	c.DustUSD = mutateFloat(c.DustUSD, "dust_usd", prob, scale, rng)
 	c.RebalanceThreshold = mutateFloat(c.RebalanceThreshold, "rebalance_threshold", prob, scale, rng)
+	c.ForceFullThreshold = mutateFloat(c.ForceFullThreshold, "force_full_threshold", prob, scale, rng)
+	c.ForceEmptyThreshold = mutateFloat(c.ForceEmptyThreshold, "force_empty_threshold", prob, scale, rng)
 	c.WedgeDeltaThreshold = mutateFloat(c.WedgeDeltaThreshold, "wedge_delta_threshold", prob, scale, rng)
 	c.WedgeVolRatioThreshold = mutateFloat(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold", prob, scale, rng)
 	c.MacroBearMultiplier = mutateFloat(c.MacroBearMultiplier, "macro_bear_multiplier", prob, scale, rng)
@@ -100,6 +117,8 @@ func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
 	c.WBreakout = pick(rng, a.WBreakout, b.WBreakout)
 	c.DustUSD = pick(rng, a.DustUSD, b.DustUSD)
 	c.RebalanceThreshold = pick(rng, a.RebalanceThreshold, b.RebalanceThreshold)
+	c.ForceFullThreshold = pick(rng, a.ForceFullThreshold, b.ForceFullThreshold)
+	c.ForceEmptyThreshold = pick(rng, a.ForceEmptyThreshold, b.ForceEmptyThreshold)
 	c.WedgeDeltaThreshold = pick(rng, a.WedgeDeltaThreshold, b.WedgeDeltaThreshold)
 	c.WedgeVolRatioThreshold = pick(rng, a.WedgeVolRatioThreshold, b.WedgeVolRatioThreshold)
 	c.MacroBearMultiplier = pick(rng, a.MacroBearMultiplier, b.MacroBearMultiplier)
@@ -122,6 +141,8 @@ func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
 	writeQuantized(h, c.WBreakout)
 	writeQuantized(h, c.DustUSD)
 	writeQuantized(h, c.RebalanceThreshold)
+	writeQuantized(h, c.ForceFullThreshold)
+	writeQuantized(h, c.ForceEmptyThreshold)
 	writeQuantized(h, c.WedgeDeltaThreshold)
 	writeQuantized(h, c.WedgeVolRatioThreshold)
 	writeQuantized(h, c.MacroBearMultiplier)
@@ -135,17 +156,38 @@ func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
 
 func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
 	c := asChromosome(g)
+	options = NormalizeGeneOptions(options)
 	if !options.EvolveRebalanceThreshold {
 		c.RebalanceThreshold = 0
+	}
+	if !options.EvolveForceFullThreshold {
+		c.ForceFullThreshold = 1
+	}
+	if !options.EvolveForceEmptyThreshold {
+		c.ForceEmptyThreshold = 0
+	}
+	if !options.EnableWMean {
+		c.WMean = 0
+	}
+	if !options.EnableWMomentum {
+		c.WMomentum = 0
+	}
+	if !options.EnableWBreakout {
+		c.WBreakout = 0
+	}
+	if options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
+		c.MacroBearMultiplier = 1
+		c.MacroBullMultiplier = 1
+		c.ExtraDeployPct = 0
+		c.SoftReleaseMonths = int(quant.HardBounds["soft_release_months"].Max)
+		c.SoftReleasePct = 0
+		c.HardReleaseMaxPct = 0
 	}
 	return quant.ClampChromosome(c)
 }
 
 func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan EvaluablePlan) (FitnessResult, error) {
-	c := asChromosome(g)
-	if !plan.GeneOptions.EvolveRebalanceThreshold {
-		c.RebalanceThreshold = 0
-	}
+	c := e.NormalizeGene(g, plan.GeneOptions).(quant.Chromosome)
 	result := FitnessResult{}
 	for i, window := range plan.Windows {
 		if err := ctx.Err(); err != nil {
@@ -166,10 +208,10 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			Individual:    plan.Individual,
 			Worker:        plan.Worker,
 			Window:        window.Label,
-		}, plan.Costs).Metrics
+		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure).Metrics
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
-		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown)
+		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown) - plan.TradePenalty*float64(metrics.TradeCount)
 		if metrics.MaxDrawdown >= 0.88 {
 			score = FatalFitnessScore
 			result.Fatal = true
@@ -195,6 +237,8 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 				"roi":             metrics.ROI,
 				"alpha":           alpha,
 				"max_drawdown":    metrics.MaxDrawdown,
+				"trade_count":     metrics.TradeCount,
+				"trade_penalty":   plan.TradePenalty,
 				"baseline_roi":    baseline.ROI,
 				"baseline_max_dd": baseline.MaxDrawdown,
 			})
@@ -211,6 +255,8 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			"roi":             metrics.ROI,
 			"alpha":           alpha,
 			"max_drawdown":    metrics.MaxDrawdown,
+			"trade_count":     metrics.TradeCount,
+			"trade_penalty":   plan.TradePenalty,
 			"baseline_roi":    baseline.ROI,
 			"baseline_max_dd": baseline.MaxDrawdown,
 			"final_equity":    metrics.FinalEquity,
@@ -228,9 +274,11 @@ func (SigmoidDCAEvolvable) DecodeElite(raw []byte) Gene {
 	return params.Chromosome
 }
 
-func (SigmoidDCAEvolvable) EncodeResult(g Gene, spawn *quant.SpawnPoint) ([]byte, error) {
+func (SigmoidDCAEvolvable) EncodeResult(g Gene, spawn *quant.SpawnPoint, options GeneOptions) ([]byte, error) {
+	options = NormalizeGeneOptions(options)
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome = quant.ClampChromosome(asChromosome(g))
+	params.PositionStructure = options.PositionStructure
 	if spawn != nil {
 		params.Spawn = *spawn
 	}
@@ -283,7 +331,11 @@ func RunSigmoidDCAPathBacktestWithMode(bars []quant.Bar, evalStartMs int64, inte
 }
 
 func RunSigmoidDCAPathBacktestWithModeAndCosts(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs)
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, sigmoiddca.PositionStructureDualLayer)
+}
+
+func RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, positionStructure)
 }
 
 func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
@@ -291,10 +343,10 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 }
 
 func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{})
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{}, sigmoiddca.PositionStructureDualLayer)
 }
 
-func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig) SigmoidDCAPathResult {
+func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
 	costs = quant.NormalizeExecutionCosts(costs)
 	executionMode = normalizeBacktestExecutionMode(executionMode)
 	if len(bars) == 0 || bars[0].Close <= 0 || executionMode == executionModePreclose10m {
@@ -306,6 +358,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome = quant.ClampChromosome(chromosome)
+	params.PositionStructure = sigmoiddca.NormalizePositionStructure(positionStructure)
 	if spawn != nil {
 		params.Spawn = *spawn
 	}
@@ -333,6 +386,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 	adoptedPracticalTargetWeight := 0.0
 	hasAdoptedPracticalTargetWeight := false
 	hasPrevTargetWeight := false
+	tradeCount := 0
 
 	for i, bar := range bars {
 		if bar.Close <= 0 {
@@ -350,6 +404,9 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		if usesNextOpenExecution(executionMode) && hasPendingOutput {
 			if bar.Open <= 0 {
 				return SigmoidDCAPathResult{}
+			}
+			if bar.OpenTime >= evalStartMs {
+				tradeCount += countTradeIntents(pendingOutput)
 			}
 			portfolio = applyBacktestOutputWithCosts(portfolio, pendingOutput, bar.Open, costs)
 			hasPendingOutput = false
@@ -370,6 +427,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		}, params)
 		rawModelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
 		modelTargetWeight := totalTargetWeight(portfolio, bar.Close, portfolio.TotalEquity, rawModelTargetWeight)
+		output, modelTargetWeight = applyForceTargetThresholds(output, portfolio, bar.Close, params.Chromosome, modelTargetWeight)
 		rebalanceAllowed := rebalanceThresholdAllows(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
 		if !hasAdoptedPracticalTargetWeight || rebalanceAllowed {
 			adoptedPracticalTargetWeight = modelTargetWeight
@@ -393,11 +451,19 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			USDTBalance: portfolio.TotalEquity,
 			TotalEquity: portfolio.TotalEquity,
 		}, bar.Close, portfolio.TotalEquity, rawEmptyReferenceTargetWeight)
+		emptyReferenceOutput, emptyReferenceTargetWeight = applyForceTargetThresholds(emptyReferenceOutput, quant.PortfolioSnapshot{
+			USDTBalance: portfolio.TotalEquity,
+			TotalEquity: portfolio.TotalEquity,
+		}, bar.Close, params.Chromosome, emptyReferenceTargetWeight)
+		_ = emptyReferenceOutput
 		state = output.RuntimeState
 		if usesNextOpenExecution(executionMode) {
 			pendingOutput = output
 			hasPendingOutput = true
 		} else {
+			if bar.OpenTime >= evalStartMs {
+				tradeCount += countTradeIntents(output)
+			}
 			portfolio = applyBacktestOutputWithCosts(portfolio, output, bar.Close, costs)
 		}
 
@@ -464,6 +530,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		MaxDrawdown:   quant.MaxDrawdown(nav),
 		FinalEquity:   final,
 		TotalInjected: evalInitial + evalInjected,
+		TradeCount:    tradeCount,
 	}
 	return SigmoidDCAPathResult{
 		Metrics: metrics,
@@ -480,6 +547,105 @@ func diagnosticValue(values map[string]float64, key string) float64 {
 		return 0
 	}
 	return value
+}
+
+func applyForceTargetThresholds(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, chromosome quant.Chromosome, modelTargetWeight float64) (quant.StrategyOutput, float64) {
+	forcedTarget := modelTargetWeight
+	switch {
+	case chromosome.ForceFullThreshold < 1 && modelTargetWeight >= chromosome.ForceFullThreshold:
+		forcedTarget = 1
+	case chromosome.ForceEmptyThreshold > 0 && modelTargetWeight <= chromosome.ForceEmptyThreshold:
+		forcedTarget = 0
+	default:
+		return output, modelTargetWeight
+	}
+	return forceTotalTargetOutput(output, portfolio, price, forcedTarget, chromosome.DustUSD), forcedTarget
+}
+
+func forceTotalTargetOutput(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, targetTotalWeight float64, dustUSD float64) quant.StrategyOutput {
+	if price <= 0 {
+		return output
+	}
+	totalEquity := portfolio.TotalEquity
+	if totalEquity <= 0 {
+		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
+	}
+	if totalEquity <= 0 {
+		return output
+	}
+	targetTotalWeight = quant.ClipFloat64(targetTotalWeight, 0, 1)
+	currentAssetValue := (portfolio.DeadBTC + portfolio.FloatBTC + portfolio.ColdSealedBTC) * price
+	targetAssetValue := totalEquity * targetTotalWeight
+	deltaValue := targetAssetValue - currentAssetValue
+	dust := dustUSD
+	if dust <= 0 {
+		dust = 10.1
+	}
+
+	forced := output
+	forced.Intents = make([]quant.TradeIntent, 0, 1)
+	forced.LotTransfers = nil
+	if forced.Diagnostics == nil {
+		forced.Diagnostics = map[string]float64{}
+	}
+	targetFloatingWeight := targetFloatingWeightForTotal(portfolio, price, totalEquity, targetTotalWeight)
+	forced.Diagnostics["target_weight"] = targetFloatingWeight
+	forced.Diagnostics["delta_weight"] = targetFloatingWeight - floatingWeight(portfolio, price, totalEquity)
+
+	switch {
+	case deltaValue > dust:
+		amount := math.Min(deltaValue, portfolio.USDTBalance)
+		if amount > dust {
+			forced.Intents = append(forced.Intents, quant.TradeIntent{
+				Action:     quant.ActionBuy,
+				Engine:     quant.EngineMicro,
+				AmountUSDT: amount,
+				LotType:    quant.LotTypeFloating,
+				Reason:     "forced practical target",
+			})
+		}
+	case deltaValue < -dust:
+		sellQty := math.Min(-deltaValue/price, portfolio.DeadBTC+portfolio.FloatBTC)
+		if sellQty > portfolio.FloatBTC && portfolio.DeadBTC > 0 {
+			forced.LotTransfers = append(forced.LotTransfers, quant.LotTransfer{
+				FromLotType: quant.LotTypeDeadStack,
+				ToLotType:   quant.LotTypeFloating,
+				Amount:      math.Min(portfolio.DeadBTC, sellQty-portfolio.FloatBTC),
+				Reason:      "forced practical target release",
+			})
+		}
+		if sellQty*price > dust {
+			forced.Intents = append(forced.Intents, quant.TradeIntent{
+				Action:   quant.ActionSell,
+				Engine:   quant.EngineMicro,
+				QtyAsset: sellQty,
+				LotType:  quant.LotTypeFloating,
+				Reason:   "forced practical target",
+			})
+		}
+	}
+	return forced
+}
+
+func targetFloatingWeightForTotal(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64, targetTotalWeight float64) float64 {
+	if price <= 0 || totalEquity <= 0 {
+		return 0
+	}
+	nonFloatingWeight := (portfolio.DeadBTC + portfolio.ColdSealedBTC) * price / totalEquity
+	return quant.ClipFloat64(targetTotalWeight-nonFloatingWeight, 0, 1)
+}
+
+func countTradeIntents(output quant.StrategyOutput) int {
+	count := 0
+	for _, intent := range output.Intents {
+		if intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 {
+			count++
+		}
+		if intent.Action == quant.ActionSell && intent.QtyAsset > 0 {
+			count++
+		}
+	}
+	return count
 }
 
 func floatingWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64) float64 {

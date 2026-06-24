@@ -398,28 +398,35 @@ func championCacheKey(strategyID string) string {
 
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
-		Pair                     string  `json:"pair"`
-		InstrumentID             string  `json:"instrument_id"`
-		DataSource               string  `json:"data_source"`
-		ExecutionMode            string  `json:"execution_mode"`
-		TrainStartMs             int64   `json:"train_start_ms"`
-		TrainEndMs               int64   `json:"train_end_ms"`
-		Interval                 string  `json:"interval"`
-		PopSize                  int     `json:"pop_size"`
-		MaxGenerations           int     `json:"max_generations"`
-		InitialCapital           float64 `json:"initial_capital"`
-		MonthlyDCA               float64 `json:"monthly_dca"`
-		EvolveRebalanceThreshold bool    `json:"evolve_rebalance_threshold"`
-		FeeRate                  float64 `json:"fee_rate"`
-		SpreadRate               float64 `json:"spread_rate"`
-		SpawnMode                string  `json:"spawn_mode"`
-		TestMode                 bool    `json:"test_mode"`
-		TraceMode                string  `json:"trace_mode"`
-		ContinuousMode           string  `json:"continuous_mode"`
-		ContinuousIterations     int     `json:"continuous_iterations"`
-		ContinuousUnlimited      bool    `json:"continuous_unlimited"`
-		StandardStartMs          int64   `json:"standard_start_ms"`
-		StandardEndMs            int64   `json:"standard_end_ms"`
+		Pair                      string  `json:"pair"`
+		InstrumentID              string  `json:"instrument_id"`
+		DataSource                string  `json:"data_source"`
+		ExecutionMode             string  `json:"execution_mode"`
+		TrainStartMs              int64   `json:"train_start_ms"`
+		TrainEndMs                int64   `json:"train_end_ms"`
+		Interval                  string  `json:"interval"`
+		PopSize                   int     `json:"pop_size"`
+		MaxGenerations            int     `json:"max_generations"`
+		InitialCapital            float64 `json:"initial_capital"`
+		MonthlyDCA                float64 `json:"monthly_dca"`
+		EvolveRebalanceThreshold  bool    `json:"evolve_rebalance_threshold"`
+		EvolveForceFullThreshold  bool    `json:"evolve_force_full_threshold"`
+		EvolveForceEmptyThreshold bool    `json:"evolve_force_empty_threshold"`
+		EnableWMean               bool    `json:"enable_w_mean"`
+		EnableWMomentum           bool    `json:"enable_w_momentum"`
+		EnableWBreakout           bool    `json:"enable_w_breakout"`
+		PositionStructure         string  `json:"position_structure"`
+		TradePenalty              float64 `json:"trade_penalty"`
+		FeeRate                   float64 `json:"fee_rate"`
+		SpreadRate                float64 `json:"spread_rate"`
+		SpawnMode                 string  `json:"spawn_mode"`
+		TestMode                  bool    `json:"test_mode"`
+		TraceMode                 string  `json:"trace_mode"`
+		ContinuousMode            string  `json:"continuous_mode"`
+		ContinuousIterations      int     `json:"continuous_iterations"`
+		ContinuousUnlimited       bool    `json:"continuous_unlimited"`
+		StandardStartMs           int64   `json:"standard_start_ms"`
+		StandardEndMs             int64   `json:"standard_end_ms"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -477,50 +484,57 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		}
 	}
 	return gin.H{
-		"id":                         task.ID,
-		"strategy_id":                task.StrategyID,
-		"status":                     task.Status,
-		"progress":                   task.Progress,
-		"current_generation":         currentGeneration,
-		"max_generations":            cfg.MaxGenerations,
-		"pop_size":                   cfg.PopSize,
-		"pair":                       cfg.Pair,
-		"instrument_id":              firstNonEmpty(task.InstrumentID, cfg.InstrumentID),
-		"data_source":                firstNonEmpty(task.DataSource, cfg.DataSource),
-		"execution_mode":             firstNonEmpty(task.ExecutionMode, cfg.ExecutionMode),
-		"train_start_ms":             firstNonZero(task.TrainStartMs, cfg.TrainStartMs),
-		"train_end_ms":               firstNonZero(task.TrainEndMs, cfg.TrainEndMs),
-		"initial_capital":            cfg.InitialCapital,
-		"monthly_dca":                cfg.MonthlyDCA,
-		"evolve_rebalance_threshold": cfg.EvolveRebalanceThreshold,
-		"fee_rate":                   cfg.FeeRate,
-		"spread_rate":                cfg.SpreadRate,
-		"interval":                   cfg.Interval,
-		"spawn_mode":                 cfg.SpawnMode,
-		"test_mode":                  cfg.TestMode,
-		"trace_mode":                 cfg.TraceMode,
-		"continuous_mode":            continuousMode,
-		"current_iteration":          result.CurrentIteration,
-		"continuous_iterations":      continuousIterations,
-		"continuous_unlimited":       continuousUnlimited,
-		"standard_start_ms":          firstNonZero(result.StandardStartMs, cfg.StandardStartMs),
-		"standard_end_ms":            firstNonZero(result.StandardEndMs, cfg.StandardEndMs),
-		"standard_champion_gene_id":  result.StandardChampionGeneID,
-		"standard_champion_score":    result.StandardChampionScore,
-		"best_score":                 bestScore,
-		"max_drawdown":               maxDrawdown,
-		"window_score":               crucibleScores(result.WindowScores),
-		"best_param_pack":            parseRawJSON(result.BestParamPack),
-		"gene_record_id":             result.GeneRecordID,
-		"mutation_probability":       result.MutationProbability,
-		"mutation_scale":             result.MutationScale,
-		"evaluated_individuals":      totalEvaluations,
-		"planned_evaluations":        totalPlannedEvaluations,
-		"monitor_updated_at":         result.UpdatedAt,
-		"error":                      task.ErrorMessage,
-		"created_at":                 task.CreatedAt.Format(time.RFC3339),
-		"started_at":                 formatOptionalTime(task.StartedAt),
-		"finished_at":                formatOptionalTime(task.FinishedAt),
+		"id":                           task.ID,
+		"strategy_id":                  task.StrategyID,
+		"status":                       task.Status,
+		"progress":                     task.Progress,
+		"current_generation":           currentGeneration,
+		"max_generations":              cfg.MaxGenerations,
+		"pop_size":                     cfg.PopSize,
+		"pair":                         cfg.Pair,
+		"instrument_id":                firstNonEmpty(task.InstrumentID, cfg.InstrumentID),
+		"data_source":                  firstNonEmpty(task.DataSource, cfg.DataSource),
+		"execution_mode":               firstNonEmpty(task.ExecutionMode, cfg.ExecutionMode),
+		"train_start_ms":               firstNonZero(task.TrainStartMs, cfg.TrainStartMs),
+		"train_end_ms":                 firstNonZero(task.TrainEndMs, cfg.TrainEndMs),
+		"initial_capital":              cfg.InitialCapital,
+		"monthly_dca":                  cfg.MonthlyDCA,
+		"evolve_rebalance_threshold":   cfg.EvolveRebalanceThreshold,
+		"evolve_force_full_threshold":  cfg.EvolveForceFullThreshold,
+		"evolve_force_empty_threshold": cfg.EvolveForceEmptyThreshold,
+		"enable_w_mean":                cfg.EnableWMean,
+		"enable_w_momentum":            cfg.EnableWMomentum,
+		"enable_w_breakout":            cfg.EnableWBreakout,
+		"position_structure":           cfg.PositionStructure,
+		"trade_penalty":                cfg.TradePenalty,
+		"fee_rate":                     cfg.FeeRate,
+		"spread_rate":                  cfg.SpreadRate,
+		"interval":                     cfg.Interval,
+		"spawn_mode":                   cfg.SpawnMode,
+		"test_mode":                    cfg.TestMode,
+		"trace_mode":                   cfg.TraceMode,
+		"continuous_mode":              continuousMode,
+		"current_iteration":            result.CurrentIteration,
+		"continuous_iterations":        continuousIterations,
+		"continuous_unlimited":         continuousUnlimited,
+		"standard_start_ms":            firstNonZero(result.StandardStartMs, cfg.StandardStartMs),
+		"standard_end_ms":              firstNonZero(result.StandardEndMs, cfg.StandardEndMs),
+		"standard_champion_gene_id":    result.StandardChampionGeneID,
+		"standard_champion_score":      result.StandardChampionScore,
+		"best_score":                   bestScore,
+		"max_drawdown":                 maxDrawdown,
+		"window_score":                 crucibleScores(result.WindowScores),
+		"best_param_pack":              parseRawJSON(result.BestParamPack),
+		"gene_record_id":               result.GeneRecordID,
+		"mutation_probability":         result.MutationProbability,
+		"mutation_scale":               result.MutationScale,
+		"evaluated_individuals":        totalEvaluations,
+		"planned_evaluations":          totalPlannedEvaluations,
+		"monitor_updated_at":           result.UpdatedAt,
+		"error":                        task.ErrorMessage,
+		"created_at":                   task.CreatedAt.Format(time.RFC3339),
+		"started_at":                   formatOptionalTime(task.StartedAt),
+		"finished_at":                  formatOptionalTime(task.FinishedAt),
 	}
 }
 
@@ -563,6 +577,8 @@ func chromosomeSchema() []gin.H {
 		"w_breakout",
 		"dust_usd",
 		"rebalance_threshold",
+		"force_full_threshold",
+		"force_empty_threshold",
 		"wedge_delta_threshold",
 		"wedge_vol_ratio_threshold",
 		"macro_bear_multiplier",
@@ -586,6 +602,12 @@ func chromosomeSchema() []gin.H {
 }
 
 func chromosomeLabel(key string) string {
+	switch key {
+	case "force_full_threshold":
+		return "強制滿倉門檻"
+	case "force_empty_threshold":
+		return "強制空倉門檻"
+	}
 	if key == "rebalance_threshold" {
 		return "調倉門檻"
 	}
@@ -622,6 +644,8 @@ func chromosomeValues(c quant.Chromosome) map[string]float64 {
 		"w_breakout":                c.WBreakout,
 		"dust_usd":                  c.DustUSD,
 		"rebalance_threshold":       c.RebalanceThreshold,
+		"force_full_threshold":      c.ForceFullThreshold,
+		"force_empty_threshold":     c.ForceEmptyThreshold,
 		"wedge_delta_threshold":     c.WedgeDeltaThreshold,
 		"wedge_vol_ratio_threshold": c.WedgeVolRatioThreshold,
 		"macro_bear_multiplier":     c.MacroBearMultiplier,
