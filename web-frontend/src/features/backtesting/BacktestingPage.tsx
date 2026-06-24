@@ -292,6 +292,7 @@ export function BacktestingPage() {
   const [scaleMode, setScaleMode] = useState<ScaleMode>("absolute");
   const [valueMode, setValueMode] = useState<ValueMode>("nav");
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [overrideBacktestAssumptions, setOverrideBacktestAssumptions] = useState(false);
   const [initialCapital, setInitialCapital] = useState(10000);
   const [monthlyDCA, setMonthlyDCA] = useState(1000);
   const [feeRate, setFeeRate] = useState(0.001);
@@ -312,25 +313,30 @@ export function BacktestingPage() {
         execution_mode: executionMode,
         start_time_ms: dateStartMs(backtestStart),
         end_time_ms: dateEndMs(backtestEnd),
-        initial_capital: initialCapital,
-        monthly_dca: monthlyDCA,
-        fee_rate: feeRate,
-        spread_rate: spreadRate,
         source
       };
+      const payload = overrideBacktestAssumptions
+        ? {
+            ...basePayload,
+            initial_capital: initialCapital,
+            monthly_dca: monthlyDCA,
+            fee_rate: feeRate,
+            spread_rate: spreadRate
+          }
+        : basePayload;
       if (source === "candidate") {
         const targets = selectedGenomes.length > 0 ? selectedGenomes : selectedGenome ? [selectedGenome] : [];
         const responses = await Promise.all(
           targets.map((genome, index) =>
             backtestsApi
-              .create({ ...basePayload, candidate_id: genome.id })
+              .create({ ...payload, candidate_id: genome.id })
               .then((result) => ({ genome, result, color: comparisonColors[index % comparisonColors.length] }))
           )
         );
         return { primary: responses[0]?.result ?? null, comparisons: responses };
       }
       const primary = await backtestsApi.create({
-        ...basePayload,
+        ...payload,
         custom_params: source === "custom" ? JSON.parse(customJson || "{}") : undefined
       });
       return { primary, comparisons: [] as ComparisonResult[] };
@@ -488,10 +494,14 @@ export function BacktestingPage() {
           />
           <DateInput label="回測開始日" value={backtestStart} onChange={setBacktestStart} />
           <DateInput label="回測結束日" value={backtestEnd} onChange={setBacktestEnd} />
-          <NumberInput label="初始資金" value={initialCapital} min={1} onChange={setInitialCapital} />
-          <NumberInput label="每月投入 / 定投金額" value={monthlyDCA} min={0} onChange={setMonthlyDCA} />
-          <NumberInput label="手續費率" value={feeRate} min={0} step={0.0001} onChange={setFeeRate} />
-          <NumberInput label="價差 / 滑價率" value={spreadRate} min={0} step={0.0001} onChange={setSpreadRate} />
+          <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-300 md:col-span-2">
+            <input type="checkbox" checked={overrideBacktestAssumptions} onChange={(event) => setOverrideBacktestAssumptions(event.target.checked)} />
+            覆蓋資金與交易成本設定
+          </label>
+          <NumberInput label="初始資金" value={initialCapital} min={1} disabled={!overrideBacktestAssumptions} onChange={setInitialCapital} />
+          <NumberInput label="每月投入 / 定投金額" value={monthlyDCA} min={0} disabled={!overrideBacktestAssumptions} onChange={setMonthlyDCA} />
+          <NumberInput label="手續費率" value={feeRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setFeeRate} />
+          <NumberInput label="價差 / 滑價率" value={spreadRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setSpreadRate} />
 
           {source === "candidate" ? (
             <div className="md:col-span-2">
@@ -795,16 +805,17 @@ function DateInput({ label, value, onChange }: { label: string; value: string; o
   );
 }
 
-function NumberInput({ label, value, min, step = 1, onChange }: { label: string; value: number; min: number; step?: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, min, step = 1, disabled = false, onChange }: { label: string; value: number; min: number; step?: number; disabled?: boolean; onChange: (value: number) => void }) {
   return (
     <label>
       <span className="mb-2 block text-sm text-slate-300">{label}</span>
       <input
-        className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
+        className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf] disabled:cursor-not-allowed disabled:opacity-50"
         type="number"
         min={min}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(Number(event.target.value))}
       />
     </label>
