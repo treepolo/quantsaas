@@ -60,9 +60,14 @@ function marketName(market?: string) {
   return market || "其他";
 }
 
+function timeLabelPrefix(interval: string) {
+  return interval === "1w" || interval === "1M" ? "期間起點" : "開始時間";
+}
+
 function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
   const empty = dataset.count === 0;
   const fresh = Boolean(dataset.is_fresh);
+  const timeLabel = timeLabelPrefix(dataset.interval);
   return (
     <Card className={cn("p-4", fresh ? "border-[#2dd4bf]/20" : empty ? "border-white/[0.04]" : "border-[#f59e0b]/25")}>
       <div className="flex items-start justify-between gap-3">
@@ -74,9 +79,9 @@ function DatasetCard({ dataset }: { dataset: DatasetSummary }) {
       </div>
       <div className="mt-4 grid gap-3 text-sm">
         <InfoRow label="筆數" value={dataset.count.toLocaleString("zh-TW")} />
-        <InfoRow label="第一筆開始時間" value={formatMs(dataset.first_open_ms)} />
-        <InfoRow label="最後一筆開始時間" value={formatMs(dataset.last_open_ms)} />
-        <InfoRow label="理論最新開始時間" value={formatMs(dataset.expected_latest_open_ms)} />
+        <InfoRow label={`第一筆${timeLabel}`} value={formatMs(dataset.first_open_ms)} />
+        <InfoRow label={`最後一筆${timeLabel}`} value={formatMs(dataset.last_open_ms)} />
+        <InfoRow label={`理論最新${timeLabel}`} value={formatMs(dataset.expected_latest_open_ms)} />
         <InfoRow label="價格口徑" value={dataset.price_adjustment_label ?? "未記錄"} />
         {dataset.interval === "1d" ? (
           <>

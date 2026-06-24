@@ -221,7 +221,7 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 		if err != nil {
 			return ImportResult{}, err
 		}
-		rows = normalizeYahooRowsForStorage(req, rows)
+		rows = normalizeYahooRowsForStorage(req, rows, s.now())
 		if len(rows) > 0 && isFullCoverageImport(existing, req) {
 			if err := s.deleteKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval); err != nil {
 				return ImportResult{}, err
@@ -718,13 +718,16 @@ func maxInt64(a int64, b int64) int64 {
 	return b
 }
 
-func normalizeYahooRowsForStorage(req ImportRequest, rows []BinanceKLine) []BinanceKLine {
+func normalizeYahooRowsForStorage(req ImportRequest, rows []BinanceKLine, now time.Time) []BinanceKLine {
 	if req.Interval != "1d" || len(rows) == 0 {
 		return rows
 	}
 	out := make([]BinanceKLine, 0, len(rows))
 	for _, row := range rows {
 		if row.OpenTime != marketDailyOpenMs(req.InstrumentID, req.Symbol, row.OpenTime) {
+			continue
+		}
+		if !isCompletedMarketDailyRow(req.InstrumentID, req.Symbol, row.OpenTime, now) {
 			continue
 		}
 		out = append(out, row)
@@ -947,6 +950,35 @@ func marketDailyOpenAt(instrumentID string, symbol string, value time.Time) time
 	}
 	local := value.In(loc)
 	return time.Date(local.Year(), local.Month(), local.Day(), 9, 30, 0, 0, loc).UTC()
+}
+
+func isCompletedMarketDailyRow(instrumentID string, symbol string, openTimeMs int64, now time.Time) bool {
+	if now.IsZero() {
+		return true
+	}
+	return !marketDailyCloseAt(instrumentID, symbol, time.UnixMilli(openTimeMs)).After(now.UTC())
+}
+
+func marketDailyCloseAt(instrumentID string, symbol string, value time.Time) time.Time {
+	switch instrumentID {
+	case InstrumentBTCUSDT:
+		openAt := marketDailyOpenAt(instrumentID, symbol, value)
+		return openAt.Add(24 * time.Hour)
+	}
+	if isTaiwanInstrument(instrumentID, symbol) {
+		loc, err := time.LoadLocation("Asia/Taipei")
+		if err != nil {
+			loc = time.FixedZone("Asia/Taipei", 8*3600)
+		}
+		local := value.In(loc)
+		return time.Date(local.Year(), local.Month(), local.Day(), 13, 30, 0, 0, loc).UTC()
+	}
+	loc, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		loc = time.FixedZone("America/New_York", -5*3600)
+	}
+	local := value.In(loc)
+	return time.Date(local.Year(), local.Month(), local.Day(), 16, 0, 0, 0, loc).UTC()
 }
 
 func isTaiwanInstrument(instrumentID string, symbol string) bool {
