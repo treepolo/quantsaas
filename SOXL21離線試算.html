@@ -252,9 +252,14 @@
           <small>依日線收盤資料計算</small>
         </div>
         <div class="metric">
-          <strong>基準模型目標權重</strong>
+          <strong>實務模型目標權重</strong>
           <span id="targetWeight">--</span>
           <small id="targetDelta">--</small>
+        </div>
+        <div class="metric">
+          <strong>基準模型目標權重</strong>
+          <span id="baselineTargetWeight">--</span>
+          <small id="baselineTargetDelta">--</small>
         </div>
       </div>
     </section>
@@ -350,6 +355,9 @@
       w_momentum: [-3.00, 3.00],
       w_breakout: [-3.00, 3.00],
       dust_usd: [5.00, 25.00],
+      rebalance_threshold: [0.00, 0.20],
+      force_full_threshold: [0.00, 1.00],
+      force_empty_threshold: [0.00, 1.00],
       wedge_delta_threshold: [0.01, 0.15],
       wedge_vol_ratio_threshold: [1.10, 2.50],
       macro_bear_multiplier: [1.00, 2.50],
@@ -368,6 +376,9 @@
       w_momentum: -0.50,
       w_breakout: 0.75,
       dust_usd: 10.10,
+      rebalance_threshold: 0.00,
+      force_full_threshold: 1.00,
+      force_empty_threshold: 0.00,
       wedge_delta_threshold: 0.04,
       wedge_vol_ratio_threshold: 1.60,
       macro_bear_multiplier: 1.40,
@@ -587,9 +598,10 @@
       const reserveFloor = totalEquity * c.micro_reserve_pct;
       const spendableUSDT = Math.max(0, input.portfolio.cash - reserveFloor);
       const market = computeMarketState(input.closes);
-      const macro = computeMacroDecision(input, runtime, params, market, spendableUSDT, reserveFloor, c);
+      const floatingOnly = isFloatingOnly(params);
+      const macro = floatingOnly ? { yearMonth: yearMonthFromMs(input.timestamps[input.timestamps.length - 1]), intent: null } : computeMacroDecision(input, runtime, params, market, spendableUSDT, reserveFloor, c);
       const micro = computeMicroDecision(input.closes, price, input.portfolio, totalEquity, spendableUSDT, c, market);
-      const transfers = computeReleases(input.portfolio, price, micro, c, market);
+      const transfers = floatingOnly ? [] : computeReleases(input.portfolio, price, micro, c, market);
       const intents = [];
       if (macro.intent) intents.push(macro.intent);
       if (micro.action && micro.orderUSDT !== 0) {
@@ -681,6 +693,97 @@
       return next;
     }
 
+    function totalEquityOf(portfolio, price) {
+      if (portfolio.totalEquity > 0) return portfolio.totalEquity;
+      return portfolio.cash + (portfolio.deadAsset + portfolio.floatAsset + portfolio.coldAsset) * price;
+    }
+
+    function floatingWeight(portfolio, price, totalEquity) {
+      if (price <= 0) return 0;
+      const equity = totalEquity > 0 ? totalEquity : totalEquityOf(portfolio, price);
+      if (equity <= 0) return 0;
+      return clamp((portfolio.floatAsset || 0) * price / equity, 0, 1);
+    }
+
+    function totalTargetWeight(portfolio, price, totalEquity, targetFloatingWeight) {
+      if (price <= 0) return 0;
+      const equity = totalEquity > 0 ? totalEquity : totalEquityOf(portfolio, price);
+      if (equity <= 0) return 0;
+      const nonFloatingWeight = ((portfolio.deadAsset || 0) + (portfolio.coldAsset || 0)) * price / equity;
+      return clamp(nonFloatingWeight + clamp(targetFloatingWeight, 0, 1), 0, 1);
+    }
+
+    function targetFloatingWeightForTotal(portfolio, price, totalEquity, targetTotalWeight) {
+      if (price <= 0) return 0;
+      const equity = totalEquity > 0 ? totalEquity : totalEquityOf(portfolio, price);
+      if (equity <= 0) return 0;
+      const nonFloatingWeight = ((portfolio.deadAsset || 0) + (portfolio.coldAsset || 0)) * price / equity;
+      return clamp(targetTotalWeight - nonFloatingWeight, 0, 1);
+    }
+
+    function applyForceTargetThresholds(output, portfolio, price, c, modelTargetWeight) {
+      let forcedTarget = modelTargetWeight;
+      if (c.force_full_threshold < 1 && modelTargetWeight >= c.force_full_threshold) {
+        forcedTarget = 1;
+      } else if (c.force_empty_threshold > 0 && modelTargetWeight <= c.force_empty_threshold) {
+        forcedTarget = 0;
+      } else {
+        return { output, modelTargetWeight };
+      }
+      return {
+        output: forceTotalTargetOutput(output, portfolio, price, forcedTarget, c.dust_usd),
+        modelTargetWeight: forcedTarget
+      };
+    }
+
+    function forceTotalTargetOutput(output, portfolio, price, targetTotalWeight, dustUSD) {
+      if (price <= 0) return output;
+      const totalEquity = totalEquityOf(portfolio, price);
+      if (totalEquity <= 0) return output;
+      const target = clamp(targetTotalWeight, 0, 1);
+      const currentAssetValue = ((portfolio.deadAsset || 0) + (portfolio.floatAsset || 0) + (portfolio.coldAsset || 0)) * price;
+      const targetAssetValue = totalEquity * target;
+      const deltaValue = targetAssetValue - currentAssetValue;
+      const dust = dustUSD > 0 ? dustUSD : 10.1;
+      const forced = {
+        ...output,
+        intents: [],
+        transfers: [],
+        diagnostics: { ...(output.diagnostics || {}) }
+      };
+      const targetFloating = targetFloatingWeightForTotal(portfolio, price, totalEquity, target);
+      forced.diagnostics.target_weight = targetFloating;
+      forced.diagnostics.delta_weight = targetFloating - floatingWeight(portfolio, price, totalEquity);
+      if (deltaValue > dust) {
+        const amount = Math.min(deltaValue, portfolio.cash || 0);
+        if (amount > dust) forced.intents.push({ action: "BUY", lotType: "FLOATING", amountUSDT: amount });
+      } else if (deltaValue < -dust) {
+        const sellQty = Math.min(-deltaValue / price, (portfolio.deadAsset || 0) + (portfolio.floatAsset || 0));
+        if (sellQty > (portfolio.floatAsset || 0) && (portfolio.deadAsset || 0) > 0) {
+          forced.transfers.push({ amount: Math.min(portfolio.deadAsset || 0, sellQty - (portfolio.floatAsset || 0)) });
+        }
+        if (sellQty * price > dust) forced.intents.push({ action: "SELL", lotType: "FLOATING", qtyAsset: sellQty });
+      }
+      return forced;
+    }
+
+    function rebalanceThresholdAllows(output, portfolio, price, threshold) {
+      if (threshold <= 0 || price <= 0) return true;
+      const totalEquity = totalEquityOf(portfolio, price);
+      if (totalEquity <= 0) return true;
+      const target = safeNumber((output.diagnostics || {}).target_weight);
+      return Math.abs(target - floatingWeight(portfolio, price, totalEquity)) >= threshold;
+    }
+
+    function applyRebalanceThreshold(output, portfolio, price, threshold) {
+      if (rebalanceThresholdAllows(output, portfolio, price, threshold)) return output;
+      return {
+        ...output,
+        intents: (output.intents || []).filter(intent => intent.lotType !== "FLOATING"),
+        transfers: []
+      };
+    }
+
     function runModel(bundle, manual) {
       const bars = mergeBars(bundle.bars || [], manual || []);
       if (!bars.length) throw new Error("沒有可用資料");
@@ -699,8 +802,12 @@
       const closes = [];
       const timestamps = [];
       const points = [];
-      let prevTarget = 0;
+      let prevPracticalTarget = 0;
+      let prevModelTarget = 0;
+      let prevEmptyTarget = 0;
       let hasPrevTarget = false;
+      let adoptedPracticalTargetWeight = 0;
+      let hasAdoptedPracticalTargetWeight = false;
       for (let i = 0; i < bars.length; i++) {
         const bar = bars[i];
         if (bar.close <= 0) continue;
@@ -716,7 +823,7 @@
         closes.push(bar.close);
         timestamps.push(bar.open_time_ms);
         portfolio.totalEquity = portfolio.cash + (portfolio.deadAsset + portfolio.floatAsset + portfolio.coldAsset) * bar.close;
-        const output = step({
+        let output = step({
           symbol: bundle.symbol || "SOXL",
           interval: bundle.interval || "1d",
           closes,
@@ -724,7 +831,16 @@
           portfolio,
           runtime
         }, params);
-        const target = safeNumber(output.diagnostics.target_weight);
+        let modelTargetWeight = totalTargetWeight(portfolio, bar.close, portfolio.totalEquity, safeNumber(output.diagnostics.target_weight));
+        const forced = applyForceTargetThresholds(output, portfolio, bar.close, params.chromosome, modelTargetWeight);
+        output = forced.output;
+        modelTargetWeight = forced.modelTargetWeight;
+        const rebalanceAllowed = rebalanceThresholdAllows(output, portfolio, bar.close, params.chromosome.rebalance_threshold);
+        if (!hasAdoptedPracticalTargetWeight || rebalanceAllowed) {
+          adoptedPracticalTargetWeight = modelTargetWeight;
+          hasAdoptedPracticalTargetWeight = true;
+        }
+        output = applyRebalanceThreshold(output, portfolio, bar.close, params.chromosome.rebalance_threshold);
         const emptyOutput = step({
           symbol: bundle.symbol || "SOXL",
           interval: bundle.interval || "1d",
@@ -733,21 +849,42 @@
           portfolio: { cash: portfolio.totalEquity, deadAsset: 0, floatAsset: 0, coldAsset: 0, totalEquity: portfolio.totalEquity },
           runtime: {}
         }, params);
+        let emptyTargetWeight = totalTargetWeight(
+          { cash: portfolio.totalEquity, deadAsset: 0, floatAsset: 0, coldAsset: 0, totalEquity: portfolio.totalEquity },
+          bar.close,
+          portfolio.totalEquity,
+          safeNumber(emptyOutput.diagnostics.target_weight)
+        );
+        emptyTargetWeight = applyForceTargetThresholds(
+          emptyOutput,
+          { cash: portfolio.totalEquity, deadAsset: 0, floatAsset: 0, coldAsset: 0, totalEquity: portfolio.totalEquity },
+          bar.close,
+          params.chromosome,
+          emptyTargetWeight
+        ).modelTargetWeight;
         runtime = output.runtime || {};
         if (executionMode === "close_next_open") pending = output;
         else portfolio = applyOutput(portfolio, output, bar.close);
         const equity = portfolio.cash + (portfolio.deadAsset + portfolio.floatAsset + portfolio.coldAsset) * bar.close;
+        const practicalTargetWeight = adoptedPracticalTargetWeight;
         points.push({
           date: barDate(bar),
           timeMs: bar.open_time_ms,
           close: bar.close,
           state: runtime.lastMarketState || "",
-          targetWeight: target,
-          targetWeightChange: hasPrevTarget ? target - prevTarget : 0,
-          emptyTargetWeight: safeNumber(emptyOutput.diagnostics.target_weight),
+          targetWeight: practicalTargetWeight,
+          targetWeightChange: hasPrevTarget ? practicalTargetWeight - prevPracticalTarget : 0,
+          practicalTargetWeight,
+          practicalTargetWeightChange: hasPrevTarget ? practicalTargetWeight - prevPracticalTarget : 0,
+          modelTargetWeight,
+          modelTargetWeightChange: hasPrevTarget ? modelTargetWeight - prevModelTarget : 0,
+          emptyTargetWeight,
+          emptyTargetWeightChange: hasPrevTarget ? emptyTargetWeight - prevEmptyTarget : 0,
           equity
         });
-        prevTarget = target;
+        prevPracticalTarget = practicalTargetWeight;
+        prevModelTarget = modelTargetWeight;
+        prevEmptyTarget = emptyTargetWeight;
         hasPrevTarget = true;
       }
       if (!points.length) throw new Error("試算沒有產生結果");
@@ -766,7 +903,15 @@
           cold_sealed_btc: policy.cold_sealed_btc || 0
         }
       };
-      return { chromosome, spawn: normalized };
+      return { chromosome, spawn: normalized, positionStructure: normalizePositionStructure(params.position_structure) };
+    }
+
+    function normalizePositionStructure(value) {
+      return String(value || "").trim().toLowerCase() === "floating_only" ? "floating_only" : "dual_layer";
+    }
+
+    function isFloatingOnly(params) {
+      return normalizePositionStructure(params.positionStructure) === "floating_only";
     }
 
     function clampChromosome(input) {
@@ -776,6 +921,7 @@
       }
       out.soft_release_months = Math.trunc(out.soft_release_months);
       if (out.macro_bear_multiplier < out.macro_bull_multiplier) out.macro_bear_multiplier = out.macro_bull_multiplier;
+      if (out.force_full_threshold < out.force_empty_threshold) out.force_full_threshold = out.force_empty_threshold;
       return out;
     }
 
@@ -873,7 +1019,7 @@
       const file = el("bundleFile").files[0];
       if (!file) throw new Error("請選擇資料包檔案");
       const parsed = await readMaybeEncrypted(file);
-      if (!parsed || parsed.strategy_id !== "sigmoid-dca") throw new Error("資料包格式不正確");
+      if (!parsed || !isSupportedStrategyID(parsed.strategy_id)) throw new Error("資料包格式不正確");
       state.bundle = parsed;
       saveJSON(STORAGE_BUNDLE, parsed);
       setMessage("資料包已匯入並保存於此瀏覽器。", "ok");
@@ -925,6 +1071,10 @@
         if (date && close > 0) map.set(date, { date, close, source: item.source || "manual", created_at: item.created_at || new Date().toISOString() });
       }
       return Array.from(map.values()).sort((x, y) => x.date.localeCompare(y.date));
+    }
+
+    function isSupportedStrategyID(value) {
+      return value === "sigmoid-dca-btc" || value === "sigmoid-dca";
     }
 
     async function decryptBundle(encrypted, password) {
@@ -1006,7 +1156,8 @@
     function renderState() {
       const bundle = state.bundle;
       const result = state.result;
-      el("storeBadge").textContent = bundle ? `${bundle.instrument_id || "SOXL"} / ${bundle.interval || "1d"} / 已保存` : "尚未載入資料";
+      const paramLabel = bundle && bundle.parameter_id ? `#${bundle.parameter_id}` : "";
+      el("storeBadge").textContent = bundle ? `${bundle.instrument_id || "SOXL"} ${paramLabel} / ${bundle.interval || "1d"} / 已保存` : "尚未載入資料";
       if (!result) {
         el("latestDate").textContent = "--";
         el("latestTime").textContent = "--";
@@ -1015,6 +1166,8 @@
         el("marketState").textContent = "--";
         el("targetWeight").textContent = "--";
         el("targetDelta").textContent = "--";
+        el("baselineTargetWeight").textContent = "--";
+        el("baselineTargetDelta").textContent = "--";
         return;
       }
       el("latestDate").textContent = result.date;
@@ -1022,8 +1175,10 @@
       el("latestClose").textContent = fmtPrice(result.close);
       el("sourceSummary").textContent = `${(bundle.bars || []).length} 筆資料，${state.manual.length} 筆手動`;
       el("marketState").textContent = displayState(result.state);
-      el("targetWeight").textContent = fmtPct(result.targetWeight);
-      el("targetDelta").textContent = `相較前一筆 ${result.targetWeightChange >= 0 ? "+" : ""}${fmtPct(result.targetWeightChange)}`;
+      el("targetWeight").textContent = fmtPct(result.practicalTargetWeight ?? result.targetWeight);
+      el("targetDelta").textContent = `相較前一筆 ${(result.practicalTargetWeightChange ?? result.targetWeightChange) >= 0 ? "+" : ""}${fmtPct(result.practicalTargetWeightChange ?? result.targetWeightChange)}`;
+      el("baselineTargetWeight").textContent = fmtPct(result.modelTargetWeight ?? result.targetWeight);
+      el("baselineTargetDelta").textContent = `相較前一筆 ${(result.modelTargetWeightChange ?? result.targetWeightChange) >= 0 ? "+" : ""}${fmtPct(result.modelTargetWeightChange ?? result.targetWeightChange)}`;
       el("manualDate").value = result.date;
     }
 

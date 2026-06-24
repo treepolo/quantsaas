@@ -72,6 +72,10 @@ type Result struct {
 	LatestTime                        string             `json:"latest_time"`
 	LatestClose                       float64            `json:"latest_close"`
 	MarketState                       string             `json:"market_state"`
+	PositionStructure                 string             `json:"position_structure"`
+	PracticalTargetWeight             float64            `json:"practical_target_weight"`
+	PreviousPracticalTargetWeight     float64            `json:"previous_practical_target_weight"`
+	PracticalTargetWeightChange       float64            `json:"practical_target_weight_change"`
 	BaselineModelTargetWeight         float64            `json:"baseline_model_target_weight"`
 	PreviousBaselineModelTargetWeight float64            `json:"previous_baseline_model_target_weight"`
 	BaselineModelTargetWeightChange   float64            `json:"baseline_model_target_weight_change"`
@@ -299,7 +303,8 @@ func Calculate(bundle Bundle, manualPrices []ManualPrice) (Result, error) {
 		return Result{}, errors.New("no positive close prices")
 	}
 	executionMode := marketdata.NormalizeExecutionMode(bundle.ExecutionMode)
-	path := ga.RunSigmoidDCAPathBacktestWithMode(quantBars, quantBars[0].OpenTime, bundle.Interval, executionMode, params.Chromosome, &spawn)
+	positionStructure := sigmoiddca.NormalizePositionStructure(params.PositionStructure)
+	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(quantBars, quantBars[0].OpenTime, bundle.Interval, executionMode, params.Chromosome, &spawn, quant.ExecutionCostConfig{}, positionStructure)
 	if len(path.NAV) == 0 {
 		return Result{}, errors.New("model simulation produced no points")
 	}
@@ -344,6 +349,10 @@ func Calculate(bundle Bundle, manualPrices []ManualPrice) (Result, error) {
 		LatestTime:                        time.UnixMilli(latest.TimeMs).UTC().Format(time.RFC3339),
 		LatestClose:                       latest.Price,
 		MarketState:                       marketState,
+		PositionStructure:                 positionStructure,
+		PracticalTargetWeight:             cleanFloat(latest.PracticalTargetWeight),
+		PreviousPracticalTargetWeight:     cleanFloat(previous.PracticalTargetWeight),
+		PracticalTargetWeightChange:       cleanFloat(latest.PracticalTargetWeightChange),
 		BaselineModelTargetWeight:         cleanFloat(latest.ModelTargetWeight),
 		PreviousBaselineModelTargetWeight: cleanFloat(previous.ModelTargetWeight),
 		BaselineModelTargetWeightChange:   cleanFloat(latest.ModelTargetWeightChange),
@@ -368,6 +377,10 @@ func RenderMarkdown(result Result) string {
 	b.WriteString(fmt.Sprintf("- 最新日期：%s\n", result.LatestDate))
 	b.WriteString(fmt.Sprintf("- 最新收盤價：%.6f\n", result.LatestClose))
 	b.WriteString(fmt.Sprintf("- 市場狀態：%s\n", displayMarketState(result.MarketState)))
+	b.WriteString(fmt.Sprintf("- 倉位結構：%s\n", displayPositionStructure(result.PositionStructure)))
+	b.WriteString(fmt.Sprintf("- 實務模型目標權重：%.4f%%\n", result.PracticalTargetWeight*100))
+	b.WriteString(fmt.Sprintf("- 前一筆實務模型目標權重：%.4f%%\n", result.PreviousPracticalTargetWeight*100))
+	b.WriteString(fmt.Sprintf("- 實務模型目標權重變化：%+.4f%%\n", result.PracticalTargetWeightChange*100))
 	b.WriteString(fmt.Sprintf("- 基準模型目標權重：%.4f%%\n", result.BaselineModelTargetWeight*100))
 	b.WriteString(fmt.Sprintf("- 前一筆基準模型目標權重：%.4f%%\n", result.PreviousBaselineModelTargetWeight*100))
 	b.WriteString(fmt.Sprintf("- 基準模型目標權重變化：%+.4f%%\n", result.BaselineModelTargetWeightChange*100))
@@ -452,6 +465,15 @@ func barFromRow(row saasstore.KLine) Bar {
 		Low:        row.Low,
 		Close:      row.Close,
 		Volume:     row.Volume,
+	}
+}
+
+func displayPositionStructure(value string) string {
+	switch sigmoiddca.NormalizePositionStructure(value) {
+	case sigmoiddca.PositionStructureFloatingOnly:
+		return "純浮動模型"
+	default:
+		return "雙層模型"
 	}
 }
 

@@ -17,6 +17,10 @@ func TestCalculateUsesPathBacktestTargetWeight(t *testing.T) {
 	params := sigmoiddca.DefaultParams()
 	params.Spawn.Policy.InitialUSDT = 1000
 	params.Spawn.Policy.MonthlyInjectUSDT = 0
+	params.PositionStructure = sigmoiddca.PositionStructureFloatingOnly
+	params.Chromosome.RebalanceThreshold = 0.03
+	params.Chromosome.ForceFullThreshold = 0.92
+	params.Chromosome.ForceEmptyThreshold = 0.18
 	raw, err := json.Marshal(params)
 	if err != nil {
 		t.Fatal(err)
@@ -48,10 +52,26 @@ func TestCalculateUsesPathBacktestTargetWeight(t *testing.T) {
 			Close:    bar.Close,
 		})
 	}
-	path := ga.RunSigmoidDCAPathBacktestWithMode(quantBars, quantBars[0].OpenTime, "1d", marketdata.ExecutionModeCloseNextOpen, params.Chromosome, &params.Spawn)
-	want := path.NAV[len(path.NAV)-1].ModelTargetWeight
+	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(
+		quantBars,
+		quantBars[0].OpenTime,
+		"1d",
+		marketdata.ExecutionModeCloseNextOpen,
+		params.Chromosome,
+		&params.Spawn,
+		quant.ExecutionCostConfig{},
+		params.PositionStructure,
+	)
+	latest := path.NAV[len(path.NAV)-1]
+	if result.PositionStructure != sigmoiddca.PositionStructureFloatingOnly {
+		t.Fatalf("position structure = %s, want %s", result.PositionStructure, sigmoiddca.PositionStructureFloatingOnly)
+	}
+	want := latest.ModelTargetWeight
 	if math.Abs(result.BaselineModelTargetWeight-want) > 1e-12 {
-		t.Fatalf("target weight = %.12f, want %.12f", result.BaselineModelTargetWeight, want)
+		t.Fatalf("baseline target weight = %.12f, want %.12f", result.BaselineModelTargetWeight, want)
+	}
+	if math.Abs(result.PracticalTargetWeight-latest.PracticalTargetWeight) > 1e-12 {
+		t.Fatalf("practical target weight = %.12f, want %.12f", result.PracticalTargetWeight, latest.PracticalTargetWeight)
 	}
 }
 

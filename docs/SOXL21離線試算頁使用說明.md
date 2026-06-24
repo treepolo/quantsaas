@@ -6,7 +6,7 @@
 SOXL21離線試算.html
 ```
 
-此檔案是單檔離線頁面。只要瀏覽器能開 HTML，就能匯入 SOXL #21 加密資料包、手動新增多日收盤價，並試算最新基準模型目標權重。
+此檔案是單檔離線頁面。只要瀏覽器能開 HTML，就能匯入 SOXL 加密資料包、手動新增多日收盤價，並試算最新實務模型與基準模型目標權重。`SOXL21` 是沿用的檔名；實際參數 ID 以匯入資料包內容為準。
 
 ## 使用流程
 
@@ -42,4 +42,3 @@ secure-backups/emergency/soxl-21-manual-prices.jsonl.enc
 1. 此頁不會自動抓 Yahoo 或 GitHub 資料。
 2. 此頁不會自動推送 GitHub。
 3. 此頁的計算邏輯是 Go 緊急試算工具的 JavaScript 鏡像；Go CLI 仍是正式真源。
-
