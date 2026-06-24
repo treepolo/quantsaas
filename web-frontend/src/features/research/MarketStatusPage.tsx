@@ -10,7 +10,7 @@ import { Button } from "../../shared/ui/Button";
 import { ChartRangeSlider } from "../../shared/ui/ChartRangeSlider";
 import { cn } from "../../shared/lib/cn";
 
-const settingsStorageKey = "quantsaas.marketStatus.positionSimulation";
+const settingsStorageKey = "quantsaas.marketStatus.positionSimulation.v2";
 const homeStorageKey = "quantsaas.marketStatus.homeInstrument";
 
 const diagLabels: Record<string, string> = {
@@ -61,8 +61,8 @@ function defaultSettings(): SimulationSettings {
     startDate: date.toISOString().slice(0, 10),
     initialCapital: 10000,
     monthlyDCA: 1000,
-    feeRate: 0.001,
-    spreadRate: 0.0005
+    feeRate: 0,
+    spreadRate: 0
   };
 }
 

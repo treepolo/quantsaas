@@ -295,8 +295,8 @@ export function BacktestingPage() {
   const [overrideBacktestAssumptions, setOverrideBacktestAssumptions] = useState(false);
   const [initialCapital, setInitialCapital] = useState(10000);
   const [monthlyDCA, setMonthlyDCA] = useState(1000);
-  const [feeRate, setFeeRate] = useState(0.001);
-  const [spreadRate, setSpreadRate] = useState(0.0005);
+  const [feeRate, setFeeRate] = useState(0);
+  const [spreadRate, setSpreadRate] = useState(0);
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
   const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];

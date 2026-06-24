@@ -67,19 +67,21 @@ function JsonPreview({ value }: { value?: Record<string, unknown> | null }) {
 }
 
 function TraceConsole({ task }: { task: EvolutionTask }) {
-  const [open, setOpen] = useState(true);
-  const [mode, setMode] = useState<TraceMode>(task.trace_mode ?? "detailed");
+  const initialMode = task.trace_mode ?? "off";
+  const [open, setOpen] = useState(initialMode !== "off");
+  const [mode, setMode] = useState<TraceMode>(initialMode);
   const queryClient = useQueryClient();
   const traceQuery = useQuery({
     queryKey: ["evolution-trace", task.id, open, mode],
     queryFn: () => evolutionApi.trace(task.id, mode === "full" ? 1200 : 600),
-    enabled: open,
-    refetchInterval: open ? 1000 : false
+    enabled: open && mode !== "off",
+    refetchInterval: open && mode !== "off" ? 1000 : false
   });
   const modeMutation = useMutation({
     mutationFn: (nextMode: TraceMode) => evolutionApi.setTraceMode(task.id, nextMode),
     onSuccess: (result) => {
       setMode(result.mode);
+      if (result.mode === "off") setOpen(false);
       queryClient.invalidateQueries({ queryKey: ["evolution-trace", task.id] });
     }
   });
@@ -103,8 +105,9 @@ function TraceConsole({ task }: { task: EvolutionTask }) {
             </button>
           ))}
         </div>
+        {mode === "off" ? <div className="text-xs text-slate-500">追蹤已關閉，不產生後端 trace，也不輪詢事件。</div> : null}
         {mode === "full" ? <div className="text-xs text-[#fde68a]">逐筆追蹤會拖慢優化，只建議短時間觀察。</div> : null}
-        {open ? (
+        {open && mode !== "off" ? (
           <div className="h-[28rem] overflow-auto rounded-lg border border-white/[0.06] bg-slate-950 p-3 font-mono text-xs leading-relaxed text-slate-300">
             {traceQuery.isLoading ? <div className="text-slate-500">載入追蹤資料...</div> : null}
             {!traceQuery.isLoading && visibleEvents.length === 0 ? <div className="text-slate-500">尚無追蹤事件。</div> : null}
@@ -366,18 +369,19 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [population, setPopulation] = useState(300);
   const [generations, setGenerations] = useState(25);
   const [monthlyDCA, setMonthlyDCA] = useState(0);
-  const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(false);
-  const [evolveForceFullThreshold, setEvolveForceFullThreshold] = useState(false);
-  const [evolveForceEmptyThreshold, setEvolveForceEmptyThreshold] = useState(false);
+  const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(true);
+  const [evolveForceFullThreshold, setEvolveForceFullThreshold] = useState(true);
+  const [evolveForceEmptyThreshold, setEvolveForceEmptyThreshold] = useState(true);
   const [enableWMean, setEnableWMean] = useState(true);
   const [enableWMomentum, setEnableWMomentum] = useState(true);
   const [enableWBreakout, setEnableWBreakout] = useState(true);
-  const [positionStructure, setPositionStructure] = useState<"dual_layer" | "floating_only">("dual_layer");
+  const [positionStructure, setPositionStructure] = useState<"dual_layer" | "floating_only">("floating_only");
   const [tradePenalty, setTradePenalty] = useState(0);
-  const [feeRate, setFeeRate] = useState(0.001);
-  const [spreadRate, setSpreadRate] = useState(0.0005);
+  const [feeRate, setFeeRate] = useState(0);
+  const [spreadRate, setSpreadRate] = useState(0);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
-  const [traceMode, setTraceMode] = useState<TraceMode>("detailed");
+  const [traceMode, setTraceMode] = useState<TraceMode>("off");
+  const [showLandscape, setShowLandscape] = useState(false);
   const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">("");
   const [continuousIterations, setContinuousIterations] = useState(3);
   const [continuousUnlimited, setContinuousUnlimited] = useState(false);
@@ -538,7 +542,18 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             </div>
           </div>
         </Card>
-        <ParameterLandscape query={runningLandscapeQuery} live />
+        <Card className="p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-200">參數分佈地圖</div>
+              <div className="mt-1 text-xs text-slate-500">預設關閉；打開後才查詢紀錄並計算圖表。</div>
+            </div>
+            <Button variant="secondary" onClick={() => setShowLandscape((value) => !value)}>
+              {showLandscape ? "關閉地圖" : "顯示地圖"}
+            </Button>
+          </div>
+        </Card>
+        {showLandscape ? <ParameterLandscape query={runningLandscapeQuery} live /> : null}
         <CurrentBestCard task={running} />
         <TraceConsole task={running} />
       </div>
@@ -566,12 +581,26 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
           <ReadOnlyMetric label="初始本金" value={formatMoney(SEARCH_INITIAL_CAPITAL)} />
           <NumberInput label="每月投入" min={0} max={1000000000} value={monthlyDCA} onChange={setMonthlyDCA} />
-          <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
-            <input type="checkbox" checked={evolveRebalanceThreshold} onChange={(event) => setEvolveRebalanceThreshold(event.target.checked)} />
-            演化調倉門檻
-          </label>
           <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
+          <Select label="倉位結構" value={positionStructure} onChange={(value) => setPositionStructure(value as "dual_layer" | "floating_only")} options={[["floating_only", "純浮動模型"], ["dual_layer", "雙層模型"]]} />
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <div className="mb-2 text-sm font-semibold text-slate-300">門檻演化</div>
+            <div className="grid gap-2 md:grid-cols-3">
+              <label className="flex items-center gap-3 text-sm text-slate-300">
+                <input type="checkbox" checked={evolveRebalanceThreshold} onChange={(event) => setEvolveRebalanceThreshold(event.target.checked)} />
+                演化調倉門檻
+              </label>
+              <label className="flex items-center gap-3 text-sm text-slate-300">
+                <input type="checkbox" checked={evolveForceFullThreshold} onChange={(event) => setEvolveForceFullThreshold(event.target.checked)} />
+                演化強制滿倉門檻
+              </label>
+              <label className="flex items-center gap-3 text-sm text-slate-300">
+                <input type="checkbox" checked={evolveForceEmptyThreshold} onChange={(event) => setEvolveForceEmptyThreshold(event.target.checked)} />
+                演化強制空倉門檻
+              </label>
+            </div>
+          </div>
           <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
           {!continuousUnlimited ? <NumberInput label="連續輪數" min={1} max={100} value={continuousIterations} onChange={setContinuousIterations} /> : <div />}
           <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
@@ -596,15 +625,6 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             </div>
           </div>
           {executionMode === "preclose_10m" ? <div className="md:col-span-2 text-xs text-[#fde68a]">這個模式需要收盤前快照資料；缺資料時任務可能無法產生有效結果。</div> : null}
-          <Select label="倉位結構" value={positionStructure} onChange={(value) => setPositionStructure(value as "dual_layer" | "floating_only")} options={[["dual_layer", "雙層模型"], ["floating_only", "純浮動模型"]]} />
-          <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
-            <input type="checkbox" checked={evolveForceFullThreshold} onChange={(event) => setEvolveForceFullThreshold(event.target.checked)} />
-            演化強制滿倉門檻
-          </label>
-          <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
-            <input type="checkbox" checked={evolveForceEmptyThreshold} onChange={(event) => setEvolveForceEmptyThreshold(event.target.checked)} />
-            演化強制空倉門檻
-          </label>
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
             <div className="mb-2 text-sm font-semibold text-slate-300">啟用市場訊號</div>
             <div className="grid gap-2 md:grid-cols-3">
@@ -615,7 +635,18 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             {!enableWMean && !enableWMomentum && !enableWBreakout ? <div className="mt-2 text-xs text-[#fecaca]">至少要啟用一個市場訊號。</div> : null}
           </div>
           <NumberInput label="每次交易懲罰" min={0} max={1} step={0.0001} value={tradePenalty} onChange={setTradePenalty} />
-          <ParameterLandscape query={landscapeQuery} />
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-300">參數分佈地圖</div>
+                <div className="mt-1 text-xs text-slate-500">預設關閉；打開後才查詢紀錄並計算圖表。</div>
+              </div>
+              <Button type="button" variant="secondary" onClick={() => setShowLandscape((value) => !value)}>
+                {showLandscape ? "關閉地圖" : "顯示地圖"}
+              </Button>
+            </div>
+          </div>
+          {showLandscape ? <ParameterLandscape query={landscapeQuery} /> : null}
           <div className="md:col-span-2">
             <Button type="submit" loading={createMutation.isPending}>開始搜尋</Button>
             {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}

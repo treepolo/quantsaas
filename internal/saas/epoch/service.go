@@ -650,9 +650,6 @@ func (s *Service) SetTraceMode(taskID uint, mode ga.TraceMode) ga.TraceMode {
 
 func (s *Service) initTrace(taskID uint, mode ga.TraceMode) {
 	mode = ga.NormalizeTraceMode(mode)
-	if mode == ga.TraceModeOff {
-		mode = ga.TraceModeDetailed
-	}
 	s.traceMu.Lock()
 	defer s.traceMu.Unlock()
 	s.traces[taskID] = newTraceBuffer(TraceBufferLimit)
@@ -761,9 +758,6 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 		req.ContinuousIterations = 2
 	}
 	req.TraceMode = ga.NormalizeTraceMode(req.TraceMode)
-	if req.TraceMode == ga.TraceModeOff {
-		req.TraceMode = ga.TraceModeDetailed
-	}
 	if req.TestMode {
 		req.PopSize = 10
 		req.MaxGenerations = 3
@@ -908,6 +902,9 @@ func boolValue(value *bool) bool {
 }
 
 func normalizedPositionStructure(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return sigmoiddca.PositionStructureFloatingOnly
+	}
 	return sigmoiddca.NormalizePositionStructure(value)
 }
 
@@ -949,7 +946,7 @@ func defaultSpawnPoint() *quant.SpawnPoint {
 		},
 		Risk: quant.RiskBounds{
 			MaxDrawdownPct: 0.88,
-			FeeRate:        0.001,
+			FeeRate:        0,
 			LotStep:        0.000001,
 			LotMin:         0.00001,
 		},
