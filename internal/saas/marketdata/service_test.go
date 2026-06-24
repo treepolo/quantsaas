@@ -209,13 +209,48 @@ func TestAggregateYahooDailyRowsBuildsWeeklyFromDailyScale(t *testing.T) {
 		{OpenTime: time.Date(2013, 12, 24, 1, 0, 0, 0, time.UTC).UnixMilli(), Open: 9.15, High: 9.25, Low: 9.10, Close: 9.20, Volume: 2},
 		{OpenTime: time.Date(2013, 12, 25, 1, 0, 0, 0, time.UTC).UnixMilli(), Open: 9.20, High: 9.30, Low: 9.18, Close: 9.24, Volume: 3},
 	}
-	weekly := aggregateYahooDailyRows("0050.TW", rows, "1w")
+	weekly := aggregateYahooDailyRows("0050.TW", rows, "1w", time.Date(2013, 12, 30, 0, 0, 0, 0, time.UTC).UnixMilli())
 	if len(weekly) != 1 {
 		t.Fatalf("weekly len = %d, want 1", len(weekly))
 	}
 	row := weekly[0]
+	wantOpenTime := time.Date(2013, 12, 22, 16, 0, 0, 0, time.UTC).UnixMilli()
+	if row.OpenTime != wantOpenTime {
+		t.Fatalf("weekly open time = %s, want %s", time.UnixMilli(row.OpenTime).UTC(), time.UnixMilli(wantOpenTime).UTC())
+	}
 	if row.Open != 9.10 || row.High != 9.30 || row.Low != 9.05 || row.Close != 9.24 || row.Volume != 6 {
 		t.Fatalf("unexpected weekly row: %+v", row)
+	}
+}
+
+func TestAggregateYahooDailyRowsDropsIncompleteWeeklyBucket(t *testing.T) {
+	rows := []BinanceKLine{
+		{OpenTime: time.Date(2026, 6, 15, 13, 30, 0, 0, time.UTC).UnixMilli(), Open: 100, High: 110, Low: 90, Close: 105, Volume: 1},
+		{OpenTime: time.Date(2026, 6, 16, 13, 30, 0, 0, time.UTC).UnixMilli(), Open: 105, High: 112, Low: 95, Close: 108, Volume: 1},
+	}
+	weekly := aggregateYahooDailyRows("SOXL", rows, "1w", time.Date(2026, 6, 18, 0, 0, 0, 0, time.UTC).UnixMilli())
+	if len(weekly) != 0 {
+		t.Fatalf("weekly len = %d, want 0 for incomplete week: %+v", len(weekly), weekly)
+	}
+}
+
+func TestAggregateYahooDailyRowsBuildsCompletedMonthlyBucket(t *testing.T) {
+	rows := []BinanceKLine{
+		{OpenTime: time.Date(2026, 5, 1, 13, 30, 0, 0, time.UTC).UnixMilli(), Open: 10, High: 12, Low: 9, Close: 11, Volume: 1},
+		{OpenTime: time.Date(2026, 5, 29, 13, 30, 0, 0, time.UTC).UnixMilli(), Open: 11, High: 13, Low: 10, Close: 12, Volume: 2},
+		{OpenTime: time.Date(2026, 6, 1, 13, 30, 0, 0, time.UTC).UnixMilli(), Open: 12, High: 14, Low: 11, Close: 13, Volume: 3},
+	}
+	monthly := aggregateYahooDailyRows("SOXL", rows, "1M", time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC).UnixMilli())
+	if len(monthly) != 1 {
+		t.Fatalf("monthly len = %d, want 1 completed month: %+v", len(monthly), monthly)
+	}
+	row := monthly[0]
+	wantOpenTime := time.Date(2026, 5, 1, 4, 0, 0, 0, time.UTC).UnixMilli()
+	if row.OpenTime != wantOpenTime {
+		t.Fatalf("monthly open time = %s, want %s", time.UnixMilli(row.OpenTime).UTC(), time.UnixMilli(wantOpenTime).UTC())
+	}
+	if row.Open != 10 || row.High != 13 || row.Low != 9 || row.Close != 12 || row.Volume != 3 {
+		t.Fatalf("unexpected monthly row: %+v", row)
 	}
 }
 

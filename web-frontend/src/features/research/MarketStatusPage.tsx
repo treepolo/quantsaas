@@ -395,6 +395,9 @@ export function MarketStatusPage() {
               <Metric label="手續費率" value={model ? formatPercent(model.fee_rate ?? 0) : "-"} />
               <Metric label="價差 / 滑價率" value={model ? formatPercent(model.spread_rate ?? 0) : "-"} />
             </div>
+            <div className="mt-3 rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-xs leading-relaxed text-slate-400">
+              市場狀態的模型試算會套用本頁記憶的初始資金、每月投入、手續費與價差 / 滑價設定；這是情境試算，不代表參數搜尋時的原始出生點條件。
+            </div>
           </Card>
 
           <ChartCard title="實務模型淨值走勢" description="實務模型與定投基準使用相同本金與定期入金設定。" actions={navChartControls} summary={navChartSummary} data={visibleChartData} axisTicks={axisTicks} hoveredPoint={hoveredPoint} layerProps={chartLayerProps()} yFormatter={navAxisFormatter} lines={[["model_nav_value", "實務模型", "#2dd4bf"], ["benchmark_value", "定投基準", "#64748b"]]} />

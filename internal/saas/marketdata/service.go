@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1076,7 +1077,7 @@ func (c *YahooClient) FetchKLines(ctx context.Context, symbol string, interval s
 		if err != nil {
 			return nil, err
 		}
-		return aggregateYahooDailyRows(symbol, rows, interval), nil
+		return aggregateYahooDailyRows(symbol, rows, interval, endTime), nil
 	}
 	return c.FetchChartRows(ctx, symbol, interval, startTime, endTime)
 }
@@ -1280,26 +1281,32 @@ func repairYahooOHLC(open float64, high float64, low float64, closePrice float64
 	return open, high, low, closePrice
 }
 
-func aggregateYahooDailyRows(symbol string, rows []BinanceKLine, interval string) []BinanceKLine {
+func aggregateYahooDailyRows(symbol string, rows []BinanceKLine, interval string, endTimeMs int64) []BinanceKLine {
 	rows = filterYahooRegularDailyRows(symbol, rows)
 	if len(rows) == 0 {
 		return nil
 	}
 	interval = normalizeInterval(interval)
+	sort.Slice(rows, func(i, j int) bool { return rows[i].OpenTime < rows[j].OpenTime })
 	out := make([]BinanceKLine, 0)
 	currentKey := ""
+	var currentEndMs int64
 	var current BinanceKLine
 	for _, row := range rows {
-		key := aggregateYahooKey(symbol, row.OpenTime, interval)
-		if key == "" {
+		period, ok := aggregateYahooPeriod(symbol, row.OpenTime, interval)
+		if !ok {
 			continue
 		}
-		if currentKey == "" || key != currentKey {
+		if currentKey == "" || period.Key != currentKey {
 			if currentKey != "" {
-				out = append(out, current)
+				if isCompletedAggregatePeriod(currentEndMs, endTimeMs) {
+					out = append(out, current)
+				}
 			}
-			currentKey = key
+			currentKey = period.Key
+			currentEndMs = period.EndMs
 			current = row
+			current.OpenTime = period.StartMs
 			continue
 		}
 		current.High = math.Max(current.High, row.High)
@@ -1308,9 +1315,18 @@ func aggregateYahooDailyRows(symbol string, rows []BinanceKLine, interval string
 		current.Volume += row.Volume
 	}
 	if currentKey != "" {
-		out = append(out, current)
+		if isCompletedAggregatePeriod(currentEndMs, endTimeMs) {
+			out = append(out, current)
+		}
 	}
 	return out
+}
+
+func isCompletedAggregatePeriod(periodEndMs int64, endTimeMs int64) bool {
+	if periodEndMs <= 0 || endTimeMs <= 0 {
+		return true
+	}
+	return periodEndMs <= endTimeMs
 }
 
 func filterYahooRegularDailyRows(symbol string, rows []BinanceKLine) []BinanceKLine {
@@ -1324,18 +1340,27 @@ func filterYahooRegularDailyRows(symbol string, rows []BinanceKLine) []BinanceKL
 	return out
 }
 
-func aggregateYahooKey(symbol string, openTimeMs int64, interval string) string {
+type yahooAggregatePeriod struct {
+	Key     string
+	StartMs int64
+	EndMs   int64
+}
+
+func aggregateYahooPeriod(symbol string, openTimeMs int64, interval string) (yahooAggregatePeriod, bool) {
 	loc := marketLocationForSymbol(symbol)
 	local := time.UnixMilli(openTimeMs).In(loc)
 	switch interval {
 	case "1w":
 		offset := (int(local.Weekday()) + 6) % 7
 		start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -offset)
-		return start.Format("2006-01-02")
+		end := start.AddDate(0, 0, 7)
+		return yahooAggregatePeriod{Key: start.Format("2006-01-02"), StartMs: start.UnixMilli(), EndMs: end.UnixMilli()}, true
 	case "1M":
-		return local.Format("2006-01")
+		start := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc)
+		end := start.AddDate(0, 1, 0)
+		return yahooAggregatePeriod{Key: start.Format("2006-01"), StartMs: start.UnixMilli(), EndMs: end.UnixMilli()}, true
 	default:
-		return ""
+		return yahooAggregatePeriod{}, false
 	}
 }
 
