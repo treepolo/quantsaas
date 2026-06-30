@@ -1,6 +1,11 @@
 package marketdata
 
-import "testing"
+import (
+	"testing"
+
+	"quantsaas/internal/quant"
+	saasstore "quantsaas/internal/saas/store"
+)
 
 func TestAssembleDatasetUsesOnlyAvailableIndicatorValues(t *testing.T) {
 	req := DatasetBuildRequest{
@@ -169,5 +174,49 @@ func TestPrimaryBarsFromDatasetFallsBackToValueForCloseOnlySeries(t *testing.T) 
 	}
 	if bars[0].Open != 11 || bars[0].High != 11 || bars[0].Low != 11 || bars[0].Close != 11 {
 		t.Fatalf("bar = %#v, want close-only fallback", bars[0])
+	}
+}
+
+func TestPrimaryBarsFromDatasetMatchesLegacyKLineConversion(t *testing.T) {
+	rows := []saasstore.KLine{
+		{OpenTime: 1000, Open: 10, High: 12, Low: 9, Close: 11, Volume: 100},
+		{OpenTime: 2000, Open: 11, High: 13, Low: 10, Close: 12, Volume: 120},
+	}
+	values := make([]DatasetValue, 0, len(rows))
+	for _, row := range rows {
+		values = append(values, DatasetValue{
+			SeriesID:     "SOXL",
+			ObservedAtMs: row.OpenTime,
+			Open:         row.Open,
+			High:         row.High,
+			Low:          row.Low,
+			Close:        row.Close,
+			Value:        row.Close,
+			Volume:       row.Volume,
+		})
+	}
+	dataset := assembleDataset(DatasetBuildRequest{Interval: "1d", StartTimeMs: 1000, EndTimeMs: 2000}, []datasetSeriesData{
+		{
+			Series: ResearchSeries{ID: "SOXL", SeriesType: SeriesTypeTradableAsset, DisplayName: "SOXL", DataSource: DataSourceYahoo, Tradable: true},
+			Role:   "primary_tradable",
+			Values: values,
+		},
+	})
+
+	got, err := PrimaryBarsFromDataset(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []quant.Bar{
+		{OpenTime: 1000, Open: 10, High: 12, Low: 9, Close: 11, Volume: 100},
+		{OpenTime: 2000, Open: 11, High: 13, Low: 10, Close: 12, Volume: 120},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("bars = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("bar[%d] = %#v, want %#v", i, got[i], want[i])
+		}
 	}
 }
