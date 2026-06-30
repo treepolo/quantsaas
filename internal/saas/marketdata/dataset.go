@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"quantsaas/internal/quant"
 	saasstore "quantsaas/internal/saas/store"
 )
 
@@ -121,6 +122,80 @@ func (s *Service) BuildDataset(ctx context.Context, req DatasetBuildRequest) (Re
 
 	result := assembleDataset(req, all)
 	return result, nil
+}
+
+func (s *Service) BuildDatasetBars(ctx context.Context, req DatasetBuildRequest) ([]quant.Bar, ResearchDataset, error) {
+	dataset, err := s.BuildDataset(ctx, req)
+	if err != nil {
+		return nil, ResearchDataset{}, err
+	}
+	bars, err := PrimaryBarsFromDataset(dataset)
+	if err != nil {
+		return nil, dataset, err
+	}
+	return bars, dataset, nil
+}
+
+func PrimaryBarsFromDataset(dataset ResearchDataset) ([]quant.Bar, error) {
+	primaryID := primarySeriesID(dataset)
+	if primaryID == "" {
+		return nil, fmt.Errorf("%w: primary tradable series is missing", ErrInvalidDatasetRequest)
+	}
+	bars := make([]quant.Bar, 0, len(dataset.Rows))
+	for _, row := range dataset.Rows {
+		value, ok := row.Values[primaryID]
+		if !ok {
+			return nil, fmt.Errorf("%w: primary tradable value is missing at %d", ErrInvalidDatasetRequest, row.ObservedAtMs)
+		}
+		bar, err := datasetValueToBar(row.ObservedAtMs, value)
+		if err != nil {
+			return nil, err
+		}
+		bars = append(bars, bar)
+	}
+	return bars, nil
+}
+
+func primarySeriesID(dataset ResearchDataset) string {
+	for _, info := range dataset.Series {
+		if info.Role == "primary_tradable" {
+			return info.ID
+		}
+	}
+	if len(dataset.Series) > 0 && dataset.Series[0].SeriesType == SeriesTypeTradableAsset {
+		return dataset.Series[0].ID
+	}
+	return ""
+}
+
+func datasetValueToBar(observedAtMs int64, value DatasetValue) (quant.Bar, error) {
+	closePrice := value.Close
+	if closePrice <= 0 {
+		closePrice = value.Value
+	}
+	if closePrice <= 0 {
+		return quant.Bar{}, fmt.Errorf("%w: primary tradable close price is invalid at %d", ErrInvalidDatasetRequest, observedAtMs)
+	}
+	open := value.Open
+	if open <= 0 {
+		open = closePrice
+	}
+	high := value.High
+	if high <= 0 {
+		high = closePrice
+	}
+	low := value.Low
+	if low <= 0 {
+		low = closePrice
+	}
+	return quant.Bar{
+		OpenTime: observedAtMs,
+		Open:     open,
+		High:     high,
+		Low:      low,
+		Close:    closePrice,
+		Volume:   value.Volume,
+	}, nil
 }
 
 func normalizeDatasetRequest(req DatasetBuildRequest) DatasetBuildRequest {

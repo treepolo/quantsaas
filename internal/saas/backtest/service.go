@@ -375,30 +375,16 @@ func (s *Service) loadInstance(ctx context.Context, userID uint, id uint) (saass
 }
 
 func (s *Service) loadBars(ctx context.Context, req CreateRequest) ([]quant.Bar, error) {
-	var rows []saasstore.KLine
-	query := s.db.WithContext(ctx).
-		Where("symbol = ? AND interval = ? AND instrument_id = ? AND source = ?", req.Symbol, req.Interval, req.InstrumentID, req.DataSource)
-	if req.StartTimeMs > 0 {
-		query = query.Where("open_time >= ?", req.StartTimeMs)
+	bars, _, err := marketdata.NewService(s.db, nil).BuildDatasetBars(ctx, marketdata.DatasetBuildRequest{
+		TradableSeriesIDs: []string{req.InstrumentID},
+		Interval:          req.Interval,
+		StartTimeMs:       req.StartTimeMs,
+		EndTimeMs:         req.EndTimeMs,
+	})
+	if err == nil {
+		return bars, nil
 	}
-	if req.EndTimeMs > 0 {
-		query = query.Where("open_time <= ?", req.EndTimeMs)
-	}
-	if err := query.Order("open_time ASC").Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	bars := make([]quant.Bar, 0, len(rows))
-	for _, row := range rows {
-		bars = append(bars, quant.Bar{
-			OpenTime: row.OpenTime,
-			Open:     row.Open,
-			High:     row.High,
-			Low:      row.Low,
-			Close:    row.Close,
-			Volume:   row.Volume,
-		})
-	}
-	return bars, nil
+	return nil, err
 }
 
 func (s *Service) normalizeRequest(ctx context.Context, req CreateRequest) CreateRequest {

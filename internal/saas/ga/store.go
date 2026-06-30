@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"quantsaas/internal/quant"
+	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 
 	"gorm.io/gorm"
@@ -146,6 +147,19 @@ func searchHash(raw []byte) string {
 }
 
 func (s *GormGenomeStore) LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error) {
+	if scope.InstrumentID != "" {
+		bars, _, err := marketdata.NewService(s.db, nil).BuildDatasetBars(ctx, marketdata.DatasetBuildRequest{
+			TradableSeriesIDs: []string{scope.InstrumentID},
+			Interval:          scope.Interval,
+			StartTimeMs:       scope.StartTimeMs,
+			EndTimeMs:         scope.EndTimeMs,
+		})
+		if err == nil {
+			return bars, nil
+		}
+		return nil, err
+	}
+
 	var rows []saasstore.KLine
 	query := s.db.WithContext(ctx).
 		Where("symbol = ? AND interval = ?", scope.Symbol, scope.Interval)

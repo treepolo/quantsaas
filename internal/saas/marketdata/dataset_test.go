@@ -87,3 +87,87 @@ func TestNormalizeDatasetRequestDeduplicatesSeriesIDs(t *testing.T) {
 		t.Fatalf("interval = %s, want 1d", req.Interval)
 	}
 }
+
+func TestPrimaryBarsFromDatasetUsesPrimaryTradableOHLCV(t *testing.T) {
+	dataset := ResearchDataset{
+		Series: []DatasetSeriesInfo{
+			{ID: "SOXL", Role: "primary_tradable", SeriesType: SeriesTypeTradableAsset},
+			{ID: "CREDIT_SPREAD", Role: "indicator", SeriesType: SeriesTypeIndicator},
+		},
+		Rows: []DatasetRow{
+			{
+				ObservedAtMs:   1000,
+				DecisionTimeMs: 2000,
+				Values: map[string]DatasetValue{
+					"SOXL":          {SeriesID: "SOXL", Open: 10, High: 12, Low: 9, Close: 11, Value: 11, Volume: 100},
+					"CREDIT_SPREAD": {SeriesID: "CREDIT_SPREAD", Value: 1.5},
+				},
+			},
+			{
+				ObservedAtMs:   3000,
+				DecisionTimeMs: 4000,
+				Values: map[string]DatasetValue{
+					"SOXL": {SeriesID: "SOXL", Open: 11, High: 13, Low: 10, Close: 12, Value: 12, Volume: 120},
+				},
+			},
+		},
+	}
+
+	bars, err := PrimaryBarsFromDataset(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bars) != 2 {
+		t.Fatalf("bars = %d, want 2", len(bars))
+	}
+	if bars[0].OpenTime != 1000 || bars[0].Open != 10 || bars[0].High != 12 || bars[0].Low != 9 || bars[0].Close != 11 || bars[0].Volume != 100 {
+		t.Fatalf("first bar = %#v", bars[0])
+	}
+	if bars[1].OpenTime != 3000 || bars[1].Close != 12 {
+		t.Fatalf("second bar = %#v", bars[1])
+	}
+}
+
+func TestPrimaryBarsFromDatasetRejectsMissingPrimaryValue(t *testing.T) {
+	dataset := ResearchDataset{
+		Series: []DatasetSeriesInfo{
+			{ID: "SOXL", Role: "primary_tradable", SeriesType: SeriesTypeTradableAsset},
+		},
+		Rows: []DatasetRow{
+			{
+				ObservedAtMs:   1000,
+				DecisionTimeMs: 2000,
+				Values:         map[string]DatasetValue{},
+			},
+		},
+	}
+
+	if _, err := PrimaryBarsFromDataset(dataset); err == nil {
+		t.Fatal("expected missing primary value to fail")
+	}
+}
+
+func TestPrimaryBarsFromDatasetFallsBackToValueForCloseOnlySeries(t *testing.T) {
+	dataset := ResearchDataset{
+		Series: []DatasetSeriesInfo{
+			{ID: "SOXL", Role: "primary_tradable", SeriesType: SeriesTypeTradableAsset},
+		},
+		Rows: []DatasetRow{
+			{
+				ObservedAtMs:   1000,
+				DecisionTimeMs: 2000,
+				Values: map[string]DatasetValue{
+					"SOXL": {SeriesID: "SOXL", Value: 11},
+				},
+			},
+		},
+	}
+
+	bars, err := PrimaryBarsFromDataset(dataset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bars[0].Open != 11 || bars[0].High != 11 || bars[0].Low != 11 || bars[0].Close != 11 {
+		t.Fatalf("bar = %#v, want close-only fallback", bars[0])
+	}
+}

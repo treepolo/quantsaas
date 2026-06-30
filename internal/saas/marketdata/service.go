@@ -243,7 +243,13 @@ func (s *Service) UpsertInstrument(ctx context.Context, req UpsertInstrumentRequ
 }
 
 func (s *Service) DisableInstrument(ctx context.Context, id string) error {
-	return s.instruments.Disable(ctx, id)
+	if err := s.instruments.Disable(ctx, id); err != nil {
+		return err
+	}
+	if err := s.series.Disable(ctx, id); err != nil && !errors.Is(err, ErrUnsupportedSeries) {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) ReorderInstruments(ctx context.Context, req ReorderInstrumentRequest) error {
