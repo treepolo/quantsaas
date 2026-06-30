@@ -30,16 +30,17 @@ var (
 )
 
 type ResearchInstrument struct {
-	ID                  string   `json:"id"`
-	Symbol              string   `json:"symbol"`
-	DisplayName         string   `json:"display_name"`
-	DataSource          string   `json:"data_source"`
-	SupportedIntervals  []string `json:"supported_intervals"`
-	Market              string   `json:"market"`
-	SortOrder           int      `json:"sort_order"`
-	Enabled             bool     `json:"enabled"`
-	LastAutoUpdateAt    string   `json:"last_auto_update_at,omitempty"`
-	LastAutoUpdateError string   `json:"last_auto_update_error,omitempty"`
+	ID                  string           `json:"id"`
+	Symbol              string           `json:"symbol"`
+	DisplayName         string           `json:"display_name"`
+	DataSource          string           `json:"data_source"`
+	SupportedIntervals  []string         `json:"supported_intervals"`
+	AvailableStartMs    map[string]int64 `json:"available_start_ms,omitempty"`
+	Market              string           `json:"market"`
+	SortOrder           int              `json:"sort_order"`
+	Enabled             bool             `json:"enabled"`
+	LastAutoUpdateAt    string           `json:"last_auto_update_at,omitempty"`
+	LastAutoUpdateError string           `json:"last_auto_update_error,omitempty"`
 }
 
 type InstrumentStore struct {
@@ -331,6 +332,7 @@ func instrumentToRecord(instrument ResearchInstrument) (saasstore.ResearchInstru
 		DisplayName:         displayNameForKnownInstrument(instrument),
 		DataSource:          normalizeSource(instrument.DataSource),
 		SupportedIntervals:  intervals,
+		AvailableStartMs:    availableStartMsJSON(instrument.AvailableStartMs),
 		Market:              strings.ToLower(strings.TrimSpace(instrument.Market)),
 		SortOrder:           instrument.SortOrder,
 		Enabled:             instrument.Enabled,
@@ -370,12 +372,17 @@ func recordToInstrument(record saasstore.ResearchInstrument) (ResearchInstrument
 			return ResearchInstrument{}, err
 		}
 	}
+	availableStartMs := map[string]int64{}
+	if len(record.AvailableStartMs) > 0 {
+		_ = json.Unmarshal(record.AvailableStartMs, &availableStartMs)
+	}
 	instrument := ResearchInstrument{
 		ID:                  record.ID,
 		Symbol:              record.Symbol,
 		DisplayName:         record.DisplayName,
 		DataSource:          record.DataSource,
 		SupportedIntervals:  normalizeIntervals(intervals),
+		AvailableStartMs:    normalizeAvailableStartMs(availableStartMs),
 		Market:              record.Market,
 		SortOrder:           record.SortOrder,
 		Enabled:             record.Enabled,
@@ -385,6 +392,27 @@ func recordToInstrument(record saasstore.ResearchInstrument) (ResearchInstrument
 		instrument.LastAutoUpdateAt = record.LastAutoUpdateAt.UTC().Format("2006-01-02T15:04:05Z07:00")
 	}
 	return instrument, nil
+}
+
+func availableStartMsJSON(values map[string]int64) saasstore.JSONB {
+	normalized := normalizeAvailableStartMs(values)
+	raw, err := saasstore.NewJSONB(normalized)
+	if err != nil {
+		return saasstore.JSONB([]byte(`{}`))
+	}
+	return raw
+}
+
+func normalizeAvailableStartMs(values map[string]int64) map[string]int64 {
+	out := map[string]int64{}
+	for interval, value := range values {
+		interval = normalizeInterval(interval)
+		if interval == "" || value <= 0 {
+			continue
+		}
+		out[interval] = value
+	}
+	return out
 }
 
 func SupportedExecutionModes() []string {

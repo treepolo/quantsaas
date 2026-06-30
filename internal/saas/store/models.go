@@ -258,6 +258,7 @@ type ResearchInstrument struct {
 	DisplayName         string `gorm:"size:160;not null"`
 	DataSource          string `gorm:"size:32;not null;index"`
 	SupportedIntervals  JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	AvailableStartMs    JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
 	Market              string `gorm:"size:32;not null;default:global;index"`
 	SortOrder           int    `gorm:"not null;default:1000;index"`
 	Enabled             bool   `gorm:"not null;default:true;index"`

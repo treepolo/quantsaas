@@ -93,6 +93,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.GET("/market-data/instruments", md.Instruments)
 	lab.POST("/market-data/instruments", md.UpsertInstrument)
 	lab.PATCH("/market-data/instruments/order", md.ReorderInstruments)
+	lab.POST("/market-data/instruments/refresh-starts", md.RefreshAllInstrumentStarts)
+	lab.POST("/market-data/instruments/:id/refresh-starts", md.RefreshInstrumentStarts)
 	lab.DELETE("/market-data/instruments/:id", md.DeleteInstrument)
 	lab.GET("/market-data/klines/status", md.Status)
 	lab.GET("/market-data/klines/overview", md.Overview)

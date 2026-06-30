@@ -5,8 +5,11 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
+
+	saasstore "quantsaas/internal/saas/store"
 )
 
 func TestClientFetchKLinesParsesBinanceResponse(t *testing.T) {
@@ -211,6 +214,134 @@ func TestYahooClientAdjustsOHLCWithAdjustedClose(t *testing.T) {
 	row := rows[0]
 	if row.Open != 45.0 || row.High != 55.0 || row.Low != 40.0 || row.Close != 50.0 || row.Volume != 123456 {
 		t.Fatalf("unexpected adjusted row: %+v", row)
+	}
+}
+
+func TestDetectYahooAvailableStartUsesFirstReturnedRow(t *testing.T) {
+	first := time.Date(2010, 3, 11, 14, 30, 0, 0, time.UTC).Unix()
+	second := time.Date(2010, 3, 12, 14, 30, 0, 0, time.UTC).Unix()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("period1"); got != "0" {
+			t.Fatalf("period1 = %s, want 0", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"chart": {
+				"result": [{
+					"timestamp": [` + strconv.FormatInt(first, 10) + `,` + strconv.FormatInt(second, 10) + `],
+					"indicators": {
+						"quote": [{
+							"open": [10.0, 10.5],
+							"high": [11.0, 11.5],
+							"low": [9.0, 9.5],
+							"close": [10.5, 11.0],
+							"volume": [100, 200]
+						}]
+					}
+				}],
+				"error": null
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	svc := NewService(nil, nil)
+	svc.yahooClient = NewYahooClient(server.URL)
+	svc.yahooClient.lastAt = time.Now().Add(-yahooMinRequestInterval)
+	svc.now = func() time.Time { return time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC) }
+
+	start, err := svc.detectAvailableStart(context.Background(), ResearchInstrument{
+		ID:                 "SOXL",
+		Symbol:             "SOXL",
+		DataSource:         DataSourceYahoo,
+		SupportedIntervals: []string{"1d"},
+		Market:             "us",
+	}, "1d")
+	if err != nil {
+		t.Fatalf("detectAvailableStart failed: %v", err)
+	}
+	if start != first*1000 {
+		t.Fatalf("start = %d, want %d", start, first*1000)
+	}
+}
+
+func TestDetectYahooAvailableStartFallsBackForIntradayRange(t *testing.T) {
+	first := time.Date(2026, 1, 2, 14, 30, 0, 0, time.UTC).Unix()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			http.Error(w, "range rejected", http.StatusUnprocessableEntity)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"chart": {
+				"result": [{
+					"timestamp": [` + strconv.FormatInt(first, 10) + `],
+					"indicators": {
+						"quote": [{
+							"open": [10.0],
+							"high": [11.0],
+							"low": [9.0],
+							"close": [10.5],
+							"volume": [100]
+						}]
+					}
+				}],
+				"error": null
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	svc := NewService(nil, nil)
+	svc.yahooClient = NewYahooClient(server.URL)
+	svc.yahooClient.lastAt = time.Now().Add(-yahooMinRequestInterval)
+	svc.now = func() time.Time { return time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC) }
+
+	start, err := svc.detectAvailableStart(context.Background(), ResearchInstrument{
+		ID:                 "SOXL",
+		Symbol:             "SOXL",
+		DataSource:         DataSourceYahoo,
+		SupportedIntervals: []string{"1h"},
+		Market:             "us",
+	}, "1h")
+	if err != nil {
+		t.Fatalf("detectAvailableStart failed: %v", err)
+	}
+	if requests < 2 {
+		t.Fatalf("fallback was not attempted")
+	}
+	if start != first*1000 {
+		t.Fatalf("start = %d, want %d", start, first*1000)
+	}
+}
+
+func TestInstrumentRecordRoundTripsAvailableStartMs(t *testing.T) {
+	record := saasstore.ResearchInstrument{
+		ID:                 "SOXL",
+		Symbol:             "SOXL",
+		DisplayName:        "SOXL",
+		DataSource:         DataSourceYahoo,
+		SupportedIntervals: saasstore.JSONB([]byte(`["1d","1h"]`)),
+		AvailableStartMs:   saasstore.JSONB([]byte(`{"1d":1268327400000,"1h":1719705600000}`)),
+		Market:             "us",
+		Enabled:            true,
+	}
+	instrument, err := recordToInstrument(record)
+	if err != nil {
+		t.Fatalf("recordToInstrument failed: %v", err)
+	}
+	if instrument.AvailableStartMs["1d"] != 1268327400000 || instrument.AvailableStartMs["1h"] != 1719705600000 {
+		t.Fatalf("available starts = %+v", instrument.AvailableStartMs)
+	}
+	out, err := instrumentToRecord(instrument)
+	if err != nil {
+		t.Fatalf("instrumentToRecord failed: %v", err)
+	}
+	if string(out.AvailableStartMs) == "{}" {
+		t.Fatalf("available starts were not preserved")
 	}
 }
 

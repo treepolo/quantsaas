@@ -99,6 +99,36 @@ func (h *MarketDataHandler) ReorderInstruments(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "reordered"})
 }
 
+func (h *MarketDataHandler) RefreshInstrumentStarts(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	result, err := h.service.RefreshAvailableStarts(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, marketdata.ErrUnsupportedInstrument) || errors.Is(err, marketdata.ErrUnsupportedSource) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (h *MarketDataHandler) RefreshAllInstrumentStarts(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	results, err := h.service.RefreshAllAvailableStarts(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": results})
+}
+
 func (h *MarketDataHandler) Status(c *gin.Context) {
 	if !h.canUseLab() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})

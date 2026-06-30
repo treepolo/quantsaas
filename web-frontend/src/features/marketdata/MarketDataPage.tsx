@@ -25,6 +25,8 @@ function dateInputValue(date: Date) {
 }
 
 function defaultStart(instrument?: ResearchInstrument, interval = "1d") {
+  const detected = instrument?.available_start_ms?.[interval];
+  if (detected && detected > 0) return dateInputValue(new Date(detected));
   const now = new Date();
   if (interval === "1m") return dateInputValue(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   if (interval === "1h") return dateInputValue(new Date(Date.UTC(now.getUTCFullYear() - 2, now.getUTCMonth(), now.getUTCDate())));
@@ -182,6 +184,15 @@ export function MarketDataPage() {
     onSuccess: refreshMarketQueries
   });
 
+  const refreshStartsMutation = useMutation({
+    mutationFn: () => marketDataApi.refreshInstrumentStarts(selected?.id ?? instrumentId),
+    onSuccess: (result) => {
+      refreshMarketQueries();
+      const detected = result.starts?.[interval];
+      if (detected && detected > 0) setStartDate(dateInputValue(new Date(detected)));
+    }
+  });
+
   const updateLatestMutation = useMutation({
     mutationFn: () => marketDataApi.updateLatest(),
     onSuccess: refreshMarketQueries
@@ -330,6 +341,15 @@ export function MarketDataPage() {
             目前選取的資料集是「{selectedDataset.price_adjustment_label ?? "舊口徑或未知"}」。若要切換成新版 Yahoo 調整後價格，請把開始日期設到資料源能提供的最早日期再重新匯入；重匯後，使用這批資料的回測結果會改變。
           </div>
         ) : null}
+        {selected?.available_start_ms?.[interval] ? (
+          <div className="mb-4 rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-slate-400">
+            此週期可匯入起始日：<span className="font-mono text-slate-200">{dateInputValue(new Date(selected.available_start_ms[interval]))}</span>
+          </div>
+        ) : (
+          <div className="mb-4 rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-4 py-3 text-sm leading-6 text-[#fde68a]">
+            此週期尚未偵測到資料源起始日，會使用預設區間。可先按「重新偵測起始日」。
+          </div>
+        )}
         <form className="grid gap-4 md:grid-cols-5" onSubmit={submit}>
           <label>
             <span className="mb-2 block text-sm text-slate-300">研究商品</span>
@@ -358,6 +378,11 @@ export function MarketDataPage() {
           <div className="flex items-end">
             <Button className="w-full" icon={RefreshCw} loading={importMutation.isPending} type="submit">匯入資料</Button>
           </div>
+          <div className="flex items-end md:col-span-5">
+            <Button className="w-full" icon={RefreshCw} loading={refreshStartsMutation.isPending} type="button" variant="secondary" onClick={() => refreshStartsMutation.mutate()}>
+              重新偵測起始日
+            </Button>
+          </div>
           <label className="flex items-start gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-5">
             <input className="mt-1 h-4 w-4 accent-[#2dd4bf]" type="checkbox" checked={includePreclose} disabled={interval !== "1d"} onChange={(event) => setIncludePreclose(event.target.checked)} />
             <span>
@@ -366,6 +391,7 @@ export function MarketDataPage() {
             </span>
           </label>
         </form>
+        {refreshStartsMutation.error ? <div className="mt-4 text-sm text-[#fecaca]">{String(refreshStartsMutation.error.message)}</div> : null}
         <div className="mt-3 text-xs text-slate-500">
           目前來源：<span className="font-mono text-slate-300">{selected?.data_source ?? statusQuery.data?.data_source ?? "-"}</span> · 代碼：
           <span className="font-mono text-slate-300">{selected?.symbol ?? statusQuery.data?.symbol ?? "-"}</span>

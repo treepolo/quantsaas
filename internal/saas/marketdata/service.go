@@ -123,6 +123,14 @@ type AutoUpdateResult struct {
 	Error        string `json:"error,omitempty"`
 }
 
+type AvailableStartResult struct {
+	InstrumentID string            `json:"instrument_id"`
+	DataSource   string            `json:"data_source"`
+	Symbol       string            `json:"symbol"`
+	Starts       map[string]int64  `json:"starts"`
+	Errors       map[string]string `json:"errors,omitempty"`
+}
+
 type DatasetSummary struct {
 	InstrumentID           string `json:"instrument_id"`
 	DataSource             string `json:"data_source"`
@@ -189,7 +197,15 @@ func (s *Service) ResolveInstrument(ctx context.Context, instrumentID string, sy
 }
 
 func (s *Service) UpsertInstrument(ctx context.Context, req UpsertInstrumentRequest) (ResearchInstrument, error) {
-	return s.instruments.Upsert(ctx, req)
+	instrument, err := s.instruments.Upsert(ctx, req)
+	if err != nil {
+		return ResearchInstrument{}, err
+	}
+	result, err := s.RefreshAvailableStarts(ctx, instrument.ID)
+	if err == nil && len(result.Starts) > 0 {
+		instrument.AvailableStartMs = result.Starts
+	}
+	return instrument, nil
 }
 
 func (s *Service) DisableInstrument(ctx context.Context, id string) error {
@@ -540,6 +556,148 @@ func (s *Service) UpdateLatest(ctx context.Context) ([]AutoUpdateResult, error) 
 		s.recordAutoUpdate(ctx, instrument.ID, instrumentErr)
 	}
 	return results, nil
+}
+
+func (s *Service) RefreshAvailableStarts(ctx context.Context, instrumentID string) (AvailableStartResult, error) {
+	instrument, err := s.instruments.ResolveInstrument(ctx, instrumentID, "", "")
+	if err != nil {
+		return AvailableStartResult{}, err
+	}
+	result := AvailableStartResult{
+		InstrumentID: instrument.ID,
+		DataSource:   instrument.DataSource,
+		Symbol:       instrument.Symbol,
+		Starts:       map[string]int64{},
+		Errors:       map[string]string{},
+	}
+	for interval, start := range instrument.AvailableStartMs {
+		if start > 0 {
+			result.Starts[normalizeInterval(interval)] = start
+		}
+	}
+	for _, rawInterval := range instrument.SupportedIntervals {
+		interval := normalizeInterval(rawInterval)
+		if interval == "" {
+			continue
+		}
+		start, err := s.detectAvailableStart(ctx, instrument, interval)
+		if err != nil {
+			result.Errors[interval] = err.Error()
+			continue
+		}
+		if start > 0 {
+			result.Starts[interval] = start
+		}
+	}
+	if len(result.Starts) > 0 && s.db != nil {
+		if err := s.db.WithContext(ctx).
+			Model(&saasstore.ResearchInstrument{}).
+			Where("id = ?", instrument.ID).
+			Updates(map[string]any{
+				"available_start_ms": availableStartMsJSON(result.Starts),
+				"updated_at":         s.now(),
+			}).Error; err != nil {
+			return result, err
+		}
+	}
+	if len(result.Errors) == 0 {
+		result.Errors = nil
+	}
+	return result, nil
+}
+
+func (s *Service) RefreshAllAvailableStarts(ctx context.Context) ([]AvailableStartResult, error) {
+	instruments, err := s.Instruments(ctx)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]AvailableStartResult, 0, len(instruments))
+	for _, instrument := range instruments {
+		result, err := s.RefreshAvailableStarts(ctx, instrument.ID)
+		if err != nil {
+			results = append(results, AvailableStartResult{
+				InstrumentID: instrument.ID,
+				DataSource:   instrument.DataSource,
+				Symbol:       instrument.Symbol,
+				Starts:       map[string]int64{},
+				Errors:       map[string]string{"_": err.Error()},
+			})
+			continue
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (s *Service) detectAvailableStart(ctx context.Context, instrument ResearchInstrument, interval string) (int64, error) {
+	end := s.now().UnixMilli()
+	switch instrument.DataSource {
+	case DataSourceYahoo:
+		var lastErr error
+		for _, start := range yahooAvailableStartProbeStarts(interval, s.now()) {
+			rows, err := s.yahooClient.FetchKLines(ctx, instrument.Symbol, interval, start, end)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			rows = normalizeYahooRowsForStorage(ImportRequest{
+				InstrumentID: instrument.ID,
+				DataSource:   instrument.DataSource,
+				Symbol:       instrument.Symbol,
+				Interval:     interval,
+				StartTimeMs:  start,
+				EndTimeMs:    end,
+			}, rows, s.now())
+			if first := firstRowOpenTime(rows); first > 0 {
+				return first, nil
+			}
+		}
+		if lastErr != nil {
+			return 0, lastErr
+		}
+		return 0, nil
+	case DataSourceBinance:
+		rows, err := s.client.FetchKLines(ctx, instrument.Symbol, interval, 0, end, 1)
+		if err != nil {
+			return 0, err
+		}
+		return firstRowOpenTime(rows), nil
+	default:
+		return 0, ErrUnsupportedSource
+	}
+}
+
+func yahooAvailableStartProbeStarts(interval string, now time.Time) []int64 {
+	switch normalizeInterval(interval) {
+	case "1m":
+		return []int64{
+			now.AddDate(0, 0, -7).UnixMilli(),
+			now.AddDate(0, 0, -5).UnixMilli(),
+			now.AddDate(0, 0, -2).UnixMilli(),
+		}
+	case "1h":
+		return []int64{
+			now.AddDate(-1, 0, 0).UnixMilli(),
+			now.AddDate(0, -6, 0).UnixMilli(),
+			now.AddDate(0, -2, 0).UnixMilli(),
+			now.AddDate(0, 0, -30).UnixMilli(),
+		}
+	default:
+		return []int64{0}
+	}
+}
+
+func firstRowOpenTime(rows []BinanceKLine) int64 {
+	if len(rows) == 0 {
+		return 0
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].OpenTime < rows[j].OpenTime })
+	for _, row := range rows {
+		if row.OpenTime > 0 && row.Close > 0 {
+			return row.OpenTime
+		}
+	}
+	return 0
 }
 
 func (s *Service) normalizeImportRequest(req ImportRequest) ImportRequest {

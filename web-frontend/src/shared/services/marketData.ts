@@ -28,6 +28,7 @@ export type ResearchInstrument = {
   display_name: string;
   data_source: "binance" | "yahoo" | string;
   supported_intervals: string[];
+  available_start_ms?: Record<string, number>;
   market?: "tw" | "us" | "crypto" | string;
   sort_order?: number;
   enabled?: boolean;
@@ -94,6 +95,14 @@ export type AutoUpdateResult = {
   error?: string;
 };
 
+export type AvailableStartResult = {
+  instrument_id: string;
+  data_source: string;
+  symbol: string;
+  starts: Record<string, number>;
+  errors?: Record<string, string>;
+};
+
 export const marketDataApi = {
   instruments() {
     return apiFetch<{ instruments: ResearchInstrument[]; execution_modes: string[] }>("/market-data/instruments");
@@ -112,6 +121,12 @@ export const marketDataApi = {
       method: "PATCH",
       body: JSON.stringify({ ids })
     });
+  },
+  refreshInstrumentStarts(id: string) {
+    return apiFetch<AvailableStartResult>(`/market-data/instruments/${encodeURIComponent(id)}/refresh-starts`, { method: "POST" });
+  },
+  refreshAllInstrumentStarts() {
+    return apiFetch<{ results: AvailableStartResult[] }>("/market-data/instruments/refresh-starts", { method: "POST" });
   },
   status(instrumentId = "BTCUSDT") {
     return apiFetch<MarketDataStatus>(`/market-data/klines/status?instrument_id=${encodeURIComponent(instrumentId)}`);
