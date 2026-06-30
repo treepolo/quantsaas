@@ -64,6 +64,7 @@ func Step(input quant.StrategyInput, params Params) quant.StrategyOutput {
 		"target_weight":      microDecision.TargetWeight,
 		"delta_weight":       microDecision.DeltaWeight,
 		"signal":             microDecision.Signal,
+		"external_signal":    microDecision.AISignalScalar,
 		"volatility_ratio":   microDecision.VolatilityRatio,
 		"market_beta":        market.BetaMultiplier,
 		"market_trend_slope": market.TrendSlope,

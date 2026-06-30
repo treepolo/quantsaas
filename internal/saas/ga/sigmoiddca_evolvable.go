@@ -68,6 +68,7 @@ func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 		WMean:                  sampleRange(rng, "w_mean"),
 		WMomentum:              sampleRange(rng, "w_momentum"),
 		WBreakout:              sampleRange(rng, "w_breakout"),
+		ExternalSignalWeight:   sampleRange(rng, "external_signal_weight"),
 		DustUSD:                sampleRange(rng, "dust_usd"),
 		RebalanceThreshold:     sampleRange(rng, "rebalance_threshold"),
 		ForceFullThreshold:     forceFullThreshold,
@@ -92,6 +93,7 @@ func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng Rando
 	c.WMean = mutateFloat(c.WMean, "w_mean", prob, scale, rng)
 	c.WMomentum = mutateFloat(c.WMomentum, "w_momentum", prob, scale, rng)
 	c.WBreakout = mutateFloat(c.WBreakout, "w_breakout", prob, scale, rng)
+	c.ExternalSignalWeight = mutateFloat(c.ExternalSignalWeight, "external_signal_weight", prob, scale, rng)
 	c.DustUSD = mutateFloat(c.DustUSD, "dust_usd", prob, scale, rng)
 	c.RebalanceThreshold = mutateFloat(c.RebalanceThreshold, "rebalance_threshold", prob, scale, rng)
 	c.ForceFullThreshold = mutateFloat(c.ForceFullThreshold, "force_full_threshold", prob, scale, rng)
@@ -117,6 +119,7 @@ func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
 	c.WMean = pick(rng, a.WMean, b.WMean)
 	c.WMomentum = pick(rng, a.WMomentum, b.WMomentum)
 	c.WBreakout = pick(rng, a.WBreakout, b.WBreakout)
+	c.ExternalSignalWeight = pick(rng, a.ExternalSignalWeight, b.ExternalSignalWeight)
 	c.DustUSD = pick(rng, a.DustUSD, b.DustUSD)
 	c.RebalanceThreshold = pick(rng, a.RebalanceThreshold, b.RebalanceThreshold)
 	c.ForceFullThreshold = pick(rng, a.ForceFullThreshold, b.ForceFullThreshold)
@@ -141,6 +144,7 @@ func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
 	writeQuantized(h, c.WMean)
 	writeQuantized(h, c.WMomentum)
 	writeQuantized(h, c.WBreakout)
+	writeQuantized(h, c.ExternalSignalWeight)
 	writeQuantized(h, c.DustUSD)
 	writeQuantized(h, c.RebalanceThreshold)
 	writeQuantized(h, c.ForceFullThreshold)
@@ -177,6 +181,9 @@ func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
 	if !options.EnableWBreakout {
 		c.WBreakout = 0
 	}
+	if !options.EnableExternalSignal {
+		c.ExternalSignalWeight = 0
+	}
 	if options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
 		c.MacroBearMultiplier = 1
 		c.MacroBullMultiplier = 1
@@ -212,14 +219,15 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			"bars":       len(window.Bars),
 		})
 		metrics := runSigmoidDCAPathBacktestWithTraceAndMode(window.Bars, window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
-			Trace:         plan.Trace,
-			Mode:          plan.TraceMode,
-			TraceModeFunc: plan.TraceModeFunc,
-			ComputeStep:   plan.ComputeStep,
-			Generation:    plan.Generation,
-			Individual:    plan.Individual,
-			Worker:        plan.Worker,
-			Window:        window.Label,
+			Trace:           plan.Trace,
+			Mode:            plan.TraceMode,
+			TraceModeFunc:   plan.TraceModeFunc,
+			ComputeStep:     plan.ComputeStep,
+			ExternalSignals: plan.ExternalSignals,
+			Generation:      plan.Generation,
+			Individual:      plan.Individual,
+			Worker:          plan.Worker,
+			Window:          window.Label,
 		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure).Metrics
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
@@ -294,6 +302,7 @@ func (e SigmoidDCAEvolvable) EncodeResult(g Gene, spawn *quant.SpawnPoint, optio
 		return nil, err
 	}
 	params.PositionStructure = options.PositionStructure
+	params.IndicatorSeriesIDs = options.IndicatorSeriesIDs
 	if spawn != nil {
 		params.Spawn = *spawn
 	}
@@ -320,14 +329,15 @@ func RunSigmoidDCASingleBacktestWithModeAndCosts(bars []quant.Bar, evalStartMs i
 }
 
 type PathTraceConfig struct {
-	Trace         func(TraceEvent)
-	Mode          TraceMode
-	TraceModeFunc func() TraceMode
-	ComputeStep   func(int64)
-	Generation    int
-	Individual    int
-	Worker        int
-	Window        string
+	Trace           func(TraceEvent)
+	Mode            TraceMode
+	TraceModeFunc   func() TraceMode
+	ComputeStep     func(int64)
+	ExternalSignals map[int64]float64
+	Generation      int
+	Individual      int
+	Worker          int
+	Window          string
 }
 
 func RunSigmoidDCASingleBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) BacktestMetrics {
@@ -352,6 +362,10 @@ func RunSigmoidDCAPathBacktestWithModeAndCosts(bars []quant.Bar, evalStartMs int
 
 func RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
 	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, positionStructure)
+}
+
+func RunSigmoidDCAPathBacktestWithModeCostsStructureAndSignals(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, externalSignals map[int64]float64) SigmoidDCAPathResult {
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{ExternalSignals: externalSignals}, costs, positionStructure)
 }
 
 func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
@@ -443,6 +457,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			Portfolio:    portfolio,
 			RuntimeState: state,
 			Spawn:        params.Spawn,
+			AISignal:     externalAISignal(traceCfg, bar.OpenTime),
 		}, params)
 		rawModelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
 		modelTargetWeight := totalTargetWeight(portfolio, bar.Close, portfolio.TotalEquity, rawModelTargetWeight)
@@ -465,6 +480,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			},
 			RuntimeState: map[string]any{},
 			Spawn:        params.Spawn,
+			AISignal:     externalAISignal(traceCfg, bar.OpenTime),
 		}, params)
 		rawEmptyReferenceTargetWeight := diagnosticValue(emptyReferenceOutput.Diagnostics, "target_weight")
 		emptyReferenceTargetWeight := totalTargetWeight(quant.PortfolioSnapshot{
@@ -563,6 +579,13 @@ func diagnosticValue(values map[string]float64, key string) float64 {
 		return 0
 	}
 	return value
+}
+
+func externalAISignal(traceCfg PathTraceConfig, timeMs int64) quant.AISignalVector {
+	if len(traceCfg.ExternalSignals) == 0 {
+		return quant.AISignalVector{}
+	}
+	return quant.AISignalVector{SMarket: traceCfg.ExternalSignals[timeMs]}
 }
 
 func applyForceTargetThresholds(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, chromosome quant.Chromosome, modelTargetWeight float64) (quant.StrategyOutput, float64) {

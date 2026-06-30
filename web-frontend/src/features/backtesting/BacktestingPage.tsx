@@ -6,7 +6,7 @@ import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
 import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
-import { marketDataApi } from "../../shared/services/marketData";
+import { marketDataApi, type ResearchSeries } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { ChartRangeSlider } from "../../shared/ui/ChartRangeSlider";
@@ -97,6 +97,42 @@ function genomeLabel(genome: GenomeRecord, instrumentNames: Record<string, strin
 
 function shortGenomeLabel(genome: GenomeRecord) {
   return genome.name?.trim() || `#${genome.id}`;
+}
+
+function isExternalIndicator(series: ResearchSeries) {
+  return series.enabled && !series.tradable && (series.series_type === "indicator" || series.series_type === "derived");
+}
+
+function IndicatorSelector({
+  series,
+  selectedIds,
+  onToggle
+}: {
+  series: ResearchSeries[];
+  selectedIds: string[];
+  onToggle: (id: string, checked: boolean) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+      <div className="mb-2 text-sm font-semibold text-slate-300">外部指標</div>
+      {series.length === 0 ? (
+        <div className="text-xs text-slate-500">尚無可用外部指標；未選擇時回測會使用參數包紀錄的指標設定，若參數包也沒有紀錄則維持單商品價格模式。</div>
+      ) : (
+        <div className="grid gap-2 md:grid-cols-2">
+          {series.map((item) => (
+            <label key={item.id} className="flex items-start gap-3 rounded-lg border border-white/[0.04] bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+              <input className="mt-1" type="checkbox" checked={selectedIds.includes(item.id)} onChange={(event) => onToggle(item.id, event.target.checked)} />
+              <span>
+                <span className="block font-semibold text-slate-200">{item.display_name}</span>
+                <span className="mt-1 block text-xs text-slate-500">{item.id} · {item.frequency || "未指定頻率"}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+      {selectedIds.length > 0 ? <div className="mt-2 text-xs text-[#99f6e4]">已指定 {selectedIds.length.toLocaleString("zh-TW")} 個指標；會覆蓋參數包內的指標設定。</div> : null}
+    </div>
+  );
 }
 
 function buildSingleChartData(result: BacktestResult | null): ChartPoint[] {
@@ -274,7 +310,9 @@ export function BacktestingPage() {
   const [params] = useSearchParams();
   const initialGenome = Number(params.get("genome")) || 0;
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
+  const seriesQuery = useQuery({ queryKey: ["market-data-series"], queryFn: () => marketDataApi.series() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
+  const indicatorSeries = useMemo(() => (seriesQuery.data?.series ?? []).filter(isExternalIndicator), [seriesQuery.data]);
   const instrumentNames = useMemo(() => Object.fromEntries(instruments.map((item) => [item.id, item.display_name])), [instruments]);
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
   const selectedInstrument = instruments.find((item) => item.id === instrumentId);
@@ -297,6 +335,7 @@ export function BacktestingPage() {
   const [monthlyDCA, setMonthlyDCA] = useState(1000);
   const [feeRate, setFeeRate] = useState(0);
   const [spreadRate, setSpreadRate] = useState(0);
+  const [indicatorSeriesIds, setIndicatorSeriesIds] = useState<string[]>([]);
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
   const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];
@@ -311,6 +350,7 @@ export function BacktestingPage() {
         symbol: selectedInstrument?.symbol ?? instrumentId,
         interval,
         execution_mode: executionMode,
+        indicator_series_ids: indicatorSeriesIds,
         start_time_ms: dateStartMs(backtestStart),
         end_time_ms: dateEndMs(backtestEnd),
         source
@@ -433,6 +473,10 @@ export function BacktestingPage() {
     setInterval(next?.supported_intervals[0] ?? "1d");
   }
 
+  function toggleIndicatorSeries(id: string, checked: boolean) {
+    setIndicatorSeriesIds((current) => (checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)));
+  }
+
   function resetRange() {
     setRange(chartData.length ? { start: 0, end: chartData.length - 1 } : null);
   }
@@ -502,6 +546,7 @@ export function BacktestingPage() {
           <NumberInput label="每月投入 / 定投金額" value={monthlyDCA} min={0} disabled={!overrideBacktestAssumptions} onChange={setMonthlyDCA} />
           <NumberInput label="手續費率" value={feeRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" value={spreadRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setSpreadRate} />
+          <IndicatorSelector series={indicatorSeries} selectedIds={indicatorSeriesIds} onToggle={toggleIndicatorSeries} />
 
           {source === "candidate" ? (
             <div className="md:col-span-2">
@@ -562,7 +607,8 @@ export function BacktestingPage() {
               ["定投期末權益", formatMoney(result.benchmark_final_equity ?? result.benchmark), "text-slate-100"],
               ["手續費率", formatPercent(result.fee_rate ?? 0), "text-slate-100"],
               ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"],
-              ["調倉門檻", formatPercent(result.rebalance_threshold ?? 0), "text-slate-100"]
+              ["調倉門檻", formatPercent(result.rebalance_threshold ?? 0), "text-slate-100"],
+              ["外部指標數", (result.indicator_series_ids?.length ?? 0).toLocaleString("zh-TW"), "text-slate-100"]
             ].map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>
@@ -576,6 +622,7 @@ export function BacktestingPage() {
               ["強制空倉門檻", formatPercent(result.force_empty_threshold ?? 0), "text-slate-100"],
               ["倉位結構", result.position_structure === "floating_only" ? "純浮動模型" : "雙層模型", "text-slate-100"],
               ["交易次數", (result.trade_count ?? 0).toLocaleString("zh-TW"), "text-slate-100"],
+              ["外部指標權重", formatNumber(result.external_signal_weight ?? 0), "text-slate-100"],
               ["均值回歸訊號", result.w_mean === 0 ? "停用" : formatNumber(result.w_mean), "text-slate-100"],
               ["動能訊號", result.w_momentum === 0 ? "停用" : formatNumber(result.w_momentum), "text-slate-100"],
               ["突破訊號", result.w_breakout === 0 ? "停用" : formatNumber(result.w_breakout), "text-slate-100"]

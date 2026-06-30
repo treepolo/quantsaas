@@ -123,16 +123,19 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 	if primary["status"] == "ready" {
 		if bars, ok := primary["_bars"].([]quant.Bar); ok {
 			params, _ := primary["_params"].(sigmoiddca.Params)
-			if summary, ok := simulateResearchPosition(bars, params, instrument.Symbol, simulation); ok {
+			externalSignals, _ := primary["_external_signals"].(map[int64]float64)
+			if summary, ok := simulateResearchPosition(bars, params, instrument.Symbol, simulation, externalSignals); ok {
 				base["position_simulation"] = summary
 			}
 		}
 	}
 	delete(base, "_bars")
 	delete(base, "_params")
+	delete(base, "_external_signals")
 	for _, state := range states {
 		delete(state, "_bars")
 		delete(state, "_params")
+		delete(state, "_external_signals")
 	}
 	return base
 }
@@ -148,12 +151,15 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 		return base
 	}
 	base["execution_mode"] = champion.ExecutionMode
+	params := sigmoiddca.ParseParamsFromParamPack([]byte(champion.ParamPack))
+	indicatorSeriesIDs := marketdata.NormalizeSeriesIDs(params.IndicatorSeriesIDs)
 
 	dataset, err := marketdata.NewService(h.db, nil).BuildDataset(ctx, marketdata.DatasetBuildRequest{
-		TradableSeriesIDs: []string{instrument.ID},
-		Interval:          interval,
-		StartTimeMs:       1,
-		EndTimeMs:         time.Now().UTC().UnixMilli(),
+		TradableSeriesIDs:  []string{instrument.ID},
+		IndicatorSeriesIDs: indicatorSeriesIDs,
+		Interval:           interval,
+		StartTimeMs:        1,
+		EndTimeMs:          time.Now().UTC().UnixMilli(),
 	})
 	if err != nil {
 		base["status"] = "missing_data"
@@ -171,8 +177,8 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 		}
 		return base
 	}
+	externalSignals := marketdata.ExternalSignalByTime(dataset)
 
-	params := sigmoiddca.ParseParamsFromParamPack([]byte(champion.ParamPack))
 	closes := make([]float64, 0, len(bars))
 	timestamps := make([]int64, 0, len(bars))
 	for _, bar := range bars {
@@ -191,6 +197,7 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 		Timestamps: timestamps,
 		Portfolio:  portfolio,
 		Spawn:      params.Spawn,
+		AISignal:   researchAISignal(externalSignals, latest.OpenTime),
 	}, params)
 	marketState := ""
 	if raw, ok := output.RuntimeState["last_market_state"]; ok {
@@ -211,9 +218,11 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 	base["market_state"] = marketState
 	base["diagnostics"] = output.Diagnostics
 	base["parameter_values"] = paramValues
+	base["indicator_series_ids"] = indicatorSeriesIDs
 	base["_bars"] = bars
 	base["_params"] = params
-	if model, ok := simulateResearchModel(bars, params, interval, champion.ExecutionMode, simulation); ok {
+	base["_external_signals"] = externalSignals
+	if model, ok := simulateResearchModel(bars, params, interval, champion.ExecutionMode, simulation, externalSignals); ok {
 		base["model_simulation"] = model
 		if latestTarget, ok := model["latest_practical_target_weight"]; ok {
 			base["target_weight"] = latestTarget
@@ -269,7 +278,7 @@ func instrumentSupportsInterval(instrument marketdata.ResearchInstrument, interv
 	return false
 }
 
-func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval string, executionMode string, settings positionSimulationQuery) (gin.H, bool) {
+func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval string, executionMode string, settings positionSimulationQuery, externalSignals map[int64]float64) (gin.H, bool) {
 	if len(bars) == 0 {
 		return nil, false
 	}
@@ -282,7 +291,7 @@ func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval 
 	}
 	executionMode = marketdata.NormalizeExecutionMode(executionMode)
 	costs := researchCosts(settings)
-	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars, bars[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
+	path := ga.RunSigmoidDCAPathBacktestWithModeCostsStructureAndSignals(bars, bars[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs, params.PositionStructure, externalSignals)
 	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
@@ -310,6 +319,7 @@ func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval 
 		"force_full_threshold":                        params.Chromosome.ForceFullThreshold,
 		"force_empty_threshold":                       params.Chromosome.ForceEmptyThreshold,
 		"position_structure":                          params.PositionStructure,
+		"indicator_series_ids":                        params.IndicatorSeriesIDs,
 		"trade_count":                                 path.Metrics.TradeCount,
 		"w_mean":                                      params.Chromosome.WMean,
 		"w_momentum":                                  params.Chromosome.WMomentum,
@@ -340,7 +350,7 @@ func researchCosts(settings positionSimulationQuery) quant.ExecutionCostConfig {
 	})
 }
 
-func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol string, settings positionSimulationQuery) (gin.H, bool) {
+func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol string, settings positionSimulationQuery, externalSignals map[int64]float64) (gin.H, bool) {
 	if settings.StartTimeMs <= 0 || settings.InitialCapital <= 0 || len(bars) == 0 {
 		return nil, false
 	}
@@ -404,6 +414,7 @@ func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol
 			},
 			RuntimeState: state,
 			Spawn:        params.Spawn,
+			AISignal:     researchAISignal(externalSignals, bar.OpenTime),
 		}, params)
 		state = output.RuntimeState
 		targetWeight := currentWeight(assetQty, bar.Close, equityBefore)
@@ -513,6 +524,13 @@ func datasetRowsAvailableAt(dataset marketdata.ResearchDataset, now time.Time) m
 	}
 	dataset.Rows = rows
 	return dataset
+}
+
+func researchAISignal(externalSignals map[int64]float64, timeMs int64) quant.AISignalVector {
+	if len(externalSignals) == 0 {
+		return quant.AISignalVector{}
+	}
+	return quant.AISignalVector{SMarket: externalSignals[timeMs]}
 }
 
 func pctChange(current float64, previous float64) float64 {

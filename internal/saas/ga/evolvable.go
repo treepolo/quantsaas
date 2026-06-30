@@ -18,26 +18,28 @@ type DCABaseline struct {
 }
 
 type EvaluablePlan struct {
-	Pair           string
-	Interval       string
-	ExecutionMode  string
-	TemplateName   string
-	Spawn          *quant.SpawnPoint
-	Costs          quant.ExecutionCostConfig
-	TradePenalty   float64
-	GeneOptions    GeneOptions
-	LotStep        float64
-	LotMin         float64
-	Windows        []quant.CrucibleWindow
-	DCABaselines   []DCABaseline
-	AggregateCache map[string]any
-	Trace          func(TraceEvent)
-	TraceMode      TraceMode
-	TraceModeFunc  func() TraceMode
-	ComputeStep    func(int64)
-	Generation     int
-	Individual     int
-	Worker         int
+	Pair               string
+	Interval           string
+	ExecutionMode      string
+	TemplateName       string
+	IndicatorSeriesIDs []string
+	ExternalSignals    map[int64]float64
+	Spawn              *quant.SpawnPoint
+	Costs              quant.ExecutionCostConfig
+	TradePenalty       float64
+	GeneOptions        GeneOptions
+	LotStep            float64
+	LotMin             float64
+	Windows            []quant.CrucibleWindow
+	DCABaselines       []DCABaseline
+	AggregateCache     map[string]any
+	Trace              func(TraceEvent)
+	TraceMode          TraceMode
+	TraceModeFunc      func() TraceMode
+	ComputeStep        func(int64)
+	Generation         int
+	Individual         int
+	Worker             int
 }
 
 type FitnessResult struct {
@@ -67,6 +69,8 @@ type GeneOptions struct {
 	EnableWMean               bool
 	EnableWMomentum           bool
 	EnableWBreakout           bool
+	EnableExternalSignal      bool
+	IndicatorSeriesIDs        []string
 	PositionStructure         string
 }
 

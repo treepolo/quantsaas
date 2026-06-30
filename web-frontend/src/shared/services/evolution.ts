@@ -30,6 +30,7 @@ export type EvolutionTask = {
   instrument_id?: string;
   data_source?: string;
   execution_mode?: string;
+  indicator_series_ids?: string[];
   train_start_ms?: number;
   train_end_ms?: number;
   initial_capital?: number;
@@ -98,6 +99,7 @@ export type GenomeRecord = {
     data_source?: string;
     interval?: string;
     execution_mode?: string;
+    indicator_series_ids?: string[];
     train_start_ms?: number;
     train_end_ms?: number;
     initial_capital?: number;
@@ -141,6 +143,7 @@ export type CreateTaskInput = {
   data_source?: string;
   interval?: string;
   execution_mode?: string;
+  indicator_series_ids?: string[];
   train_start_ms?: number;
   train_end_ms?: number;
   monthly_dca?: number;

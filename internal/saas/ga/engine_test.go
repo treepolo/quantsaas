@@ -59,13 +59,14 @@ func TestTournamentRarelySelectsFatal(t *testing.T) {
 func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	engine := NewEvolutionEngine(fakeEvolvable{}, nil)
 	raw := engine.searchConfig(EpochConfig{
-		Pair:           "SOXL",
-		InstrumentID:   "SOXL",
-		DataSource:     "yahoo",
-		Interval:       "1d",
-		ExecutionMode:  "close_next_open",
-		InitialCapital: 1000000,
-		MonthlyDCA:     250,
+		Pair:               "SOXL",
+		InstrumentID:       "SOXL",
+		DataSource:         "yahoo",
+		Interval:           "1d",
+		ExecutionMode:      "close_next_open",
+		InitialCapital:     1000000,
+		MonthlyDCA:         250,
+		IndicatorSeriesIDs: []string{"CREDIT_SPREAD"},
 		GeneOptions: GeneOptions{
 			EvolveRebalanceThreshold:  true,
 			EvolveForceFullThreshold:  true,
@@ -73,6 +74,8 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 			EnableWMean:               true,
 			EnableWMomentum:           true,
 			EnableWBreakout:           true,
+			EnableExternalSignal:      true,
+			IndicatorSeriesIDs:        []string{"CREDIT_SPREAD"},
 			PositionStructure:         "floating_only",
 		},
 		TradePenalty: 0.002,
@@ -110,6 +113,10 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	}
 	if cfg["trade_penalty"] != 0.002 {
 		t.Fatalf("trade_penalty = %v, want 0.002", cfg["trade_penalty"])
+	}
+	ids, ok := cfg["indicator_series_ids"].([]any)
+	if !ok || len(ids) != 1 || ids[0] != "CREDIT_SPREAD" {
+		t.Fatalf("indicator_series_ids = %#v", cfg["indicator_series_ids"])
 	}
 }
 

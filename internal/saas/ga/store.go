@@ -146,18 +146,23 @@ func searchHash(raw []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *GormGenomeStore) LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error) {
+func (s *GormGenomeStore) LoadDataset(ctx context.Context, scope DatasetScope) (DatasetBundle, error) {
 	if scope.InstrumentID != "" {
-		bars, _, err := marketdata.NewService(s.db, nil).BuildDatasetBars(ctx, marketdata.DatasetBuildRequest{
-			TradableSeriesIDs: []string{scope.InstrumentID},
-			Interval:          scope.Interval,
-			StartTimeMs:       scope.StartTimeMs,
-			EndTimeMs:         scope.EndTimeMs,
+		bars, dataset, err := marketdata.NewService(s.db, nil).BuildDatasetBars(ctx, marketdata.DatasetBuildRequest{
+			TradableSeriesIDs:  []string{scope.InstrumentID},
+			IndicatorSeriesIDs: scope.IndicatorSeriesIDs,
+			Interval:           scope.Interval,
+			StartTimeMs:        scope.StartTimeMs,
+			EndTimeMs:          scope.EndTimeMs,
 		})
 		if err == nil {
-			return bars, nil
+			return DatasetBundle{
+				Bars:               bars,
+				ExternalSignals:    marketdata.ExternalSignalByTime(dataset),
+				IndicatorSeriesIDs: scope.IndicatorSeriesIDs,
+			}, nil
 		}
-		return nil, err
+		return DatasetBundle{}, err
 	}
 
 	var rows []saasstore.KLine
@@ -176,10 +181,10 @@ func (s *GormGenomeStore) LoadKLines(ctx context.Context, scope DatasetScope) ([
 		query = query.Where("open_time <= ?", scope.EndTimeMs)
 	}
 	if err := query.Order("open_time ASC").Find(&rows).Error; err != nil {
-		return nil, err
+		return DatasetBundle{}, err
 	}
 	if len(rows) == 0 {
-		return nil, fmt.Errorf("no klines for %s %s", scope.Symbol, scope.Interval)
+		return DatasetBundle{}, fmt.Errorf("no klines for %s %s", scope.Symbol, scope.Interval)
 	}
 
 	bars := make([]quant.Bar, 0, len(rows))
@@ -193,5 +198,13 @@ func (s *GormGenomeStore) LoadKLines(ctx context.Context, scope DatasetScope) ([
 			Volume:   row.Volume,
 		})
 	}
-	return bars, nil
+	return DatasetBundle{Bars: bars}, nil
+}
+
+func (s *GormGenomeStore) LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error) {
+	bundle, err := s.LoadDataset(ctx, scope)
+	if err != nil {
+		return nil, err
+	}
+	return bundle.Bars, nil
 }

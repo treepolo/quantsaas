@@ -18,7 +18,7 @@ type GenomeStore interface {
 	SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult, searchConfig []byte) (uint, error)
 	LoadObservedFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte) (map[uint64]bool, error)
 	SaveObservedGenes(ctx context.Context, scope GeneScope, searchConfig []byte, observations []GeneObservation) error
-	LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error)
+	LoadDataset(ctx context.Context, scope DatasetScope) (DatasetBundle, error)
 }
 
 type GeneScope struct {
@@ -30,12 +30,19 @@ type GeneScope struct {
 }
 
 type DatasetScope struct {
-	InstrumentID string
-	DataSource   string
-	Symbol       string
-	Interval     string
-	StartTimeMs  int64
-	EndTimeMs    int64
+	InstrumentID       string
+	DataSource         string
+	Symbol             string
+	Interval           string
+	StartTimeMs        int64
+	EndTimeMs          int64
+	IndicatorSeriesIDs []string
+}
+
+type DatasetBundle struct {
+	Bars               []quant.Bar
+	ExternalSignals    map[int64]float64
+	IndicatorSeriesIDs []string
 }
 
 type EvolutionEngine struct {
@@ -71,6 +78,7 @@ type EpochConfig struct {
 	LotMinQty          float64
 	InitialCapital     float64
 	MonthlyDCA         float64
+	IndicatorSeriesIDs []string
 	GeneOptions        GeneOptions
 	Costs              quant.ExecutionCostConfig
 	TradePenalty       float64
@@ -139,20 +147,21 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	e.trace(cfg, TraceModeSummary, "evolution", "epoch.start", "epoch started", map[string]any{
-		"pair":            cfg.Pair,
-		"instrument_id":   cfg.InstrumentID,
-		"data_source":     cfg.DataSource,
-		"interval":        cfg.Interval,
-		"execution_mode":  cfg.ExecutionMode,
-		"population":      e.popSize(cfg),
-		"max_generations": e.maxGenerations(cfg),
-		"initial_capital": e.initialCapital(cfg),
-		"monthly_dca":     e.monthlyDCA(cfg),
-		"gene_options":    cfg.GeneOptions,
-		"fee_rate":        cfg.Costs.FeeRate,
-		"spread_rate":     cfg.Costs.SpreadRate,
-		"trade_penalty":   cfg.TradePenalty,
-		"trace_mode":      cfg.TraceMode,
+		"pair":                 cfg.Pair,
+		"instrument_id":        cfg.InstrumentID,
+		"data_source":          cfg.DataSource,
+		"interval":             cfg.Interval,
+		"execution_mode":       cfg.ExecutionMode,
+		"population":           e.popSize(cfg),
+		"max_generations":      e.maxGenerations(cfg),
+		"initial_capital":      e.initialCapital(cfg),
+		"monthly_dca":          e.monthlyDCA(cfg),
+		"indicator_series_ids": cfg.IndicatorSeriesIDs,
+		"gene_options":         cfg.GeneOptions,
+		"fee_rate":             cfg.Costs.FeeRate,
+		"spread_rate":          cfg.Costs.SpreadRate,
+		"trade_penalty":        cfg.TradePenalty,
+		"trace_mode":           cfg.TraceMode,
 	})
 	plan, err := e.buildEvaluablePlan(ctx, cfg)
 	if err != nil {
@@ -322,23 +331,24 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		spawnMode = "inherit"
 	}
 	raw, err := json.Marshal(map[string]any{
-		"strategy_id":     e.evolvable.StrategyID(),
-		"symbol":          cfg.Pair,
-		"instrument_id":   cfg.InstrumentID,
-		"data_source":     cfg.DataSource,
-		"interval":        cfg.Interval,
-		"execution_mode":  cfg.ExecutionMode,
-		"train_start_ms":  cfg.StartTimeMs,
-		"train_end_ms":    cfg.EndTimeMs,
-		"initial_capital": e.initialCapital(cfg),
-		"monthly_dca":     e.monthlyDCA(cfg),
-		"gene_options":    cfg.GeneOptions,
-		"fee_rate":        quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
-		"spread_rate":     quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
-		"trade_penalty":   cfg.TradePenalty,
-		"spawn_mode":      spawnMode,
-		"population":      e.popSize(cfg),
-		"generations":     e.maxGenerations(cfg),
+		"strategy_id":          e.evolvable.StrategyID(),
+		"symbol":               cfg.Pair,
+		"instrument_id":        cfg.InstrumentID,
+		"data_source":          cfg.DataSource,
+		"interval":             cfg.Interval,
+		"execution_mode":       cfg.ExecutionMode,
+		"train_start_ms":       cfg.StartTimeMs,
+		"train_end_ms":         cfg.EndTimeMs,
+		"initial_capital":      e.initialCapital(cfg),
+		"monthly_dca":          e.monthlyDCA(cfg),
+		"indicator_series_ids": cfg.IndicatorSeriesIDs,
+		"gene_options":         cfg.GeneOptions,
+		"fee_rate":             quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
+		"spread_rate":          quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
+		"trade_penalty":        cfg.TradePenalty,
+		"spawn_mode":           spawnMode,
+		"population":           e.popSize(cfg),
+		"generations":          e.maxGenerations(cfg),
 	})
 	if err != nil {
 		return []byte(`{}`)
@@ -356,21 +366,24 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		"start_time_ms": cfg.StartTimeMs,
 		"end_time_ms":   cfg.EndTimeMs,
 	})
-	bars, err := e.store.LoadKLines(ctx, DatasetScope{
-		InstrumentID: cfg.InstrumentID,
-		DataSource:   cfg.DataSource,
-		Symbol:       cfg.Pair,
-		Interval:     cfg.Interval,
-		StartTimeMs:  cfg.StartTimeMs,
-		EndTimeMs:    cfg.EndTimeMs,
+	bundle, err := e.store.LoadDataset(ctx, DatasetScope{
+		InstrumentID:       cfg.InstrumentID,
+		DataSource:         cfg.DataSource,
+		Symbol:             cfg.Pair,
+		Interval:           cfg.Interval,
+		StartTimeMs:        cfg.StartTimeMs,
+		EndTimeMs:          cfg.EndTimeMs,
+		IndicatorSeriesIDs: cfg.IndicatorSeriesIDs,
 	})
 	if err != nil {
 		return EvaluablePlan{}, err
 	}
+	bars := bundle.Bars
 	e.trace(cfg, TraceModeSummary, "market_data", "klines.loaded", "historical bars loaded", map[string]any{
-		"pair":     cfg.Pair,
-		"interval": cfg.Interval,
-		"bars":     len(bars),
+		"pair":                 cfg.Pair,
+		"interval":             cfg.Interval,
+		"bars":                 len(bars),
+		"indicator_series_ids": bundle.IndicatorSeriesIDs,
 	})
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	costs := quant.NormalizeExecutionCosts(cfg.Costs)
@@ -416,19 +429,21 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 	}
 
 	return EvaluablePlan{
-		Pair:           cfg.Pair,
-		Interval:       cfg.Interval,
-		ExecutionMode:  cfg.ExecutionMode,
-		TemplateName:   e.evolvable.StrategyID(),
-		Spawn:          spawn,
-		Costs:          costs,
-		TradePenalty:   math.Max(0, cfg.TradePenalty),
-		GeneOptions:    cfg.GeneOptions,
-		LotStep:        cfg.LotStepSize,
-		LotMin:         cfg.LotMinQty,
-		Windows:        windows,
-		DCABaselines:   baselines,
-		AggregateCache: map[string]any{},
+		Pair:               cfg.Pair,
+		Interval:           cfg.Interval,
+		ExecutionMode:      cfg.ExecutionMode,
+		TemplateName:       e.evolvable.StrategyID(),
+		IndicatorSeriesIDs: bundle.IndicatorSeriesIDs,
+		ExternalSignals:    bundle.ExternalSignals,
+		Spawn:              spawn,
+		Costs:              costs,
+		TradePenalty:       math.Max(0, cfg.TradePenalty),
+		GeneOptions:        cfg.GeneOptions,
+		LotStep:            cfg.LotStepSize,
+		LotMin:             cfg.LotMinQty,
+		Windows:            windows,
+		DCABaselines:       baselines,
+		AggregateCache:     map[string]any{},
 	}, nil
 }
 

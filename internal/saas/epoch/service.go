@@ -50,6 +50,7 @@ type CreateTaskRequest struct {
 	Pair                      string            `json:"pair"`
 	InstrumentID              string            `json:"instrument_id"`
 	DataSource                string            `json:"data_source"`
+	IndicatorSeriesIDs        []string          `json:"indicator_series_ids"`
 	ExecutionMode             string            `json:"execution_mode"`
 	TrainStartMs              int64             `json:"train_start_ms"`
 	TrainEndMs                int64             `json:"train_end_ms"`
@@ -265,6 +266,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		LotMinQty:          spawn.Risk.LotMin,
 		InitialCapital:     searchInitialCapital(req),
 		MonthlyDCA:         searchMonthlyDCA(req),
+		IndicatorSeriesIDs: req.IndicatorSeriesIDs,
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		TradePenalty:       searchTradePenalty(req),
@@ -437,6 +439,7 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		LotMinQty:          spawn.Risk.LotMin,
 		InitialCapital:     searchInitialCapital(req),
 		MonthlyDCA:         searchMonthlyDCA(req),
+		IndicatorSeriesIDs: req.IndicatorSeriesIDs,
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		TradePenalty:       searchTradePenalty(req),
@@ -899,6 +902,7 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 		req.Pair = instrument.Symbol
 		req.DataSource = instrument.DataSource
 	}
+	req.IndicatorSeriesIDs = marketdata.NormalizeSeriesIDs(req.IndicatorSeriesIDs)
 	if req.Interval == "" {
 		req.Interval = "1d"
 	}
@@ -1061,6 +1065,8 @@ func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
 		EnableWMean:               boolValue(req.EnableWMean),
 		EnableWMomentum:           boolValue(req.EnableWMomentum),
 		EnableWBreakout:           boolValue(req.EnableWBreakout),
+		EnableExternalSignal:      len(req.IndicatorSeriesIDs) > 0,
+		IndicatorSeriesIDs:        req.IndicatorSeriesIDs,
 		PositionStructure:         normalizedPositionStructure(req.PositionStructure),
 	}
 }

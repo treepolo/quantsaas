@@ -9,6 +9,7 @@ type Chromosome struct {
 	WMean                  float64 `json:"w_mean"`
 	WMomentum              float64 `json:"w_momentum"`
 	WBreakout              float64 `json:"w_breakout"`
+	ExternalSignalWeight   float64 `json:"external_signal_weight"`
 	DustUSD                float64 `json:"dust_usd"`
 	RebalanceThreshold     float64 `json:"rebalance_threshold"`
 	ForceFullThreshold     float64 `json:"force_full_threshold"`
@@ -35,6 +36,7 @@ var HardBounds = map[string]Bound{
 	"w_mean":                    {Min: -3.00, Max: 3.00},
 	"w_momentum":                {Min: -3.00, Max: 3.00},
 	"w_breakout":                {Min: -3.00, Max: 3.00},
+	"external_signal_weight":    {Min: -3.00, Max: 3.00},
 	"dust_usd":                  {Min: 5.00, Max: 25.00},
 	"rebalance_threshold":       {Min: 0.00, Max: 1.00},
 	"force_full_threshold":      {Min: 0.00, Max: 1.00},
@@ -56,6 +58,7 @@ var DefaultSeedChromosome = Chromosome{
 	WMean:                  1.00,
 	WMomentum:              -0.50,
 	WBreakout:              0.75,
+	ExternalSignalWeight:   0.00,
 	DustUSD:                10.10,
 	RebalanceThreshold:     0.00,
 	ForceFullThreshold:     1.00,
@@ -77,6 +80,7 @@ var GeneSteps = map[string]float64{
 	"w_mean":                    0.10,
 	"w_momentum":                0.10,
 	"w_breakout":                0.10,
+	"external_signal_weight":    0.10,
 	"dust_usd":                  0.50,
 	"rebalance_threshold":       0.005,
 	"force_full_threshold":      0.01,
@@ -98,6 +102,7 @@ func ClampChromosome(c Chromosome) Chromosome {
 	c.WMean = clampByName(c.WMean, "w_mean")
 	c.WMomentum = clampByName(c.WMomentum, "w_momentum")
 	c.WBreakout = clampByName(c.WBreakout, "w_breakout")
+	c.ExternalSignalWeight = clampByName(c.ExternalSignalWeight, "external_signal_weight")
 	c.DustUSD = clampByName(c.DustUSD, "dust_usd")
 	c.RebalanceThreshold = clampByName(c.RebalanceThreshold, "rebalance_threshold")
 	c.ForceFullThreshold = clampByName(c.ForceFullThreshold, "force_full_threshold")

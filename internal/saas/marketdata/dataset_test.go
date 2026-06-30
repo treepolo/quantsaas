@@ -220,3 +220,37 @@ func TestPrimaryBarsFromDatasetMatchesLegacyKLineConversion(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalSignalByTimeBuildsRollingIndicatorSignal(t *testing.T) {
+	req := DatasetBuildRequest{Interval: "1d", StartTimeMs: 1000, EndTimeMs: 3000}
+	primary := datasetSeriesData{
+		Series: ResearchSeries{ID: "SOXL", SeriesType: SeriesTypeTradableAsset, DisplayName: "SOXL", DataSource: DataSourceYahoo, Tradable: true},
+		Role:   "primary_tradable",
+		Values: []DatasetValue{
+			{SeriesID: "SOXL", ObservedAtMs: 1000, AvailableAtMs: 1000, Close: 10, Value: 10},
+			{SeriesID: "SOXL", ObservedAtMs: 2000, AvailableAtMs: 2000, Close: 11, Value: 11},
+			{SeriesID: "SOXL", ObservedAtMs: 3000, AvailableAtMs: 3000, Close: 12, Value: 12},
+		},
+	}
+	indicator := datasetSeriesData{
+		Series: ResearchSeries{ID: "CREDIT_SPREAD", SeriesType: SeriesTypeIndicator, DisplayName: "Credit Spread", DataSource: "manual"},
+		Role:   "indicator",
+		Values: []DatasetValue{
+			{SeriesID: "CREDIT_SPREAD", ObservedAtMs: 1000, AvailableAtMs: 1000, Value: 1},
+			{SeriesID: "CREDIT_SPREAD", ObservedAtMs: 2000, AvailableAtMs: 2000, Value: 2},
+			{SeriesID: "CREDIT_SPREAD", ObservedAtMs: 3000, AvailableAtMs: 3000, Value: 4},
+		},
+	}
+	dataset := assembleDataset(req, []datasetSeriesData{primary, indicator})
+	signals := ExternalSignalByTime(dataset)
+
+	if _, ok := signals[1000]; ok {
+		t.Fatal("first point should not have a z-score before any variance exists")
+	}
+	if signals[2000] <= 0 {
+		t.Fatalf("second signal = %.4f, want positive z-score", signals[2000])
+	}
+	if signals[3000] <= signals[2000] {
+		t.Fatalf("third signal = %.4f, want greater than second %.4f", signals[3000], signals[2000])
+	}
+}

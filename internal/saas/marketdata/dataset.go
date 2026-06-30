@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"quantsaas/internal/quant"
@@ -156,6 +157,87 @@ func PrimaryBarsFromDataset(dataset ResearchDataset) ([]quant.Bar, error) {
 	return bars, nil
 }
 
+func ExternalSignalByTime(dataset ResearchDataset) map[int64]float64 {
+	indicatorIDs := indicatorSeriesIDs(dataset)
+	if len(indicatorIDs) == 0 || len(dataset.Rows) == 0 {
+		return nil
+	}
+	history := make(map[string][]float64, len(indicatorIDs))
+	out := map[int64]float64{}
+	for _, row := range dataset.Rows {
+		sum := 0.0
+		count := 0
+		for _, id := range indicatorIDs {
+			value, ok := row.Values[id]
+			if !ok {
+				continue
+			}
+			scalar, ok := datasetScalarValue(value)
+			if !ok {
+				continue
+			}
+			history[id] = append(history[id], scalar)
+			if z, ok := rollingZScore(history[id], 252); ok {
+				sum += z
+				count++
+			}
+		}
+		if count > 0 {
+			out[row.ObservedAtMs] = sum / float64(count)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func indicatorSeriesIDs(dataset ResearchDataset) []string {
+	out := []string{}
+	for _, info := range dataset.Series {
+		if info.Role == "indicator" || info.SeriesType == SeriesTypeIndicator || info.SeriesType == SeriesTypeDerived {
+			out = append(out, info.ID)
+		}
+	}
+	return out
+}
+
+func datasetScalarValue(value DatasetValue) (float64, bool) {
+	scalar := value.Value
+	if scalar == 0 && value.Close != 0 {
+		scalar = value.Close
+	}
+	if math.IsNaN(scalar) || math.IsInf(scalar, 0) {
+		return 0, false
+	}
+	return scalar, true
+}
+
+func rollingZScore(values []float64, window int) (float64, bool) {
+	if len(values) < 2 {
+		return 0, false
+	}
+	if window <= 1 || window > len(values) {
+		window = len(values)
+	}
+	recent := values[len(values)-window:]
+	mean := 0.0
+	for _, value := range recent {
+		mean += value
+	}
+	mean /= float64(len(recent))
+	variance := 0.0
+	for _, value := range recent {
+		delta := value - mean
+		variance += delta * delta
+	}
+	std := math.Sqrt(variance / float64(len(recent)))
+	if std <= 0 || math.IsNaN(std) || math.IsInf(std, 0) {
+		return 0, false
+	}
+	return (recent[len(recent)-1] - mean) / std, true
+}
+
 func primarySeriesID(dataset ResearchDataset) string {
 	for _, info := range dataset.Series {
 		if info.Role == "primary_tradable" {
@@ -230,6 +312,10 @@ func normalizeSeriesIDs(values []string) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+func NormalizeSeriesIDs(values []string) []string {
+	return normalizeSeriesIDs(values)
 }
 
 func (s *Service) loadDatasetSeries(ctx context.Context, req DatasetBuildRequest) ([]ResearchSeries, []ResearchSeries, error) {
