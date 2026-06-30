@@ -318,6 +318,55 @@ func TestDetectYahooAvailableStartFallsBackForIntradayRange(t *testing.T) {
 	}
 }
 
+func TestDetectYahooWeeklyAvailableStartUsesDailyFirstPeriod(t *testing.T) {
+	first := time.Date(2010, 3, 11, 14, 30, 0, 0, time.UTC).Unix()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("interval"); got != "1d" {
+			t.Fatalf("interval = %s, want 1d", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"chart": {
+				"result": [{
+					"timestamp": [` + strconv.FormatInt(first, 10) + `],
+					"indicators": {
+						"quote": [{
+							"open": [10.0],
+							"high": [11.0],
+							"low": [9.0],
+							"close": [10.5],
+							"volume": [100]
+						}]
+					}
+				}],
+				"error": null
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	svc := NewService(nil, nil)
+	svc.yahooClient = NewYahooClient(server.URL)
+	svc.yahooClient.lastAt = time.Now().Add(-yahooMinRequestInterval)
+	svc.now = func() time.Time { return time.Date(2026, 6, 30, 0, 0, 0, 0, time.UTC) }
+
+	start, err := svc.detectAvailableStart(context.Background(), ResearchInstrument{
+		ID:                 "SOXL",
+		Symbol:             "SOXL",
+		DataSource:         DataSourceYahoo,
+		SupportedIntervals: []string{"1w"},
+		Market:             "us",
+	}, "1w")
+	if err != nil {
+		t.Fatalf("detectAvailableStart failed: %v", err)
+	}
+	loc, _ := time.LoadLocation("America/New_York")
+	want := time.Date(2010, 3, 8, 0, 0, 0, 0, loc).UnixMilli()
+	if start != want {
+		t.Fatalf("start = %d, want %d", start, want)
+	}
+}
+
 func TestInstrumentRecordRoundTripsAvailableStartMs(t *testing.T) {
 	record := saasstore.ResearchInstrument{
 		ID:                 "SOXL",

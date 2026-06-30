@@ -633,6 +633,10 @@ func (s *Service) detectAvailableStart(ctx context.Context, instrument ResearchI
 	end := s.now().UnixMilli()
 	switch instrument.DataSource {
 	case DataSourceYahoo:
+		interval = normalizeInterval(interval)
+		if interval == "1w" || interval == "1M" {
+			return s.detectYahooAggregateAvailableStart(ctx, instrument, interval, end)
+		}
 		var lastErr error
 		for _, start := range yahooAvailableStartProbeStarts(interval, s.now()) {
 			rows, err := s.yahooClient.FetchKLines(ctx, instrument.Symbol, interval, start, end)
@@ -665,6 +669,38 @@ func (s *Service) detectAvailableStart(ctx context.Context, instrument ResearchI
 	default:
 		return 0, ErrUnsupportedSource
 	}
+}
+
+func (s *Service) detectYahooAggregateAvailableStart(ctx context.Context, instrument ResearchInstrument, interval string, end int64) (int64, error) {
+	var lastErr error
+	for _, start := range yahooAvailableStartProbeStarts("1d", s.now()) {
+		rows, err := s.yahooClient.FetchKLines(ctx, instrument.Symbol, "1d", start, end)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		rows = normalizeYahooRowsForStorage(ImportRequest{
+			InstrumentID: instrument.ID,
+			DataSource:   instrument.DataSource,
+			Symbol:       instrument.Symbol,
+			Interval:     "1d",
+			StartTimeMs:  start,
+			EndTimeMs:    end,
+		}, rows, s.now())
+		first := firstRowOpenTime(rows)
+		if first <= 0 {
+			continue
+		}
+		period, ok := aggregateYahooPeriod(instrument.Symbol, first, interval)
+		if !ok {
+			return first, nil
+		}
+		return period.StartMs, nil
+	}
+	if lastErr != nil {
+		return 0, lastErr
+	}
+	return 0, nil
 }
 
 func yahooAvailableStartProbeStarts(interval string, now time.Time) []int64 {
