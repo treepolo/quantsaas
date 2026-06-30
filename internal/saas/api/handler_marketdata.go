@@ -169,6 +169,31 @@ func (h *MarketDataHandler) SyncTradableAssetSeries(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "synced"})
 }
 
+func (h *MarketDataHandler) DatasetPreview(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	var req marketdata.DatasetBuildRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.MaxRows == 0 {
+		req.MaxRows = 500
+	}
+	result, err := h.service.BuildDataset(c.Request.Context(), req)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, marketdata.ErrInvalidDatasetRequest) {
+			status = http.StatusBadRequest
+		}
+		c.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *MarketDataHandler) RefreshInstrumentStarts(c *gin.Context) {
 	if !h.canUseLab() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})

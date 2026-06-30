@@ -101,6 +101,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/market-data/series", md.UpsertSeries)
 	lab.POST("/market-data/series/sync-tradable-assets", md.SyncTradableAssetSeries)
 	lab.DELETE("/market-data/series/:id", md.DeleteSeries)
+	lab.POST("/market-data/datasets/preview", md.DatasetPreview)
 	lab.GET("/market-data/klines/status", md.Status)
 	lab.GET("/market-data/klines/overview", md.Overview)
 	lab.POST("/market-data/klines/import", md.Import)
