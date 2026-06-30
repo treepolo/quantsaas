@@ -1,7 +1,9 @@
 package ga
 
 import (
+	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,6 +114,53 @@ func TestForceTargetThresholdsOnlyAffectPracticalPath(t *testing.T) {
 	}
 	if math.Abs(first.PracticalTargetWeight-1) > 1e-12 {
 		t.Fatalf("practical target weight = %.12f, want forced 1", first.PracticalTargetWeight)
+	}
+}
+
+func TestEvaluateRejectsInvalidForceThresholdOrder(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Chromosome.ForceFullThreshold = 0.40
+	params.Chromosome.ForceEmptyThreshold = 0.60
+
+	result, err := NewSigmoidDCAEvolvable().Evaluate(context.Background(), params.Chromosome, EvaluablePlan{
+		Spawn: &params.Spawn,
+		GeneOptions: GeneOptions{
+			EvolveForceFullThreshold:  true,
+			EvolveForceEmptyThreshold: true,
+			PositionStructure:         sigmoiddca.PositionStructureFloatingOnly,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+	if !result.Fatal || result.ScoreTotal != FatalFitnessScore {
+		t.Fatalf("result = %+v, want fatal fitness", result)
+	}
+}
+
+func TestEncodeResultRejectsInvalidForceThresholdOrder(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Chromosome.ForceFullThreshold = 0.40
+	params.Chromosome.ForceEmptyThreshold = 0.60
+
+	_, err := NewSigmoidDCAEvolvable().EncodeResult(params.Chromosome, &params.Spawn, GeneOptions{
+		EvolveForceFullThreshold:  true,
+		EvolveForceEmptyThreshold: true,
+		PositionStructure:         sigmoiddca.PositionStructureFloatingOnly,
+	})
+	if err == nil {
+		t.Fatal("expected invalid force threshold order error")
+	}
+	if !strings.Contains(err.Error(), "\u6eff\u5009\u95be\u503c\u4f4e\u65bc\u7a7a\u5009\u95be\u503c") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestSampleProducesValidForceThresholdOrder(t *testing.T) {
+	rng := cyclingRNG{}
+	gene := NewSigmoidDCAEvolvable().Sample(&rng).(quant.Chromosome)
+	if gene.ForceFullThreshold < gene.ForceEmptyThreshold {
+		t.Fatalf("force full threshold %.4f < force empty threshold %.4f", gene.ForceFullThreshold, gene.ForceEmptyThreshold)
 	}
 }
 

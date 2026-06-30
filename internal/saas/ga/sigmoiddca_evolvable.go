@@ -59,6 +59,8 @@ func (SigmoidDCAEvolvable) StrategyID() string {
 }
 
 func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
+	forceEmptyThreshold := sampleRange(rng, "force_empty_threshold")
+	forceFullThreshold := forceEmptyThreshold + rng.Float64()*(1-forceEmptyThreshold)
 	c := quant.Chromosome{
 		MicroReservePct:        sampleRange(rng, "micro_reserve_pct"),
 		Beta:                   sampleRange(rng, "beta"),
@@ -68,8 +70,8 @@ func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 		WBreakout:              sampleRange(rng, "w_breakout"),
 		DustUSD:                sampleRange(rng, "dust_usd"),
 		RebalanceThreshold:     sampleRange(rng, "rebalance_threshold"),
-		ForceFullThreshold:     sampleRange(rng, "force_full_threshold"),
-		ForceEmptyThreshold:    sampleRange(rng, "force_empty_threshold"),
+		ForceFullThreshold:     forceFullThreshold,
+		ForceEmptyThreshold:    forceEmptyThreshold,
 		WedgeDeltaThreshold:    sampleRange(rng, "wedge_delta_threshold"),
 		WedgeVolRatioThreshold: sampleRange(rng, "wedge_vol_ratio_threshold"),
 		MacroBearMultiplier:    sampleRange(rng, "macro_bear_multiplier"),
@@ -188,6 +190,15 @@ func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
 
 func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan EvaluablePlan) (FitnessResult, error) {
 	c := e.NormalizeGene(g, plan.GeneOptions).(quant.Chromosome)
+	if err := quant.ValidateChromosome(c); err != nil {
+		trace(plan, TraceModeDetailed, "strategy", "individual.evaluate.invalid_gene", "invalid chromosome rejected", map[string]any{
+			"generation": plan.Generation,
+			"individual": plan.Individual,
+			"worker":     plan.Worker,
+			"error":      err.Error(),
+		})
+		return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
+	}
 	result := FitnessResult{}
 	for i, window := range plan.Windows {
 		if err := ctx.Err(); err != nil {
@@ -274,10 +285,13 @@ func (SigmoidDCAEvolvable) DecodeElite(raw []byte) Gene {
 	return params.Chromosome
 }
 
-func (SigmoidDCAEvolvable) EncodeResult(g Gene, spawn *quant.SpawnPoint, options GeneOptions) ([]byte, error) {
+func (e SigmoidDCAEvolvable) EncodeResult(g Gene, spawn *quant.SpawnPoint, options GeneOptions) ([]byte, error) {
 	options = NormalizeGeneOptions(options)
 	params := sigmoiddca.DefaultParams()
-	params.Chromosome = quant.ClampChromosome(asChromosome(g))
+	params.Chromosome = e.NormalizeGene(g, options).(quant.Chromosome)
+	if err := quant.ValidateChromosome(params.Chromosome); err != nil {
+		return nil, err
+	}
 	params.PositionStructure = options.PositionStructure
 	if spawn != nil {
 		params.Spawn = *spawn

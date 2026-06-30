@@ -355,7 +355,7 @@
       w_momentum: [-3.00, 3.00],
       w_breakout: [-3.00, 3.00],
       dust_usd: [5.00, 25.00],
-      rebalance_threshold: [0.00, 0.20],
+      rebalance_threshold: [0.00, 1.00],
       force_full_threshold: [0.00, 1.00],
       force_empty_threshold: [0.00, 1.00],
       wedge_delta_threshold: [0.01, 0.15],
@@ -831,13 +831,13 @@
           portfolio,
           runtime
         }, params);
-        let modelTargetWeight = totalTargetWeight(portfolio, bar.close, portfolio.totalEquity, safeNumber(output.diagnostics.target_weight));
+        const modelTargetWeight = totalTargetWeight(portfolio, bar.close, portfolio.totalEquity, safeNumber(output.diagnostics.target_weight));
         const forced = applyForceTargetThresholds(output, portfolio, bar.close, params.chromosome, modelTargetWeight);
         output = forced.output;
-        modelTargetWeight = forced.modelTargetWeight;
+        const practicalModelTargetWeight = forced.modelTargetWeight;
         const rebalanceAllowed = rebalanceThresholdAllows(output, portfolio, bar.close, params.chromosome.rebalance_threshold);
         if (!hasAdoptedPracticalTargetWeight || rebalanceAllowed) {
-          adoptedPracticalTargetWeight = modelTargetWeight;
+          adoptedPracticalTargetWeight = practicalModelTargetWeight;
           hasAdoptedPracticalTargetWeight = true;
         }
         output = applyRebalanceThreshold(output, portfolio, bar.close, params.chromosome.rebalance_threshold);
@@ -849,19 +849,12 @@
           portfolio: { cash: portfolio.totalEquity, deadAsset: 0, floatAsset: 0, coldAsset: 0, totalEquity: portfolio.totalEquity },
           runtime: {}
         }, params);
-        let emptyTargetWeight = totalTargetWeight(
+        const emptyTargetWeight = totalTargetWeight(
           { cash: portfolio.totalEquity, deadAsset: 0, floatAsset: 0, coldAsset: 0, totalEquity: portfolio.totalEquity },
           bar.close,
           portfolio.totalEquity,
           safeNumber(emptyOutput.diagnostics.target_weight)
         );
-        emptyTargetWeight = applyForceTargetThresholds(
-          emptyOutput,
-          { cash: portfolio.totalEquity, deadAsset: 0, floatAsset: 0, coldAsset: 0, totalEquity: portfolio.totalEquity },
-          bar.close,
-          params.chromosome,
-          emptyTargetWeight
-        ).modelTargetWeight;
         runtime = output.runtime || {};
         if (executionMode === "close_next_open") pending = output;
         else portfolio = applyOutput(portfolio, output, bar.close);
@@ -921,8 +914,14 @@
       }
       out.soft_release_months = Math.trunc(out.soft_release_months);
       if (out.macro_bear_multiplier < out.macro_bull_multiplier) out.macro_bear_multiplier = out.macro_bull_multiplier;
-      if (out.force_full_threshold < out.force_empty_threshold) out.force_full_threshold = out.force_empty_threshold;
+      validateChromosome(out);
       return out;
+    }
+
+    function validateChromosome(c) {
+      if (c.force_full_threshold < c.force_empty_threshold) {
+        throw new Error("滿倉閾值低於空倉閾值，參數無效");
+      }
     }
 
     function mergeBars(baseBars, manual) {
