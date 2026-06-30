@@ -36,6 +36,25 @@ export type ResearchInstrument = {
   last_auto_update_error?: string;
 };
 
+export type ResearchSeries = {
+  id: string;
+  series_type: "tradable_asset" | "indicator" | "derived" | string;
+  symbol?: string;
+  display_name: string;
+  data_source: string;
+  source_instrument_id?: string;
+  supported_intervals?: string[];
+  frequency: string;
+  unit: string;
+  currency?: string;
+  market: string;
+  revision_policy: string;
+  tradable: boolean;
+  enabled: boolean;
+  sort_order: number;
+  metadata?: Record<string, unknown>;
+};
+
 export type MarketDataStatus = {
   instrument: ResearchInstrument;
   instrument_id: string;
@@ -135,9 +154,69 @@ export type MaintenanceResult = {
   error?: string;
 };
 
+export type DatasetBuildInput = {
+  tradable_series_ids: string[];
+  indicator_series_ids?: string[];
+  interval: string;
+  start_time_ms: number;
+  end_time_ms: number;
+  max_rows?: number;
+};
+
+export type DatasetValue = {
+  series_id: string;
+  observed_at_ms: number;
+  available_at_ms: number;
+  value: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  close?: number;
+  volume?: number;
+  source: string;
+  lag_ms: number;
+};
+
+export type DatasetRow = {
+  observed_at_ms: number;
+  decision_time_ms: number;
+  values: Record<string, DatasetValue>;
+  missing_series_ids?: string[];
+};
+
+export type DatasetSeriesInfo = {
+  id: string;
+  role: string;
+  series_type: string;
+  display_name: string;
+  data_source: string;
+  point_count: number;
+  missing_count: number;
+  first_observed_ms?: number;
+  last_observed_ms?: number;
+};
+
+export type DatasetIssue = {
+  series_id?: string;
+  code: string;
+  message: string;
+};
+
+export type ResearchDataset = {
+  interval: string;
+  start_time_ms: number;
+  end_time_ms: number;
+  series: DatasetSeriesInfo[];
+  rows: DatasetRow[];
+  issues?: DatasetIssue[];
+};
+
 export const marketDataApi = {
   instruments() {
     return apiFetch<{ instruments: ResearchInstrument[]; execution_modes: string[] }>("/market-data/instruments");
+  },
+  series() {
+    return apiFetch<{ series: ResearchSeries[]; series_types: string[] }>("/market-data/series");
   },
   upsertInstrument(input: UpsertInstrumentInput) {
     return apiFetch<ResearchInstrument>("/market-data/instruments", {
@@ -176,6 +255,12 @@ export const marketDataApi = {
   repairMaintenance(id?: string) {
     const suffix = id ? `/${encodeURIComponent(id)}` : "";
     return apiFetch<{ results: MaintenanceResult[] }>(`/market-data/maintenance/repair${suffix}`, { method: "POST" });
+  },
+  datasetPreview(input: DatasetBuildInput) {
+    return apiFetch<ResearchDataset>("/market-data/datasets/preview", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
   },
   importKLines(input: ImportKLinesInput) {
     return apiFetch<ImportKLinesResult>("/market-data/klines/import", {
