@@ -1,9 +1,12 @@
 package backtest
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"quantsaas/internal/quant"
+	"quantsaas/internal/strategies/sigmoiddca"
 )
 
 func TestNormalizeSpawnPointKeepsZeroMonthlyDCA(t *testing.T) {
@@ -49,5 +52,49 @@ func TestValidateCostRateRejectsInvalidValues(t *testing.T) {
 	tooLarge := 0.21
 	if err := validateCostRate("spread_rate", &tooLarge); err == nil {
 		t.Fatal("expected oversized cost rate to fail")
+	}
+}
+
+func TestParseCustomParamsDefaultsToFloatingOnly(t *testing.T) {
+	raw := json.RawMessage(`{"rebalance_threshold":0.75}`)
+
+	params, err := parseCustomParams(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if params.PositionStructure != sigmoiddca.PositionStructureFloatingOnly {
+		t.Fatalf("position structure = %s, want %s", params.PositionStructure, sigmoiddca.PositionStructureFloatingOnly)
+	}
+	if params.Chromosome.RebalanceThreshold != 0.75 {
+		t.Fatalf("rebalance threshold = %.4f, want 0.75", params.Chromosome.RebalanceThreshold)
+	}
+}
+
+func TestParseCustomParamEnvelopeDefaultsToFloatingOnly(t *testing.T) {
+	raw := json.RawMessage(`{"sigmoid_dca_config":{"rebalance_threshold":0.75}}`)
+
+	params, err := parseCustomParams(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if params.PositionStructure != sigmoiddca.PositionStructureFloatingOnly {
+		t.Fatalf("position structure = %s, want %s", params.PositionStructure, sigmoiddca.PositionStructureFloatingOnly)
+	}
+	if params.Chromosome.RebalanceThreshold != 0.75 {
+		t.Fatalf("rebalance threshold = %.4f, want 0.75", params.Chromosome.RebalanceThreshold)
+	}
+}
+
+func TestParseCustomParamsRejectsInvalidForceThresholdOrder(t *testing.T) {
+	raw := json.RawMessage(`{"force_full_threshold":0.40,"force_empty_threshold":0.60}`)
+
+	_, err := parseCustomParams(raw)
+	if err == nil {
+		t.Fatal("expected invalid force threshold order to fail")
+	}
+	if !strings.Contains(err.Error(), "滿倉閾值低於空倉閾值") {
+		t.Fatalf("error = %q, want force threshold message", err.Error())
 	}
 }

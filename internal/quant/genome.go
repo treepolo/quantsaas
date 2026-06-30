@@ -36,7 +36,7 @@ var HardBounds = map[string]Bound{
 	"w_momentum":                {Min: -3.00, Max: 3.00},
 	"w_breakout":                {Min: -3.00, Max: 3.00},
 	"dust_usd":                  {Min: 5.00, Max: 25.00},
-	"rebalance_threshold":       {Min: 0.00, Max: 0.20},
+	"rebalance_threshold":       {Min: 0.00, Max: 1.00},
 	"force_full_threshold":      {Min: 0.00, Max: 1.00},
 	"force_empty_threshold":     {Min: 0.00, Max: 1.00},
 	"wedge_delta_threshold":     {Min: 0.01, Max: 0.15},
@@ -114,9 +114,6 @@ func ClampChromosome(c Chromosome) Chromosome {
 	if c.MacroBearMultiplier < c.MacroBullMultiplier {
 		c.MacroBearMultiplier = c.MacroBullMultiplier
 	}
-	if c.ForceFullThreshold < c.ForceEmptyThreshold {
-		c.ForceFullThreshold = c.ForceEmptyThreshold
-	}
 	return c
 }
 
@@ -129,7 +126,7 @@ func ValidateChromosome(c Chromosome) error {
 		return fmt.Errorf("macro_bear_multiplier must be >= macro_bull_multiplier")
 	}
 	if c.ForceFullThreshold < c.ForceEmptyThreshold {
-		return fmt.Errorf("force_full_threshold must be >= force_empty_threshold")
+		return fmt.Errorf("滿倉閾值低於空倉閾值，參數無效")
 	}
 	return nil
 }

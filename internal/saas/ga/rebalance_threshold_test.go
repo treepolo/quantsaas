@@ -1,9 +1,12 @@
 package ga
 
 import (
+	"math"
 	"testing"
+	"time"
 
 	"quantsaas/internal/quant"
+	"quantsaas/internal/strategies/sigmoiddca"
 )
 
 func TestApplyRebalanceThresholdFiltersOnlyMicroOrders(t *testing.T) {
@@ -55,4 +58,75 @@ func TestApplyRebalanceThresholdKeepsMicroOrderWhenGapPasses(t *testing.T) {
 	if filtered.Intents[0].Engine != quant.EngineMicro {
 		t.Fatalf("remaining intent engine = %s, want micro", filtered.Intents[0].Engine)
 	}
+}
+
+func TestApplyRebalanceThresholdAllowsHighThreshold(t *testing.T) {
+	output := quant.StrategyOutput{
+		Intents:     []quant.TradeIntent{{Action: quant.ActionBuy, Engine: quant.EngineMicro, AmountUSDT: 600, LotType: quant.LotTypeFloating}},
+		Diagnostics: map[string]float64{"target_weight": 0.62},
+	}
+	portfolio := quant.PortfolioSnapshot{
+		USDTBalance: 1000,
+		TotalEquity: 1000,
+	}
+
+	filtered := applyRebalanceThreshold(output, portfolio, 100, 0.75)
+
+	if len(filtered.Intents) != 0 {
+		t.Fatalf("intent count = %d, want 0", len(filtered.Intents))
+	}
+}
+
+func TestForceTargetThresholdsOnlyAffectPracticalPath(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Spawn.Policy.InitialUSDT = 1000
+	params.Spawn.Policy.MonthlyInjectUSDT = 0
+	params.PositionStructure = sigmoiddca.PositionStructureFloatingOnly
+	params.Chromosome.ForceFullThreshold = 0.60
+	params.Chromosome.ForceEmptyThreshold = 0
+	params.Chromosome.RebalanceThreshold = 0
+	params.Chromosome.DustUSD = 1
+
+	bars := flatTestBars(115)
+	path := RunSigmoidDCAPathBacktestWithModeCostsAndStructure(
+		bars,
+		bars[112].OpenTime,
+		"1d",
+		executionModeCloseSameBar,
+		params.Chromosome,
+		&params.Spawn,
+		quant.ExecutionCostConfig{},
+		params.PositionStructure,
+	)
+	if len(path.NAV) == 0 {
+		t.Fatal("expected path points")
+	}
+
+	first := path.NAV[0]
+	rawTarget := 1 / (1 + math.Exp(-0.5))
+	if math.Abs(first.ModelTargetWeight-rawTarget) > 1e-12 {
+		t.Fatalf("model target weight = %.12f, want raw baseline %.12f", first.ModelTargetWeight, rawTarget)
+	}
+	if math.Abs(first.EmptyReferenceTargetWeight-rawTarget) > 1e-12 {
+		t.Fatalf("empty reference target weight = %.12f, want raw reference %.12f", first.EmptyReferenceTargetWeight, rawTarget)
+	}
+	if math.Abs(first.PracticalTargetWeight-1) > 1e-12 {
+		t.Fatalf("practical target weight = %.12f, want forced 1", first.PracticalTargetWeight)
+	}
+}
+
+func flatTestBars(n int) []quant.Bar {
+	start := time.Date(2026, 1, 2, 14, 30, 0, 0, time.UTC)
+	bars := make([]quant.Bar, 0, n)
+	for i := 0; i < n; i++ {
+		ts := start.AddDate(0, 0, i).UnixMilli()
+		bars = append(bars, quant.Bar{
+			OpenTime: ts,
+			Open:     100,
+			High:     100,
+			Low:      100,
+			Close:    100,
+		})
+	}
+	return bars
 }

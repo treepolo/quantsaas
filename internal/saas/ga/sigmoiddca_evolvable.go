@@ -427,10 +427,11 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		}, params)
 		rawModelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
 		modelTargetWeight := totalTargetWeight(portfolio, bar.Close, portfolio.TotalEquity, rawModelTargetWeight)
-		output, modelTargetWeight = applyForceTargetThresholds(output, portfolio, bar.Close, params.Chromosome, modelTargetWeight)
+		practicalModelTargetWeight := modelTargetWeight
+		output, practicalModelTargetWeight = applyForceTargetThresholds(output, portfolio, bar.Close, params.Chromosome, modelTargetWeight)
 		rebalanceAllowed := rebalanceThresholdAllows(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
 		if !hasAdoptedPracticalTargetWeight || rebalanceAllowed {
-			adoptedPracticalTargetWeight = modelTargetWeight
+			adoptedPracticalTargetWeight = practicalModelTargetWeight
 			hasAdoptedPracticalTargetWeight = true
 		}
 		output = applyRebalanceThreshold(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
@@ -451,10 +452,6 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			USDTBalance: portfolio.TotalEquity,
 			TotalEquity: portfolio.TotalEquity,
 		}, bar.Close, portfolio.TotalEquity, rawEmptyReferenceTargetWeight)
-		emptyReferenceOutput, emptyReferenceTargetWeight = applyForceTargetThresholds(emptyReferenceOutput, quant.PortfolioSnapshot{
-			USDTBalance: portfolio.TotalEquity,
-			TotalEquity: portfolio.TotalEquity,
-		}, bar.Close, params.Chromosome, emptyReferenceTargetWeight)
 		_ = emptyReferenceOutput
 		state = output.RuntimeState
 		if usesNextOpenExecution(executionMode) {

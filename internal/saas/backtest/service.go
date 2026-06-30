@@ -338,6 +338,9 @@ func (s *Service) resolveParams(ctx context.Context, userID uint, req CreateRequ
 		params.Spawn.Policy.MonthlyInjectUSDT = *req.MonthlyDCA
 	}
 	params.Chromosome = quant.ClampChromosome(params.Chromosome)
+	if err := quant.ValidateChromosome(params.Chromosome); err != nil {
+		return params, err
+	}
 	return params, nil
 }
 
@@ -493,6 +496,7 @@ func supportsInterval(supported []string, interval string) bool {
 
 func parseCustomParams(raw json.RawMessage) (sigmoiddca.Params, error) {
 	params := sigmoiddca.DefaultParams()
+	params.PositionStructure = sigmoiddca.PositionStructureFloatingOnly
 	if len(raw) == 0 || string(raw) == "null" {
 		return params, errors.New("自訂參數不可為空")
 	}
@@ -506,6 +510,9 @@ func parseCustomParams(raw json.RawMessage) (sigmoiddca.Params, error) {
 		}
 		params.Chromosome = quant.ClampChromosome(params.Chromosome)
 		params.PositionStructure = sigmoiddca.NormalizePositionStructure(params.PositionStructure)
+		if err := quant.ValidateChromosome(params.Chromosome); err != nil {
+			return params, err
+		}
 		return params, nil
 	}
 	chromosome := quant.DefaultSeedChromosome
@@ -513,6 +520,9 @@ func parseCustomParams(raw json.RawMessage) (sigmoiddca.Params, error) {
 		return params, fmt.Errorf("自訂參數內容不正確")
 	}
 	params.Chromosome = quant.ClampChromosome(chromosome)
+	if err := quant.ValidateChromosome(params.Chromosome); err != nil {
+		return params, err
+	}
 	return params, nil
 }
 
