@@ -198,6 +198,26 @@ export function MarketDataPage() {
     onSuccess: refreshMarketQueries
   });
 
+  const auditMaintenanceMutation = useMutation({
+    mutationFn: () => marketDataApi.auditMaintenance(selected?.id ?? instrumentId),
+    onSuccess: refreshMarketQueries
+  });
+
+  const repairMaintenanceMutation = useMutation({
+    mutationFn: () => marketDataApi.repairMaintenance(selected?.id ?? instrumentId),
+    onSuccess: refreshMarketQueries
+  });
+
+  const auditAllMaintenanceMutation = useMutation({
+    mutationFn: () => marketDataApi.auditMaintenance(),
+    onSuccess: refreshMarketQueries
+  });
+
+  const repairAllMaintenanceMutation = useMutation({
+    mutationFn: () => marketDataApi.repairMaintenance(),
+    onSuccess: refreshMarketQueries
+  });
+
   function refreshMarketQueries() {
     queryClient.invalidateQueries({ queryKey: ["market-data-instruments"] });
     queryClient.invalidateQueries({ queryKey: ["market-data-overview"] });
@@ -279,6 +299,35 @@ export function MarketDataPage() {
     const storedBars = results.reduce((sum, item) => sum + (item.stored_bars ?? 0), 0);
     return results.length ? { total: results.length, errors, skipped, updated, storedBars } : null;
   }, [updateLatestMutation.data]);
+  const maintenanceResults = repairAllMaintenanceMutation.data?.results ?? auditAllMaintenanceMutation.data?.results ?? repairMaintenanceMutation.data?.results ?? auditMaintenanceMutation.data?.results ?? [];
+  const maintenanceSummary = useMemo(() => {
+    const datasets = maintenanceResults.flatMap((item) => item.datasets ?? []);
+    if (!maintenanceResults.length) return null;
+    return {
+      instruments: maintenanceResults.length,
+      issueDatasets: datasets.filter((item) => item.error || item.invalid_open_time_count > 0 || item.needs_full_reimport || (item.expected_count && item.count !== item.expected_count)).length,
+      invalidRows: datasets.reduce((sum, item) => sum + (item.invalid_open_time_count ?? 0), 0),
+      storedBars: datasets.reduce((sum, item) => sum + (item.stored_bars ?? 0), 0),
+      deletedRows: datasets.reduce((sum, item) => sum + (item.deleted_rows ?? 0), 0),
+      repairedDatasets: datasets.filter((item) => item.reimported_daily || item.rebuilt_from_daily).length
+    };
+  }, [maintenanceResults]);
+
+  function repairSelectedMaintenance() {
+    const ok = window.confirm(
+      "這會檢查並修復目前選取商品的日 K、週 K、月 K。日 K 若有破碎時間或舊價格口徑會重匯入；週 K、月 K 會由日 K 重新聚合。使用這批資料的舊回測結果可能改變。確定要繼續？"
+    );
+    if (!ok) return;
+    repairMaintenanceMutation.mutate();
+  }
+
+  function repairAllMaintenance() {
+    const ok = window.confirm(
+      "這會檢查並修復所有商品的日 K、週 K、月 K。需要重匯入日 K 的商品會重新抓資料，週 K、月 K 會全部由日 K 重新聚合，可能花較久；使用這些資料的舊回測結果可能改變。確定要繼續？"
+    );
+    if (!ok) return;
+    repairAllMaintenanceMutation.mutate();
+  }
 
   return (
     <section className="space-y-4">
@@ -406,6 +455,59 @@ export function MarketDataPage() {
           </label>
         </form>
         {refreshStartsMutation.error ? <div className="mt-4 text-sm text-[#fecaca]">{String(refreshStartsMutation.error.message)}</div> : null}
+        <div className="mt-4 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
+          <div className="text-sm font-semibold text-slate-100">日週月資料維護</div>
+          <div className="mt-1 text-xs leading-5 text-slate-500">
+            稽核日 K、週 K、月 K 的標準時間與價格口徑；修復時會先處理日 K，再用日 K 重建週 K、月 K。
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            <Button
+              icon={TriangleAlert}
+              loading={auditMaintenanceMutation.isPending}
+              type="button"
+              variant="secondary"
+              onClick={() => auditMaintenanceMutation.mutate()}
+            >
+              稽核選取商品
+            </Button>
+            <Button
+              icon={RefreshCw}
+              loading={repairMaintenanceMutation.isPending}
+              type="button"
+              variant="secondary"
+              onClick={repairSelectedMaintenance}
+            >
+              修復選取商品
+            </Button>
+            <Button
+              icon={TriangleAlert}
+              loading={auditAllMaintenanceMutation.isPending}
+              type="button"
+              variant="secondary"
+              onClick={() => auditAllMaintenanceMutation.mutate()}
+            >
+              稽核全部商品
+            </Button>
+            <Button
+              icon={RefreshCw}
+              loading={repairAllMaintenanceMutation.isPending}
+              type="button"
+              variant="secondary"
+              onClick={repairAllMaintenance}
+            >
+              修復全部商品
+            </Button>
+          </div>
+          {maintenanceSummary ? (
+            <div className="mt-3 rounded-lg border border-[#2dd4bf]/20 bg-[#2dd4bf]/10 px-3 py-2 text-sm leading-6 text-[#99f6e4]">
+              維護完成：檢查 {maintenanceSummary.instruments.toLocaleString("zh-TW")} 個商品，問題資料集 {maintenanceSummary.issueDatasets.toLocaleString("zh-TW")} 組，破碎時間 {maintenanceSummary.invalidRows.toLocaleString("zh-TW")} 筆，重建/重匯 {maintenanceSummary.repairedDatasets.toLocaleString("zh-TW")} 組，刪除 {maintenanceSummary.deletedRows.toLocaleString("zh-TW")} 筆，寫入 {maintenanceSummary.storedBars.toLocaleString("zh-TW")} 筆。
+            </div>
+          ) : null}
+          {auditMaintenanceMutation.error ? <div className="mt-3 text-sm text-[#fecaca]">{String(auditMaintenanceMutation.error.message)}</div> : null}
+          {repairMaintenanceMutation.error ? <div className="mt-3 text-sm text-[#fecaca]">{String(repairMaintenanceMutation.error.message)}</div> : null}
+          {auditAllMaintenanceMutation.error ? <div className="mt-3 text-sm text-[#fecaca]">{String(auditAllMaintenanceMutation.error.message)}</div> : null}
+          {repairAllMaintenanceMutation.error ? <div className="mt-3 text-sm text-[#fecaca]">{String(repairAllMaintenanceMutation.error.message)}</div> : null}
+        </div>
         <div className="mt-3 text-xs text-slate-500">
           目前來源：<span className="font-mono text-slate-300">{selected?.data_source ?? statusQuery.data?.data_source ?? "-"}</span> · 代碼：
           <span className="font-mono text-slate-300">{selected?.symbol ?? statusQuery.data?.symbol ?? "-"}</span>

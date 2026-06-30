@@ -135,6 +135,34 @@ type AvailableStartResult struct {
 	Errors       map[string]string `json:"errors,omitempty"`
 }
 
+type MaintenanceResult struct {
+	InstrumentID string                     `json:"instrument_id"`
+	DataSource   string                     `json:"data_source"`
+	Symbol       string                     `json:"symbol"`
+	Datasets     []MaintenanceDatasetResult `json:"datasets"`
+	HasIssues    bool                       `json:"has_issues"`
+	Error        string                     `json:"error,omitempty"`
+}
+
+type MaintenanceDatasetResult struct {
+	Interval             string `json:"interval"`
+	Count                int64  `json:"count"`
+	ExpectedCount        int64  `json:"expected_count,omitempty"`
+	InvalidOpenTimeCount int64  `json:"invalid_open_time_count"`
+	NeedsFullReimport    bool   `json:"needs_full_reimport"`
+	PriceAdjustment      string `json:"price_adjustment"`
+	PriceAdjustmentLabel string `json:"price_adjustment_label"`
+	ReimportedDaily      bool   `json:"reimported_daily,omitempty"`
+	RebuiltFromDaily     bool   `json:"rebuilt_from_daily,omitempty"`
+	StoredBars           int64  `json:"stored_bars,omitempty"`
+	DeletedRows          int64  `json:"deleted_rows,omitempty"`
+	FirstOpenMs          int64  `json:"first_open_ms,omitempty"`
+	LastOpenMs           int64  `json:"last_open_ms,omitempty"`
+	ExpectedFirstOpenMs  int64  `json:"expected_first_open_ms,omitempty"`
+	ExpectedLastOpenMs   int64  `json:"expected_last_open_ms,omitempty"`
+	Error                string `json:"error,omitempty"`
+}
+
 type DatasetSummary struct {
 	InstrumentID           string `json:"instrument_id"`
 	DataSource             string `json:"data_source"`
@@ -435,12 +463,18 @@ func isFullCoverageImport(existing datasetBounds, req ImportRequest) bool {
 }
 
 func (s *Service) deleteKLines(ctx context.Context, instrumentID string, source string, symbol string, interval string) error {
+	_, err := s.deleteKLinesReturningRows(ctx, instrumentID, source, symbol, interval)
+	return err
+}
+
+func (s *Service) deleteKLinesReturningRows(ctx context.Context, instrumentID string, source string, symbol string, interval string) (int64, error) {
 	if s.db == nil {
-		return nil
+		return 0, nil
 	}
-	return s.db.WithContext(ctx).
+	tx := s.db.WithContext(ctx).
 		Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ?", instrumentID, source, symbol, interval).
-		Delete(&saasstore.KLine{}).Error
+		Delete(&saasstore.KLine{})
+	return tx.RowsAffected, tx.Error
 }
 
 func (s *Service) recordDatasetMetadata(ctx context.Context, req ImportRequest, result ImportResult, existing datasetBounds) (string, error) {
@@ -503,6 +537,18 @@ func (s *Service) datasetMetadataByInterval(ctx context.Context, instrument Rese
 		out[row.Interval] = row
 	}
 	return out, nil
+}
+
+func (s *Service) loadKLines(ctx context.Context, instrument ResearchInstrument, interval string) ([]saasstore.KLine, error) {
+	if s.db == nil {
+		return nil, nil
+	}
+	var rows []saasstore.KLine
+	err := s.db.WithContext(ctx).
+		Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ?", instrument.ID, instrument.DataSource, instrument.Symbol, interval).
+		Order("open_time ASC").
+		Find(&rows).Error
+	return rows, err
 }
 
 func (s *Service) AllSummaries(ctx context.Context) ([]InstrumentSummary, error) {
@@ -654,6 +700,125 @@ func (s *Service) RefreshAllAvailableStarts(ctx context.Context) ([]AvailableSta
 	return results, nil
 }
 
+func (s *Service) AuditMaintenance(ctx context.Context, instrumentID string) ([]MaintenanceResult, error) {
+	instruments, err := s.maintenanceInstruments(ctx, instrumentID)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]MaintenanceResult, 0, len(instruments))
+	for _, instrument := range instruments {
+		result, err := s.auditInstrumentMaintenance(ctx, instrument)
+		if err != nil {
+			results = append(results, MaintenanceResult{
+				InstrumentID: instrument.ID,
+				DataSource:   instrument.DataSource,
+				Symbol:       instrument.Symbol,
+				Error:        err.Error(),
+				HasIssues:    true,
+			})
+			continue
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (s *Service) RepairMaintenance(ctx context.Context, instrumentID string) ([]MaintenanceResult, error) {
+	instruments, err := s.maintenanceInstruments(ctx, instrumentID)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]MaintenanceResult, 0, len(instruments))
+	for _, instrument := range instruments {
+		result, err := s.repairInstrumentMaintenance(ctx, instrument)
+		if err != nil {
+			results = append(results, MaintenanceResult{
+				InstrumentID: instrument.ID,
+				DataSource:   instrument.DataSource,
+				Symbol:       instrument.Symbol,
+				Error:        err.Error(),
+				HasIssues:    true,
+			})
+			continue
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
+func (s *Service) maintenanceInstruments(ctx context.Context, instrumentID string) ([]ResearchInstrument, error) {
+	if strings.TrimSpace(instrumentID) != "" {
+		instrument, err := s.instruments.ResolveInstrument(ctx, instrumentID, "", "")
+		if err != nil {
+			return nil, err
+		}
+		return []ResearchInstrument{instrument}, nil
+	}
+	return s.Instruments(ctx)
+}
+
+func (s *Service) auditInstrumentMaintenance(ctx context.Context, instrument ResearchInstrument) (MaintenanceResult, error) {
+	intervals := maintenanceIntervals(instrument)
+	metadata, err := s.datasetMetadataByInterval(ctx, instrument, intervals)
+	if err != nil {
+		return MaintenanceResult{}, err
+	}
+	out := MaintenanceResult{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol}
+	for _, interval := range intervals {
+		item, err := s.auditMaintenanceDataset(ctx, instrument, interval, metadata[interval])
+		if err != nil {
+			item = MaintenanceDatasetResult{Interval: interval, Error: err.Error()}
+		}
+		if maintenanceDatasetHasIssues(item) {
+			out.HasIssues = true
+		}
+		out.Datasets = append(out.Datasets, item)
+	}
+	return out, nil
+}
+
+func (s *Service) repairInstrumentMaintenance(ctx context.Context, instrument ResearchInstrument) (MaintenanceResult, error) {
+	before, err := s.auditInstrumentMaintenance(ctx, instrument)
+	if err != nil {
+		return MaintenanceResult{}, err
+	}
+	out := MaintenanceResult{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol}
+	dailyReport := maintenanceDatasetByInterval(before.Datasets, "1d")
+	if instrumentSupportsInterval(instrument, "1d") && (dailyReport.Count == 0 || dailyReport.InvalidOpenTimeCount > 0 || dailyReport.NeedsFullReimport) {
+		repaired, err := s.reimportDailyForMaintenance(ctx, instrument)
+		if err != nil {
+			repaired = dailyReport
+			repaired.Error = err.Error()
+		}
+		out.Datasets = append(out.Datasets, repaired)
+	} else if instrumentSupportsInterval(instrument, "1d") {
+		out.Datasets = append(out.Datasets, dailyReport)
+	}
+	if instrumentSupportsInterval(instrument, "1w") {
+		item, err := s.rebuildAggregateForMaintenance(ctx, instrument, "1w")
+		if err != nil {
+			item = maintenanceDatasetByInterval(before.Datasets, "1w")
+			item.Error = err.Error()
+		}
+		out.Datasets = append(out.Datasets, item)
+	}
+	if instrumentSupportsInterval(instrument, "1M") {
+		item, err := s.rebuildAggregateForMaintenance(ctx, instrument, "1M")
+		if err != nil {
+			item = maintenanceDatasetByInterval(before.Datasets, "1M")
+			item.Error = err.Error()
+		}
+		out.Datasets = append(out.Datasets, item)
+	}
+	for _, item := range out.Datasets {
+		if maintenanceDatasetHasIssues(item) || item.ReimportedDaily || item.RebuiltFromDaily {
+			out.HasIssues = true
+			break
+		}
+	}
+	return out, nil
+}
+
 func (s *Service) detectAvailableStart(ctx context.Context, instrument ResearchInstrument, interval string) (int64, error) {
 	end := s.now().UnixMilli()
 	switch instrument.DataSource {
@@ -759,6 +924,161 @@ func firstRowOpenTime(rows []BinanceKLine) int64 {
 		}
 	}
 	return 0
+}
+
+func maintenanceIntervals(instrument ResearchInstrument) []string {
+	out := make([]string, 0, 3)
+	for _, interval := range []string{"1d", "1w", "1M"} {
+		if instrumentSupportsInterval(instrument, interval) {
+			out = append(out, interval)
+		}
+	}
+	return out
+}
+
+func maintenanceDatasetByInterval(items []MaintenanceDatasetResult, interval string) MaintenanceDatasetResult {
+	for _, item := range items {
+		if item.Interval == interval {
+			return item
+		}
+	}
+	return MaintenanceDatasetResult{Interval: interval}
+}
+
+func maintenanceDatasetHasIssues(item MaintenanceDatasetResult) bool {
+	return item.Error != "" || item.InvalidOpenTimeCount > 0 || item.NeedsFullReimport || (item.ExpectedCount > 0 && item.Count != item.ExpectedCount) || (item.ExpectedLastOpenMs > 0 && item.LastOpenMs != item.ExpectedLastOpenMs)
+}
+
+func (s *Service) auditMaintenanceDataset(ctx context.Context, instrument ResearchInstrument, interval string, metadata saasstore.DatasetMetadata) (MaintenanceDatasetResult, error) {
+	rows, err := s.loadKLines(ctx, instrument, interval)
+	if err != nil {
+		return MaintenanceDatasetResult{}, err
+	}
+	item := MaintenanceDatasetResult{
+		Interval:             interval,
+		Count:                int64(len(rows)),
+		PriceAdjustment:      metadata.PriceAdjustment,
+		PriceAdjustmentLabel: priceAdjustmentLabel(metadata.PriceAdjustment),
+		NeedsFullReimport:    len(rows) > 0 && currentPriceAdjustment(instrument.DataSource, interval) != metadata.PriceAdjustment,
+	}
+	if item.PriceAdjustment == "" {
+		if len(rows) == 0 {
+			item.PriceAdjustment = currentPriceAdjustment(instrument.DataSource, interval)
+		} else {
+			item.PriceAdjustment = PriceAdjustmentLegacyUnknown
+			item.NeedsFullReimport = true
+		}
+		item.PriceAdjustmentLabel = priceAdjustmentLabel(item.PriceAdjustment)
+	}
+	for _, row := range rows {
+		if row.OpenTime > 0 {
+			if item.FirstOpenMs == 0 || row.OpenTime < item.FirstOpenMs {
+				item.FirstOpenMs = row.OpenTime
+			}
+			if row.OpenTime > item.LastOpenMs {
+				item.LastOpenMs = row.OpenTime
+			}
+		}
+		if !isCanonicalKLineOpenTime(instrument, interval, row.OpenTime) {
+			item.InvalidOpenTimeCount++
+		}
+	}
+	if interval == "1w" || interval == "1M" {
+		dailyRows, err := s.loadKLines(ctx, instrument, "1d")
+		if err != nil {
+			return item, err
+		}
+		expected := aggregateRowsForInstrument(instrument, kLineRowsToBars(dailyRows), interval, s.now().UnixMilli())
+		item.ExpectedCount = int64(len(expected))
+		if len(expected) > 0 {
+			item.ExpectedFirstOpenMs = expected[0].OpenTime
+			item.ExpectedLastOpenMs = expected[len(expected)-1].OpenTime
+		}
+	}
+	return item, nil
+}
+
+func (s *Service) reimportDailyForMaintenance(ctx context.Context, instrument ResearchInstrument) (MaintenanceDatasetResult, error) {
+	start := instrument.AvailableStartMs["1d"]
+	if start <= 0 {
+		bounds := s.datasetBounds(ctx, ImportRequest{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Interval: "1d"})
+		start = bounds.FirstOpenMs
+	}
+	if start <= 0 {
+		start = s.latestOnlyUpdateStart(instrument, "1d")
+	}
+	imported, err := s.Import(ctx, ImportRequest{
+		InstrumentID: instrument.ID,
+		DataSource:   instrument.DataSource,
+		Symbol:       instrument.Symbol,
+		Interval:     "1d",
+		StartTimeMs:  start,
+		EndTimeMs:    s.now().UnixMilli(),
+	})
+	if err != nil {
+		return MaintenanceDatasetResult{Interval: "1d"}, err
+	}
+	metadata, err := s.datasetMetadataByInterval(ctx, instrument, []string{"1d"})
+	if err != nil {
+		return MaintenanceDatasetResult{}, err
+	}
+	item, err := s.auditMaintenanceDataset(ctx, instrument, "1d", metadata["1d"])
+	if err != nil {
+		return item, err
+	}
+	item.ReimportedDaily = true
+	item.StoredBars = imported.StoredBars
+	return item, nil
+}
+
+func (s *Service) rebuildAggregateForMaintenance(ctx context.Context, instrument ResearchInstrument, interval string) (MaintenanceDatasetResult, error) {
+	dailyRows, err := s.loadKLines(ctx, instrument, "1d")
+	if err != nil {
+		return MaintenanceDatasetResult{Interval: interval}, err
+	}
+	rows := aggregateRowsForInstrument(instrument, kLineRowsToBars(dailyRows), interval, s.now().UnixMilli())
+	deleted, err := s.deleteKLinesReturningRows(ctx, instrument.ID, instrument.DataSource, instrument.Symbol, interval)
+	if err != nil {
+		return MaintenanceDatasetResult{Interval: interval}, err
+	}
+	stored, err := s.storeKLines(ctx, instrument.ID, instrument.DataSource, instrument.Symbol, interval, rows)
+	if err != nil {
+		return MaintenanceDatasetResult{Interval: interval}, err
+	}
+	result := ImportResult{
+		InstrumentID: instrument.ID,
+		DataSource:   instrument.DataSource,
+		Symbol:       instrument.Symbol,
+		Interval:     interval,
+		FetchedBars:  len(rows),
+		StoredBars:   stored,
+	}
+	if len(rows) > 0 {
+		result.FirstOpenMs = rows[0].OpenTime
+		result.LastOpenMs = rows[len(rows)-1].OpenTime
+	}
+	if _, err := s.recordDatasetMetadata(ctx, ImportRequest{
+		InstrumentID: instrument.ID,
+		DataSource:   instrument.DataSource,
+		Symbol:       instrument.Symbol,
+		Interval:     interval,
+		StartTimeMs:  result.FirstOpenMs,
+		EndTimeMs:    s.now().UnixMilli(),
+	}, result, datasetBounds{}); err != nil {
+		return MaintenanceDatasetResult{Interval: interval}, err
+	}
+	metadata, err := s.datasetMetadataByInterval(ctx, instrument, []string{interval})
+	if err != nil {
+		return MaintenanceDatasetResult{Interval: interval}, err
+	}
+	item, err := s.auditMaintenanceDataset(ctx, instrument, interval, metadata[interval])
+	if err != nil {
+		return item, err
+	}
+	item.RebuiltFromDaily = true
+	item.StoredBars = stored
+	item.DeletedRows = deleted
+	return item, nil
 }
 
 func (s *Service) normalizeImportRequest(req ImportRequest) ImportRequest {
@@ -1589,6 +1909,45 @@ func aggregateYahooDailyRows(symbol string, rows []BinanceKLine, interval string
 	return out
 }
 
+func aggregateRowsForInstrument(instrument ResearchInstrument, rows []BinanceKLine, interval string, endTimeMs int64) []BinanceKLine {
+	if len(rows) == 0 {
+		return nil
+	}
+	interval = normalizeInterval(interval)
+	sort.Slice(rows, func(i, j int) bool { return rows[i].OpenTime < rows[j].OpenTime })
+	out := make([]BinanceKLine, 0)
+	currentKey := ""
+	var currentEndMs int64
+	var current BinanceKLine
+	for _, row := range rows {
+		if !isCanonicalKLineOpenTime(instrument, "1d", row.OpenTime) {
+			continue
+		}
+		period, ok := aggregatePeriodForInstrument(instrument, row.OpenTime, interval)
+		if !ok {
+			continue
+		}
+		if currentKey == "" || period.Key != currentKey {
+			if currentKey != "" && isCompletedAggregatePeriod(currentEndMs, endTimeMs) {
+				out = append(out, current)
+			}
+			currentKey = period.Key
+			currentEndMs = period.EndMs
+			current = row
+			current.OpenTime = period.StartMs
+			continue
+		}
+		current.High = math.Max(current.High, row.High)
+		current.Low = math.Min(current.Low, row.Low)
+		current.Close = row.Close
+		current.Volume += row.Volume
+	}
+	if currentKey != "" && isCompletedAggregatePeriod(currentEndMs, endTimeMs) {
+		out = append(out, current)
+	}
+	return out
+}
+
 func isCompletedAggregatePeriod(periodEndMs int64, endTimeMs int64) bool {
 	if periodEndMs <= 0 || endTimeMs <= 0 {
 		return true
@@ -1631,6 +1990,54 @@ func aggregateYahooPeriod(symbol string, openTimeMs int64, interval string) (yah
 	}
 }
 
+func aggregatePeriodForInstrument(instrument ResearchInstrument, openTimeMs int64, interval string) (yahooAggregatePeriod, bool) {
+	loc := marketLocationForInstrument(instrument)
+	local := time.UnixMilli(openTimeMs).In(loc)
+	switch normalizeInterval(interval) {
+	case "1w":
+		offset := (int(local.Weekday()) + 6) % 7
+		start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, -offset)
+		end := start.AddDate(0, 0, 7)
+		return yahooAggregatePeriod{Key: start.Format("2006-01-02"), StartMs: start.UnixMilli(), EndMs: end.UnixMilli()}, true
+	case "1M":
+		start := time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, loc)
+		end := start.AddDate(0, 1, 0)
+		return yahooAggregatePeriod{Key: start.Format("2006-01"), StartMs: start.UnixMilli(), EndMs: end.UnixMilli()}, true
+	default:
+		return yahooAggregatePeriod{}, false
+	}
+}
+
+func isCanonicalKLineOpenTime(instrument ResearchInstrument, interval string, openTimeMs int64) bool {
+	if openTimeMs <= 0 {
+		return false
+	}
+	switch normalizeInterval(interval) {
+	case "1d":
+		return openTimeMs == marketDailyOpenMs(instrument.ID, instrument.Symbol, openTimeMs)
+	case "1w", "1M":
+		period, ok := aggregatePeriodForInstrument(instrument, openTimeMs, interval)
+		return ok && openTimeMs == period.StartMs
+	default:
+		return true
+	}
+}
+
+func kLineRowsToBars(rows []saasstore.KLine) []BinanceKLine {
+	out := make([]BinanceKLine, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, BinanceKLine{
+			OpenTime: row.OpenTime,
+			Open:     row.Open,
+			High:     row.High,
+			Low:      row.Low,
+			Close:    row.Close,
+			Volume:   row.Volume,
+		})
+	}
+	return out
+}
+
 func marketLocationForSymbol(symbol string) *time.Location {
 	if isTaiwanInstrument("", symbol) {
 		loc, err := time.LoadLocation("Asia/Taipei")
@@ -1644,6 +2051,13 @@ func marketLocationForSymbol(symbol string) *time.Location {
 		return loc
 	}
 	return time.FixedZone("America/New_York", -5*3600)
+}
+
+func marketLocationForInstrument(instrument ResearchInstrument) *time.Location {
+	if instrument.Market == "crypto" || instrument.DataSource == DataSourceBinance || instrument.ID == InstrumentBTCUSDT {
+		return time.UTC
+	}
+	return marketLocationForSymbol(instrument.Symbol)
 }
 
 func yahooChartInterval(interval string) string {

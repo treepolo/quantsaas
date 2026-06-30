@@ -107,6 +107,34 @@ export type AvailableStartResult = {
   errors?: Record<string, string>;
 };
 
+export type MaintenanceDatasetResult = {
+  interval: string;
+  count: number;
+  expected_count?: number;
+  invalid_open_time_count: number;
+  needs_full_reimport: boolean;
+  price_adjustment?: string;
+  price_adjustment_label?: string;
+  reimported_daily?: boolean;
+  rebuilt_from_daily?: boolean;
+  stored_bars?: number;
+  deleted_rows?: number;
+  first_open_ms?: number;
+  last_open_ms?: number;
+  expected_first_open_ms?: number;
+  expected_last_open_ms?: number;
+  error?: string;
+};
+
+export type MaintenanceResult = {
+  instrument_id: string;
+  data_source: string;
+  symbol: string;
+  datasets: MaintenanceDatasetResult[];
+  has_issues: boolean;
+  error?: string;
+};
+
 export const marketDataApi = {
   instruments() {
     return apiFetch<{ instruments: ResearchInstrument[]; execution_modes: string[] }>("/market-data/instruments");
@@ -140,6 +168,14 @@ export const marketDataApi = {
   },
   updateLatest() {
     return apiFetch<{ results: AutoUpdateResult[] }>("/market-data/klines/update-latest", { method: "POST" });
+  },
+  auditMaintenance(id?: string) {
+    const suffix = id ? `/${encodeURIComponent(id)}` : "";
+    return apiFetch<{ results: MaintenanceResult[] }>(`/market-data/maintenance/audit${suffix}`, { method: "POST" });
+  },
+  repairMaintenance(id?: string) {
+    const suffix = id ? `/${encodeURIComponent(id)}` : "";
+    return apiFetch<{ results: MaintenanceResult[] }>(`/market-data/maintenance/repair${suffix}`, { method: "POST" });
   },
   importKLines(input: ImportKLinesInput) {
     return apiFetch<ImportKLinesResult>("/market-data/klines/import", {

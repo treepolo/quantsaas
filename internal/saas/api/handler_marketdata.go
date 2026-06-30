@@ -186,6 +186,32 @@ func (h *MarketDataHandler) UpdateLatest(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"results": rows})
 }
 
+func (h *MarketDataHandler) AuditMaintenance(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	rows, err := h.service.AuditMaintenance(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": rows})
+}
+
+func (h *MarketDataHandler) RepairMaintenance(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	rows, err := h.service.RepairMaintenance(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"results": rows})
+}
+
 func (h *MarketDataHandler) Import(c *gin.Context) {
 	if !h.canUseLab() {
 		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
