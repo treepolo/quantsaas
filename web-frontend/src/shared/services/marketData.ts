@@ -92,6 +92,10 @@ export type AutoUpdateResult = {
   symbol: string;
   interval: string;
   stored_bars: number;
+  skipped?: boolean;
+  reason?: string;
+  last_open_ms?: number;
+  expected_latest_open_ms?: number;
   error?: string;
 };
 

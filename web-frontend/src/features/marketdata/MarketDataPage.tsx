@@ -271,6 +271,14 @@ export function MarketDataPage() {
       return items?.length ? [{ key, items }] : [];
     });
   }, [overviewQuery.data]);
+  const updateLatestSummary = useMemo(() => {
+    const results = updateLatestMutation.data?.results ?? [];
+    const errors = results.filter((item) => item.error).length;
+    const skipped = results.filter((item) => item.skipped).length;
+    const updated = results.filter((item) => !item.skipped && !item.error).length;
+    const storedBars = results.reduce((sum, item) => sum + (item.stored_bars ?? 0), 0);
+    return results.length ? { total: results.length, errors, skipped, updated, storedBars } : null;
+  }, [updateLatestMutation.data]);
 
   return (
     <section className="space-y-4">
@@ -327,6 +335,12 @@ export function MarketDataPage() {
           {overviewQuery.isLoading ? <div className="text-sm text-slate-500">載入中...</div> : null}
         </div>
         {updateLatestMutation.error ? <div className="mt-4 text-sm text-[#fecaca]">{String(updateLatestMutation.error.message)}</div> : null}
+        {updateLatestSummary ? (
+          <div className="mt-4 rounded-lg border border-[#2dd4bf]/20 bg-[#2dd4bf]/10 px-4 py-3 text-sm leading-6 text-[#99f6e4]">
+            全部更新完成：檢查 {updateLatestSummary.total.toLocaleString("zh-TW")} 組資料，跳過已最新 {updateLatestSummary.skipped.toLocaleString("zh-TW")} 組，實際更新 {updateLatestSummary.updated.toLocaleString("zh-TW")} 組，寫入 {updateLatestSummary.storedBars.toLocaleString("zh-TW")} 筆。
+            {updateLatestSummary.errors > 0 ? ` 錯誤 ${updateLatestSummary.errors.toLocaleString("zh-TW")} 組，請看上方商品狀態。` : ""}
+          </div>
+        ) : null}
       </Card>
 
       <Card>

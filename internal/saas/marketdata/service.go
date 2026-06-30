@@ -115,12 +115,16 @@ type ImportResult struct {
 }
 
 type AutoUpdateResult struct {
-	InstrumentID string `json:"instrument_id"`
-	DataSource   string `json:"data_source"`
-	Symbol       string `json:"symbol"`
-	Interval     string `json:"interval"`
-	StoredBars   int64  `json:"stored_bars"`
-	Error        string `json:"error,omitempty"`
+	InstrumentID         string `json:"instrument_id"`
+	DataSource           string `json:"data_source"`
+	Symbol               string `json:"symbol"`
+	Interval             string `json:"interval"`
+	StoredBars           int64  `json:"stored_bars"`
+	Skipped              bool   `json:"skipped,omitempty"`
+	Reason               string `json:"reason,omitempty"`
+	LastOpenMs           int64  `json:"last_open_ms,omitempty"`
+	ExpectedLatestOpenMs int64  `json:"expected_latest_open_ms,omitempty"`
+	Error                string `json:"error,omitempty"`
 }
 
 type AvailableStartResult struct {
@@ -528,19 +532,37 @@ func (s *Service) UpdateLatest(ctx context.Context) ([]AutoUpdateResult, error) 
 		return nil, err
 	}
 	results := make([]AutoUpdateResult, 0)
+	now := s.now()
 	for _, instrument := range instruments {
 		var instrumentErr string
 		for _, interval := range autoUpdateIntervals(instrument.SupportedIntervals) {
+			latestOpenMs := s.latestDatasetOpenMs(instrument, interval)
+			expectedOpenMs := expectedLatestOpenMs(instrument, interval, now)
+			item := AutoUpdateResult{
+				InstrumentID:         instrument.ID,
+				DataSource:           instrument.DataSource,
+				Symbol:               instrument.Symbol,
+				Interval:             interval,
+				LastOpenMs:           latestOpenMs,
+				ExpectedLatestOpenMs: expectedOpenMs,
+			}
+			if shouldSkipLatestUpdate(latestOpenMs, expectedOpenMs) {
+				item.Skipped = true
+				item.Reason = "already_fresh"
+				results = append(results, item)
+				continue
+			}
 			req := ImportRequest{
 				InstrumentID: instrument.ID,
 				DataSource:   instrument.DataSource,
 				Symbol:       instrument.Symbol,
 				Interval:     interval,
-				StartTimeMs:  s.latestOnlyUpdateStart(instrument, interval),
-				EndTimeMs:    s.now().UnixMilli(),
+				StartTimeMs:  latestOnlyUpdateStartFromLatest(latestOpenMs, interval, now),
+				EndTimeMs:    now.UnixMilli(),
 			}
-			item := AutoUpdateResult{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Interval: interval}
 			if req.StartTimeMs > req.EndTimeMs {
+				item.Skipped = true
+				item.Reason = "invalid_range"
 				results = append(results, item)
 				continue
 			}
@@ -550,6 +572,9 @@ func (s *Service) UpdateLatest(ctx context.Context) ([]AutoUpdateResult, error) 
 				instrumentErr = err.Error()
 			} else {
 				item.StoredBars = imported.StoredBars
+				if imported.LastOpenMs > 0 {
+					item.LastOpenMs = imported.LastOpenMs
+				}
 			}
 			results = append(results, item)
 		}
@@ -809,6 +834,10 @@ func autoUpdateIntervals(supported []string) []string {
 }
 
 func (s *Service) latestOnlyUpdateStart(instrument ResearchInstrument, interval string) int64 {
+	return latestOnlyUpdateStartFromLatest(s.latestDatasetOpenMs(instrument, interval), interval, s.now())
+}
+
+func (s *Service) latestDatasetOpenMs(instrument ResearchInstrument, interval string) int64 {
 	var latest struct {
 		LastOpenMs *int64
 	}
@@ -819,11 +848,17 @@ func (s *Service) latestOnlyUpdateStart(instrument ResearchInstrument, interval 
 			Scan(&latest).Error
 	}
 	if latest.LastOpenMs != nil {
+		return *latest.LastOpenMs
+	}
+	return 0
+}
+
+func latestOnlyUpdateStartFromLatest(latestOpenMs int64, interval string, now time.Time) int64 {
+	if latestOpenMs > 0 {
 		if d, ok := intervalDurations[interval]; ok {
-			return *latest.LastOpenMs + d.Milliseconds()
+			return latestOpenMs + d.Milliseconds()
 		}
 	}
-	now := s.now()
 	switch interval {
 	case "1d":
 		return now.AddDate(0, 0, -10).UnixMilli()
@@ -834,6 +869,10 @@ func (s *Service) latestOnlyUpdateStart(instrument ResearchInstrument, interval 
 	default:
 		return now.AddDate(0, 0, -10).UnixMilli()
 	}
+}
+
+func shouldSkipLatestUpdate(latestOpenMs int64, expectedLatestOpenMs int64) bool {
+	return latestOpenMs > 0 && expectedLatestOpenMs > 0 && latestOpenMs >= expectedLatestOpenMs
 }
 
 func (s *Service) recordAutoUpdate(ctx context.Context, instrumentID string, errMessage string) {

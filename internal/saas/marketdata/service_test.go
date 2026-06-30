@@ -127,6 +127,40 @@ func TestAutoUpdateIntervalsOnlyUsesHighTimeframes(t *testing.T) {
 	}
 }
 
+func TestShouldSkipLatestUpdateWhenDatasetIsFresh(t *testing.T) {
+	if !shouldSkipLatestUpdate(2000, 2000) {
+		t.Fatal("expected equal latest and expected open time to be skipped")
+	}
+	if !shouldSkipLatestUpdate(3000, 2000) {
+		t.Fatal("expected newer local data to be skipped")
+	}
+	if shouldSkipLatestUpdate(1000, 2000) {
+		t.Fatal("expected stale local data to be updated")
+	}
+	if shouldSkipLatestUpdate(0, 2000) {
+		t.Fatal("expected empty local data to be updated")
+	}
+	if shouldSkipLatestUpdate(2000, 0) {
+		t.Fatal("expected unknown expected latest time to be updated")
+	}
+}
+
+func TestLatestOnlyUpdateStartFromLatestUsesShortFallbacks(t *testing.T) {
+	now := time.Date(2026, 6, 30, 12, 0, 0, 0, time.UTC)
+	if got := latestOnlyUpdateStartFromLatest(1000, "1d", now); got != 1000+24*time.Hour.Milliseconds() {
+		t.Fatalf("daily latest start = %d", got)
+	}
+	if got := latestOnlyUpdateStartFromLatest(0, "1d", now); got != now.AddDate(0, 0, -10).UnixMilli() {
+		t.Fatalf("daily fallback = %d", got)
+	}
+	if got := latestOnlyUpdateStartFromLatest(0, "1w", now); got != now.AddDate(0, 0, -70).UnixMilli() {
+		t.Fatalf("weekly fallback = %d", got)
+	}
+	if got := latestOnlyUpdateStartFromLatest(0, "1M", now); got != now.AddDate(0, -8, 0).UnixMilli() {
+		t.Fatalf("monthly fallback = %d", got)
+	}
+}
+
 func TestYahooClientRetries429AndParsesChartResponse(t *testing.T) {
 	attempts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
