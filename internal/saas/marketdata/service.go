@@ -85,6 +85,7 @@ type Service struct {
 	client      *Client
 	yahooClient *YahooClient
 	instruments *InstrumentStore
+	series      *SeriesStore
 	now         func() time.Time
 }
 
@@ -189,7 +190,7 @@ func NewService(db *gorm.DB, client *Client) *Service {
 	if client == nil {
 		client = NewClient(DefaultBaseURL)
 	}
-	return &Service{db: db, client: client, yahooClient: NewYahooClient(DefaultYahooBaseURL), instruments: NewInstrumentStore(db), now: func() time.Time { return time.Now().UTC() }}
+	return &Service{db: db, client: client, yahooClient: NewYahooClient(DefaultYahooBaseURL), instruments: NewInstrumentStore(db), series: NewSeriesStore(db), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func NewClient(baseURL string) *Client {
@@ -233,6 +234,7 @@ func (s *Service) UpsertInstrument(ctx context.Context, req UpsertInstrumentRequ
 	if err != nil {
 		return ResearchInstrument{}, err
 	}
+	_ = s.series.SyncTradableAssets(ctx, []ResearchInstrument{instrument})
 	result, err := s.RefreshAvailableStarts(ctx, instrument.ID)
 	if err == nil && len(result.Starts) > 0 {
 		instrument.AvailableStartMs = result.Starts
@@ -246,6 +248,26 @@ func (s *Service) DisableInstrument(ctx context.Context, id string) error {
 
 func (s *Service) ReorderInstruments(ctx context.Context, req ReorderInstrumentRequest) error {
 	return s.instruments.Reorder(ctx, req)
+}
+
+func (s *Service) Series(ctx context.Context) ([]ResearchSeries, error) {
+	return s.series.Series(ctx)
+}
+
+func (s *Service) UpsertSeries(ctx context.Context, req UpsertSeriesRequest) (ResearchSeries, error) {
+	return s.series.Upsert(ctx, req)
+}
+
+func (s *Service) DisableSeries(ctx context.Context, id string) error {
+	return s.series.Disable(ctx, id)
+}
+
+func (s *Service) SyncTradableAssetSeries(ctx context.Context) error {
+	instruments, err := s.Instruments(ctx)
+	if err != nil {
+		return err
+	}
+	return s.series.SyncTradableAssets(ctx, instruments)
 }
 
 func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, error) {

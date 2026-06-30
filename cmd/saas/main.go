@@ -42,6 +42,9 @@ func main() {
 	if err := marketdata.SeedResearchInstruments(ctx, db.DB); err != nil {
 		logger.Fatal("seed research instruments failed", zap.Error(err))
 	}
+	if err := marketdata.SeedResearchSeries(ctx, db.DB); err != nil {
+		logger.Fatal("seed research series failed", zap.Error(err))
+	}
 	redisClient, err := store.NewRedis(ctx, cfg.Redis)
 	if err != nil {
 		logger.Fatal("init redis failed", zap.Error(err))
