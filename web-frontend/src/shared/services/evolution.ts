@@ -48,6 +48,14 @@ export type EvolutionTask = {
   spawn_mode?: "inherit" | "random_once" | "manual";
   test_mode?: boolean;
   trace_mode?: TraceMode;
+  compute_monitor_enabled?: boolean;
+  computed_units?: number;
+  planned_compute_units?: number;
+  units_per_individual?: number;
+  compute_units_per_sec?: number;
+  compute_remaining_sec?: number;
+  compute_started_at?: string;
+  compute_updated_at?: string;
   continuous_mode?: "" | "standardized_best" | "random";
   current_iteration?: number;
   continuous_iterations?: number;
@@ -152,11 +160,18 @@ export type CreateTaskInput = {
   spawn_point?: Record<string, unknown>;
   test_mode?: boolean;
   trace_mode?: TraceMode;
+  compute_monitor_enabled?: boolean;
   continuous_mode?: "" | "standardized_best" | "random";
   continuous_iterations?: number;
   continuous_unlimited?: boolean;
   standard_start_ms?: number;
   standard_end_ms?: number;
+};
+
+export type ComputeEstimate = {
+  enabled: boolean;
+  units_per_individual: number;
+  planned_units: number;
 };
 
 export type GeneObservationAxis = {
@@ -217,6 +232,12 @@ export const evolutionApi = {
   },
   createTask(input: CreateTaskInput) {
     return apiFetch<EvolutionTask>("/evolution/tasks", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  },
+  estimateCompute(input: CreateTaskInput) {
+    return apiFetch<ComputeEstimate>("/evolution/tasks/compute-estimate", {
       method: "POST",
       body: JSON.stringify(input)
     });

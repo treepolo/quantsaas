@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"quantsaas/internal/quant"
@@ -40,6 +41,8 @@ type Service struct {
 	traceMu     sync.Mutex
 	traces      map[uint]*traceBuffer
 	traceModes  map[uint]ga.TraceMode
+	computeMu   sync.Mutex
+	computes    map[uint]*computeMonitor
 }
 
 type CreateTaskRequest struct {
@@ -69,11 +72,26 @@ type CreateTaskRequest struct {
 	SpreadRate                *float64          `json:"spread_rate"`
 	TestMode                  bool              `json:"test_mode"`
 	TraceMode                 ga.TraceMode      `json:"trace_mode"`
+	ComputeMonitorEnabled     bool              `json:"compute_monitor_enabled"`
 	ContinuousMode            string            `json:"continuous_mode"`
 	ContinuousIterations      int               `json:"continuous_iterations"`
 	ContinuousUnlimited       bool              `json:"continuous_unlimited"`
 	StandardStartMs           int64             `json:"standard_start_ms"`
 	StandardEndMs             int64             `json:"standard_end_ms"`
+}
+
+type ComputeEstimate struct {
+	Enabled            bool  `json:"enabled"`
+	UnitsPerIndividual int64 `json:"units_per_individual"`
+	PlannedUnits       int64 `json:"planned_units"`
+}
+
+type computeMonitor struct {
+	enabled            bool
+	startedAt          time.Time
+	unitsPerIndividual atomic.Int64
+	plannedUnits       atomic.Int64
+	computedUnits      atomic.Int64
 }
 
 type standardizedChampion struct {
@@ -94,6 +112,7 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 		cancelFuncs: map[uint]context.CancelFunc{},
 		traces:      map[uint]*traceBuffer{},
 		traceModes:  map[uint]ga.TraceMode{},
+		computes:    map[uint]*computeMonitor{},
 	}
 }
 
@@ -147,6 +166,7 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.cancelFuncs[task.ID] = cancel
 	s.initTrace(task.ID, req.TraceMode)
+	s.initComputeMonitor(task.ID, req.ComputeMonitorEnabled)
 	s.mu.Unlock()
 
 	go s.runEpoch(runCtx, task.ID, req, spawn)
@@ -162,9 +182,35 @@ func (s *Service) CurrentTask() *saasstore.EvolutionTask {
 	}
 	var latest saasstore.EvolutionTask
 	if err := s.db.First(&latest, task.ID).Error; err != nil {
+		s.overlayComputeSnapshot(task)
 		return task
 	}
+	s.overlayComputeSnapshot(&latest)
 	return &latest
+}
+
+func (s *Service) EstimateCompute(ctx context.Context, req CreateTaskRequest) (ComputeEstimate, error) {
+	req = s.normalizeRequest(ctx, req)
+	if err := s.validateRequest(ctx, req); err != nil {
+		return ComputeEstimate{}, err
+	}
+	spawn, err := s.resolveSpawnPoint(ctx, req)
+	if err != nil {
+		return ComputeEstimate{}, err
+	}
+	applySearchCapital(req, spawn)
+	if err := validateSpawnPoint(spawn); err != nil {
+		return ComputeEstimate{}, err
+	}
+	estimate, err := s.engine.EstimateComputePlan(ctx, s.epochConfig(req, spawn, 0))
+	if err != nil {
+		return ComputeEstimate{}, err
+	}
+	return ComputeEstimate{
+		Enabled:            req.ComputeMonitorEnabled,
+		UnitsPerIndividual: estimate.UnitsPerIndividual,
+		PlannedUnits:       plannedComputeUnitsForRequest(req, estimate.PlannedUnits),
+	}, nil
 }
 
 func (s *Service) CancelTask(ctx context.Context, taskID uint) error {
@@ -226,6 +272,8 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
 		OnTrace:            s.traceSink(taskID),
+		OnComputePlan:      s.computePlanSetter(taskID, req),
+		OnComputeStep:      s.computeStepCounter(taskID),
 		OnProgress: func(progress ga.EpochProgress) {
 			bestParamPack := json.RawMessage(progress.BestParamPack)
 			if !json.Valid(bestParamPack) {
@@ -241,6 +289,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 				"mutation_scale":       progress.MutationScale,
 				"updated_at":           time.Now().UTC().Format(time.RFC3339),
 			})
+			raw = s.mergeComputeSnapshotJSON(taskID, raw)
 			_ = s.db.Model(&saasstore.EvolutionTask{}).
 				Where("id = ?", taskID).
 				Updates(map[string]any{
@@ -285,6 +334,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 			"updated_at":           finished.Format(time.RFC3339),
 			"Fitness":              result.Fitness,
 		})
+		raw = s.mergeComputeSnapshotJSON(taskID, raw)
 		updates["status"] = TaskStatusDone
 		updates["progress"] = 1.0
 		updates["result"] = saasstore.JSONB(raw)
@@ -295,6 +345,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 	s.currentTask = nil
 	delete(s.cancelFuncs, taskID)
 	s.mu.Unlock()
+	s.deleteComputeMonitor(taskID)
 }
 
 func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
@@ -366,6 +417,7 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 	s.currentTask = nil
 	delete(s.cancelFuncs, taskID)
 	s.mu.Unlock()
+	s.deleteComputeMonitor(taskID)
 }
 
 func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, taskID uint) ga.EpochConfig {
@@ -392,6 +444,8 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
 		OnTrace:            s.traceSink(taskID),
+		OnComputePlan:      s.computePlanSetter(taskID, req),
+		OnComputeStep:      s.computeStepCounter(taskID),
 	}
 }
 
@@ -422,6 +476,7 @@ func (s *Service) epochProgressUpdater(taskID uint, req CreateTaskRequest, itera
 			"standard_start_ms":     req.StandardStartMs,
 			"standard_end_ms":       req.StandardEndMs,
 		})
+		raw = s.mergeComputeSnapshotJSON(taskID, raw)
 		_ = s.db.Model(&saasstore.EvolutionTask{}).
 			Where("id = ?", taskID).
 			Updates(map[string]any{
@@ -460,6 +515,7 @@ func (s *Service) writeContinuousSnapshot(taskID uint, req CreateTaskRequest, it
 		payload["standard_champion_score"] = champion.Score
 	}
 	raw, _ := json.Marshal(payload)
+	raw = s.mergeComputeSnapshotJSON(taskID, raw)
 	_ = s.db.Model(&saasstore.EvolutionTask{}).
 		Where("id = ?", taskID).
 		Update("result", saasstore.JSONB(raw)).Error
@@ -646,6 +702,125 @@ func (s *Service) SetTraceMode(taskID uint, mode ga.TraceMode) ga.TraceMode {
 	}
 	s.traceModes[taskID] = mode
 	return mode
+}
+
+func (s *Service) initComputeMonitor(taskID uint, enabled bool) {
+	s.computeMu.Lock()
+	defer s.computeMu.Unlock()
+	if !enabled {
+		delete(s.computes, taskID)
+		return
+	}
+	s.computes[taskID] = &computeMonitor{
+		enabled:   true,
+		startedAt: time.Now().UTC(),
+	}
+}
+
+func (s *Service) deleteComputeMonitor(taskID uint) {
+	s.computeMu.Lock()
+	defer s.computeMu.Unlock()
+	delete(s.computes, taskID)
+}
+
+func (s *Service) computeMonitor(taskID uint) *computeMonitor {
+	s.computeMu.Lock()
+	defer s.computeMu.Unlock()
+	return s.computes[taskID]
+}
+
+func (s *Service) computePlanSetter(taskID uint, req CreateTaskRequest) func(ga.ComputePlan) {
+	if !req.ComputeMonitorEnabled {
+		return nil
+	}
+	return func(plan ga.ComputePlan) {
+		monitor := s.computeMonitor(taskID)
+		if monitor == nil || !monitor.enabled {
+			return
+		}
+		monitor.unitsPerIndividual.Store(plan.UnitsPerIndividual)
+		monitor.plannedUnits.Store(plannedComputeUnitsForRequest(req, plan.PlannedUnits))
+	}
+}
+
+func (s *Service) computeStepCounter(taskID uint) func(int64) {
+	monitor := s.computeMonitor(taskID)
+	if monitor == nil || !monitor.enabled {
+		return nil
+	}
+	return func(delta int64) {
+		if delta > 0 {
+			monitor.computedUnits.Add(delta)
+		}
+	}
+}
+
+func plannedComputeUnitsForRequest(req CreateTaskRequest, epochPlanned int64) int64 {
+	if epochPlanned <= 0 {
+		return 0
+	}
+	if req.ContinuousMode == "" {
+		return epochPlanned
+	}
+	if req.ContinuousUnlimited {
+		return 0
+	}
+	return epochPlanned * int64(max(1, req.ContinuousIterations))
+}
+
+func (s *Service) overlayComputeSnapshot(task *saasstore.EvolutionTask) {
+	if task == nil {
+		return
+	}
+	task.Result = saasstore.JSONB(s.mergeComputeSnapshotJSON(task.ID, []byte(task.Result)))
+}
+
+func (s *Service) mergeComputeSnapshotJSON(taskID uint, raw []byte) []byte {
+	fields := s.computeSnapshotFields(taskID)
+	if len(fields) == 0 {
+		return raw
+	}
+	payload := map[string]any{}
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &payload)
+	}
+	for key, value := range fields {
+		payload[key] = value
+	}
+	merged, err := json.Marshal(payload)
+	if err != nil {
+		return raw
+	}
+	return merged
+}
+
+func (s *Service) computeSnapshotFields(taskID uint) map[string]any {
+	monitor := s.computeMonitor(taskID)
+	if monitor == nil || !monitor.enabled {
+		return nil
+	}
+	now := time.Now().UTC()
+	computed := monitor.computedUnits.Load()
+	planned := monitor.plannedUnits.Load()
+	elapsed := now.Sub(monitor.startedAt).Seconds()
+	rate := 0.0
+	if elapsed > 0 {
+		rate = float64(computed) / elapsed
+	}
+	remainingSeconds := 0.0
+	if planned > computed && rate > 0 {
+		remainingSeconds = float64(planned-computed) / rate
+	}
+	return map[string]any{
+		"compute_monitor_enabled": true,
+		"computed_units":          computed,
+		"planned_compute_units":   planned,
+		"units_per_individual":    monitor.unitsPerIndividual.Load(),
+		"compute_units_per_sec":   rate,
+		"compute_remaining_sec":   remainingSeconds,
+		"compute_started_at":      monitor.startedAt.Format(time.RFC3339),
+		"compute_updated_at":      now.Format(time.RFC3339),
+	}
 }
 
 func (s *Service) initTrace(taskID uint, mode ga.TraceMode) {

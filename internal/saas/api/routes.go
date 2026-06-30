@@ -77,6 +77,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	md := NewMarketDataHandler(deps.Config.AppRole, deps.DB)
 	research := NewResearchStatusHandler(deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
+	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
 	lab.GET("/evolution/tasks/:taskID/trace", ev.GetTrace)
 	lab.PATCH("/evolution/tasks/:taskID/trace-mode", ev.SetTraceMode)

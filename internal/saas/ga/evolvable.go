@@ -34,6 +34,7 @@ type EvaluablePlan struct {
 	Trace          func(TraceEvent)
 	TraceMode      TraceMode
 	TraceModeFunc  func() TraceMode
+	ComputeStep    func(int64)
 	Generation     int
 	Individual     int
 	Worker         int
@@ -52,6 +53,11 @@ type BacktestMetrics struct {
 	FinalEquity   float64
 	TotalInjected float64
 	TradeCount    int
+}
+
+type ComputePlan struct {
+	UnitsPerIndividual int64
+	PlannedUnits       int64
 }
 
 type GeneOptions struct {

@@ -113,6 +113,18 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	}
 }
 
+func TestPlanComputeUnitsSumsWindowBars(t *testing.T) {
+	plan := EvaluablePlan{
+		Windows: []quant.CrucibleWindow{
+			{Label: "a", Bars: make([]quant.Bar, 3)},
+			{Label: "b", Bars: make([]quant.Bar, 5)},
+		},
+	}
+	if got := planComputeUnits(plan); got != 8 {
+		t.Fatalf("planComputeUnits = %d, want 8", got)
+	}
+}
+
 type fakeEvolvable struct{}
 
 func (fakeEvolvable) StrategyID() string                                       { return "fake" }

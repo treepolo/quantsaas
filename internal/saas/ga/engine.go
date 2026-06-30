@@ -76,6 +76,8 @@ type EpochConfig struct {
 	TradePenalty       float64
 	OnProgress         func(EpochProgress)
 	OnTrace            func(TraceEvent)
+	OnComputePlan      func(ComputePlan)
+	OnComputeStep      func(int64)
 	TraceMode          TraceMode
 	TraceModeFunc      func() TraceMode
 	SpawnPointOverride *quant.SpawnPoint
@@ -162,6 +164,14 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	plan.Trace = cfg.OnTrace
 	plan.TraceMode = cfg.TraceMode
 	plan.TraceModeFunc = cfg.TraceModeFunc
+	plan.ComputeStep = cfg.OnComputeStep
+	if cfg.OnComputePlan != nil {
+		unitsPerIndividual := planComputeUnits(plan)
+		cfg.OnComputePlan(ComputePlan{
+			UnitsPerIndividual: unitsPerIndividual,
+			PlannedUnits:       unitsPerIndividual * int64(e.popSize(cfg)) * int64(e.maxGenerations(cfg)+1),
+		})
+	}
 	searchConfig := e.searchConfig(cfg)
 	scope := GeneScope{
 		StrategyID:    e.evolvable.StrategyID(),
@@ -288,8 +298,21 @@ func (e *EvolutionEngine) EvaluateParamPack(ctx context.Context, cfg EpochConfig
 	plan.Trace = cfg.OnTrace
 	plan.TraceMode = cfg.TraceMode
 	plan.TraceModeFunc = cfg.TraceModeFunc
+	plan.ComputeStep = cfg.OnComputeStep
 	gene := e.normalizeGene(cfg, e.evolvable.DecodeElite(paramPack))
 	return e.evolvable.Evaluate(ctx, gene, plan)
+}
+
+func (e *EvolutionEngine) EstimateComputePlan(ctx context.Context, cfg EpochConfig) (ComputePlan, error) {
+	plan, err := e.buildEvaluablePlan(ctx, cfg)
+	if err != nil {
+		return ComputePlan{}, err
+	}
+	unitsPerIndividual := planComputeUnits(plan)
+	return ComputePlan{
+		UnitsPerIndividual: unitsPerIndividual,
+		PlannedUnits:       unitsPerIndividual * int64(e.popSize(cfg)) * int64(e.maxGenerations(cfg)+1),
+	}, nil
 }
 
 func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
@@ -407,6 +430,14 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		DCABaselines:   baselines,
 		AggregateCache: map[string]any{},
 	}, nil
+}
+
+func planComputeUnits(plan EvaluablePlan) int64 {
+	var total int64
+	for _, window := range plan.Windows {
+		total += int64(len(window.Bars))
+	}
+	return total
 }
 
 func (e *EvolutionEngine) initialCapital(cfg EpochConfig) float64 {

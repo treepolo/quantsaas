@@ -51,6 +51,24 @@ func (h *EvolutionHandler) CreateTask(c *gin.Context) {
 	c.JSON(http.StatusAccepted, evolutionTaskResponse(*task))
 }
 
+func (h *EvolutionHandler) EstimateCompute(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "此功能僅允許 lab/dev 模式"})
+		return
+	}
+	var req epoch.CreateTaskRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	estimate, err := h.service.EstimateCompute(c.Request.Context(), req)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, estimate)
+}
+
 func (h *EvolutionHandler) ListTasks(c *gin.Context) {
 	if h.service != nil && h.service.CurrentTask() == nil {
 		now := time.Now().UTC()
@@ -422,6 +440,7 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		SpawnMode                 string  `json:"spawn_mode"`
 		TestMode                  bool    `json:"test_mode"`
 		TraceMode                 string  `json:"trace_mode"`
+		ComputeMonitorEnabled     bool    `json:"compute_monitor_enabled"`
 		ContinuousMode            string  `json:"continuous_mode"`
 		ContinuousIterations      int     `json:"continuous_iterations"`
 		ContinuousUnlimited       bool    `json:"continuous_unlimited"`
@@ -451,6 +470,14 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		StandardEndMs          int64                  `json:"standard_end_ms"`
 		StandardChampionGeneID uint                   `json:"standard_champion_gene_id"`
 		StandardChampionScore  float64                `json:"standard_champion_score"`
+		ComputeMonitorEnabled  bool                   `json:"compute_monitor_enabled"`
+		ComputedUnits          int64                  `json:"computed_units"`
+		PlannedComputeUnits    int64                  `json:"planned_compute_units"`
+		UnitsPerIndividual     int64                  `json:"units_per_individual"`
+		ComputeUnitsPerSec     float64                `json:"compute_units_per_sec"`
+		ComputeRemainingSec    float64                `json:"compute_remaining_sec"`
+		ComputeStartedAt       string                 `json:"compute_started_at"`
+		ComputeUpdatedAt       string                 `json:"compute_updated_at"`
 		Fitness                struct {
 			ScoreTotal  float64 `json:"ScoreTotal"`
 			MaxDrawdown float64 `json:"MaxDrawdown"`
@@ -513,6 +540,7 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"spawn_mode":                   cfg.SpawnMode,
 		"test_mode":                    cfg.TestMode,
 		"trace_mode":                   cfg.TraceMode,
+		"compute_monitor_enabled":      result.ComputeMonitorEnabled || cfg.ComputeMonitorEnabled,
 		"continuous_mode":              continuousMode,
 		"current_iteration":            result.CurrentIteration,
 		"continuous_iterations":        continuousIterations,
@@ -530,6 +558,13 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"mutation_scale":               result.MutationScale,
 		"evaluated_individuals":        totalEvaluations,
 		"planned_evaluations":          totalPlannedEvaluations,
+		"computed_units":               result.ComputedUnits,
+		"planned_compute_units":        result.PlannedComputeUnits,
+		"units_per_individual":         result.UnitsPerIndividual,
+		"compute_units_per_sec":        result.ComputeUnitsPerSec,
+		"compute_remaining_sec":        result.ComputeRemainingSec,
+		"compute_started_at":           result.ComputeStartedAt,
+		"compute_updated_at":           result.ComputeUpdatedAt,
 		"monitor_updated_at":           result.UpdatedAt,
 		"error":                        task.ErrorMessage,
 		"created_at":                   task.CreatedAt.Format(time.RFC3339),

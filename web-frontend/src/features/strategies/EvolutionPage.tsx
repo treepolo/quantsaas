@@ -1,9 +1,9 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
-import { evolutionApi, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
+import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
@@ -44,6 +44,54 @@ function msToDateInput(value?: number) {
 function monitorValue(value: string | number | undefined) {
   if (value === undefined || value === "") return "等待回報";
   return value;
+}
+
+function formatUnits(value?: number) {
+  if (value === undefined || !Number.isFinite(value)) return "-";
+  return Math.max(0, Math.round(value)).toLocaleString("zh-TW");
+}
+
+function formatUnitRate(value?: number) {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return "-";
+  return `${Math.round(value).toLocaleString("zh-TW")} 筆/秒`;
+}
+
+function formatDurationSeconds(value?: number) {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return "-";
+  const total = Math.round(value);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours} 小時 ${minutes} 分`;
+  if (minutes > 0) return `${minutes} 分 ${seconds} 秒`;
+  return `${seconds} 秒`;
+}
+
+function useAnimatedNumber(target: number, durationMs = 500) {
+  const [display, setDisplay] = useState(target);
+  const currentRef = useRef(target);
+  useEffect(() => {
+    const start = currentRef.current;
+    const diff = target - start;
+    if (Math.abs(diff) < 1) {
+      currentRef.current = target;
+      setDisplay(target);
+      return;
+    }
+    let frame = 0;
+    const startedAt = performance.now();
+    const tick = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / durationMs);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const next = start + diff * eased;
+      currentRef.current = next;
+      setDisplay(next);
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [durationMs, target]);
+  return display;
 }
 
 function formatTraceValue(value: unknown): string {
@@ -381,6 +429,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [spreadRate, setSpreadRate] = useState(0);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>("off");
+  const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(false);
   const [showLandscape, setShowLandscape] = useState(false);
   const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">("");
   const [continuousIterations, setContinuousIterations] = useState(3);
@@ -407,40 +456,49 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     setStandardStartDate(nextStart);
     setStandardEndDate(nextEnd);
   }, [instrumentId, interval, selectedDataset?.first_open_ms, selectedDataset?.last_open_ms]);
-  const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 2_000 });
+  const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 1_000 });
   const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
+  const animatedComputedUnits = useAnimatedNumber(running?.computed_units ?? 0);
+  const taskInput = useMemo<CreateTaskInput>(() => ({
+    strategy_id: "sigmoid-dca-btc",
+    pair: selected?.symbol ?? instrumentId,
+    instrument_id: instrumentId,
+    data_source: selected?.data_source,
+    interval,
+    execution_mode: executionMode,
+    train_start_ms: dayStartMs(startDate),
+    train_end_ms: dayEndMs(endDate),
+    monthly_dca: monthlyDCA,
+    evolve_rebalance_threshold: evolveRebalanceThreshold,
+    evolve_force_full_threshold: evolveForceFullThreshold,
+    evolve_force_empty_threshold: evolveForceEmptyThreshold,
+    enable_w_mean: enableWMean,
+    enable_w_momentum: enableWMomentum,
+    enable_w_breakout: enableWBreakout,
+    position_structure: positionStructure,
+    trade_penalty: tradePenalty,
+    fee_rate: feeRate,
+    spread_rate: spreadRate,
+    pop_size: population,
+    max_generations: generations,
+    spawn_mode: spawnMode,
+    trace_mode: traceMode,
+    compute_monitor_enabled: computeMonitorEnabled,
+    continuous_mode: continuousMode,
+    continuous_iterations: continuousIterations,
+    continuous_unlimited: continuousUnlimited,
+    standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
+    standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveRebalanceThreshold, executionMode, feeRate, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+  const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
+  const computeEstimateQuery = useQuery({
+    queryKey: ["evolution-compute-estimate", taskInput],
+    queryFn: () => evolutionApi.estimateCompute(taskInput),
+    enabled: canEstimateCompute,
+    staleTime: 5_000
+  });
   const createMutation = useMutation({
-    mutationFn: () =>
-      evolutionApi.createTask({
-        strategy_id: "sigmoid-dca-btc",
-        pair: selected?.symbol ?? instrumentId,
-        instrument_id: instrumentId,
-        data_source: selected?.data_source,
-        interval,
-        execution_mode: executionMode,
-        train_start_ms: dayStartMs(startDate),
-        train_end_ms: dayEndMs(endDate),
-        monthly_dca: monthlyDCA,
-        evolve_rebalance_threshold: evolveRebalanceThreshold,
-        evolve_force_full_threshold: evolveForceFullThreshold,
-        evolve_force_empty_threshold: evolveForceEmptyThreshold,
-        enable_w_mean: enableWMean,
-        enable_w_momentum: enableWMomentum,
-        enable_w_breakout: enableWBreakout,
-        position_structure: positionStructure,
-        trade_penalty: tradePenalty,
-        fee_rate: feeRate,
-        spread_rate: spreadRate,
-        pop_size: population,
-        max_generations: generations,
-        spawn_mode: spawnMode,
-        trace_mode: traceMode,
-        continuous_mode: continuousMode,
-        continuous_iterations: continuousIterations,
-        continuous_unlimited: continuousUnlimited,
-        standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
-        standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined
-      }),
+    mutationFn: () => evolutionApi.createTask(taskInput),
     onSuccess: () => {
       setExpanded(false);
       queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
@@ -488,6 +546,9 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     const progressPct = Math.min(100, Math.round((running.progress || 0) * 100));
     const evaluated = running.evaluated_individuals ?? current * (running.pop_size ?? 0);
     const planned = running.planned_evaluations ?? (running.pop_size ?? 0) * max;
+    const plannedComputeUnits = running.planned_compute_units ?? 0;
+    const computedUnits = running.computed_units ?? 0;
+    const computePct = plannedComputeUnits > 0 ? Math.min(100, Math.max(0, (computedUnits / plannedComputeUnits) * 100)) : 0;
     const runningLandscapeQuery: GeneObservationQuery = {
       strategy_id: running.strategy_id ?? "sigmoid-dca-btc",
       instrument_id: running.instrument_id,
@@ -521,6 +582,9 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <Metric label="資料範圍" value={`${msToDateInput(running.train_start_ms) || "-"} ~ ${msToDateInput(running.train_end_ms) || "-"}`} />
                 <Metric label="進度" value={`${progressPct}%`} />
                 <Metric label="已評估" value={planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")} />
+                {running.compute_monitor_enabled ? <Metric label="計算量" value={plannedComputeUnits ? `${formatUnits(animatedComputedUnits)} / ${formatUnits(plannedComputeUnits)}` : formatUnits(animatedComputedUnits)} /> : null}
+                {running.compute_monitor_enabled ? <Metric label="計算速度" value={formatUnitRate(running.compute_units_per_sec)} /> : null}
+                {running.compute_monitor_enabled ? <Metric label="預估剩餘" value={formatDurationSeconds(running.compute_remaining_sec)} /> : null}
                 <Metric label="初始本金" value={formatMoney(running.initial_capital ?? SEARCH_INITIAL_CAPITAL)} />
                 <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
                 <Metric label="調倉門檻" value={running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
@@ -540,6 +604,22 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
               </div>
               <div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-[#2dd4bf]" style={{ width: `${progressPct}%` }} /></div>
             </div>
+            {running.compute_monitor_enabled ? (
+              <div className="rounded-lg border border-white/[0.04] bg-slate-950/50 p-4">
+                <div className="mb-2 flex justify-between text-sm">
+                  <span className="text-slate-400">逐筆計算量</span>
+                  <span className="font-mono text-slate-200">
+                    {plannedComputeUnits ? `${formatUnits(animatedComputedUnits)} / ${formatUnits(plannedComputeUnits)}` : formatUnits(animatedComputedUnits)}
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-[#f59e0b]" style={{ width: `${computePct}%` }} /></div>
+                <div className="mt-3 grid gap-2 text-xs text-slate-500 md:grid-cols-3">
+                  <div>每組參數約 {formatUnits(running.units_per_individual)} 筆</div>
+                  <div>速度 {formatUnitRate(running.compute_units_per_sec)}</div>
+                  <div>剩餘 {formatDurationSeconds(running.compute_remaining_sec)}</div>
+                </div>
+              </div>
+            ) : null}
           </div>
         </Card>
         <Card className="p-4">
@@ -623,6 +703,30 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 </button>
               ))}
             </div>
+          </div>
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <label className="flex items-start gap-3 text-sm text-slate-300">
+              <input className="mt-1" type="checkbox" checked={computeMonitorEnabled} onChange={(event) => setComputeMonitorEnabled(event.target.checked)} />
+              <span>
+                <span className="block font-semibold text-slate-200">計算量監控</span>
+                <span className="mt-1 block text-xs leading-5 text-slate-500">開啟後會預估逐筆計算量，任務執行時以輕量 counter 統計已計算量；關閉時不掛載 counter。</span>
+              </span>
+            </label>
+            {computeMonitorEnabled ? (
+              <div className="mt-3 rounded-lg border border-[#f59e0b]/20 bg-[#f59e0b]/10 p-3 text-sm text-[#fde68a]">
+                {computeEstimateQuery.isLoading || computeEstimateQuery.isFetching ? "估算中..." : computeEstimateQuery.data ? (
+                  <div className="grid gap-2 md:grid-cols-3">
+                    <div>總計算量約 {formatUnits(computeEstimateQuery.data.planned_units)} 筆</div>
+                    <div>每組參數約 {formatUnits(computeEstimateQuery.data.units_per_individual)} 筆</div>
+                    <div>{continuousUnlimited ? "無上限連續搜尋不估最終總量" : "依目前搜尋設定估算"}</div>
+                  </div>
+                ) : computeEstimateQuery.error ? (
+                  <div className="text-[#fecaca]">{String(computeEstimateQuery.error.message)}</div>
+                ) : (
+                  <div>等待可用資料集與搜尋設定。</div>
+                )}
+              </div>
+            ) : null}
           </div>
           {executionMode === "preclose_10m" ? <div className="md:col-span-2 text-xs text-[#fde68a]">這個模式需要收盤前快照資料；缺資料時任務可能無法產生有效結果。</div> : null}
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">

@@ -215,6 +215,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			Trace:         plan.Trace,
 			Mode:          plan.TraceMode,
 			TraceModeFunc: plan.TraceModeFunc,
+			ComputeStep:   plan.ComputeStep,
 			Generation:    plan.Generation,
 			Individual:    plan.Individual,
 			Worker:        plan.Worker,
@@ -322,6 +323,7 @@ type PathTraceConfig struct {
 	Trace         func(TraceEvent)
 	Mode          TraceMode
 	TraceModeFunc func() TraceMode
+	ComputeStep   func(int64)
 	Generation    int
 	Individual    int
 	Worker        int
@@ -405,6 +407,9 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 	for i, bar := range bars {
 		if bar.Close <= 0 {
 			continue
+		}
+		if traceCfg.ComputeStep != nil {
+			traceCfg.ComputeStep(1)
 		}
 		year, month := barYearMonth(bar)
 		if i > 0 && (year != lastYear || month != lastMonth) && params.Spawn.Policy.MonthlyInjectUSDT > 0 {
