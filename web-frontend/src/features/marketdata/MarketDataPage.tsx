@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, CheckCircle2, Database, Layers, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
-import { marketDataApi, type DatasetSummary, type InstrumentSummary, type ResearchInstrument, type ResearchSeries, type UpsertInstrumentInput } from "../../shared/services/marketData";
+import { ArrowDown, ArrowUp, CheckCircle2, Database, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
+import { marketDataApi, type DatasetSummary, type InstrumentSummary, type ResearchInstrument, type UpsertInstrumentInput } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
@@ -62,40 +62,6 @@ function marketName(market?: string) {
   return market || "其他";
 }
 
-function seriesTypeName(value?: string) {
-  if (value === "tradable_asset") return "交易商品";
-  if (value === "indicator") return "指標";
-  if (value === "derived") return "衍生序列";
-  return value || "其他";
-}
-
-function seriesRoleName(value?: string) {
-  if (value === "primary_tradable") return "主商品";
-  if (value === "tradable_asset") return "交易商品";
-  if (value === "indicator") return "指標";
-  return value || "資料序列";
-}
-
-function formatNumber(value?: number, digits = 4) {
-  if (value === undefined || Number.isNaN(value)) return "-";
-  return new Intl.NumberFormat("zh-TW", { maximumFractionDigits: digits }).format(value);
-}
-
-function formatLag(value?: number) {
-  if (!value || value <= 0) return "0 分鐘";
-  const minutes = Math.round(value / 60000);
-  if (minutes < 60) return `${minutes.toLocaleString("zh-TW")} 分鐘`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours.toLocaleString("zh-TW")} 小時`;
-  const days = Math.round(hours / 24);
-  return `${days.toLocaleString("zh-TW")} 天`;
-}
-
-function supportsDatasetInterval(series: ResearchSeries, value: string) {
-  if (!series.supported_intervals?.length) return true;
-  return series.supported_intervals.includes(value);
-}
-
 function timeLabelPrefix(interval: string) {
   return interval === "1w" || interval === "1M" ? "期間起點" : "開始時間";
 }
@@ -150,10 +116,6 @@ export function MarketDataPage() {
     queryKey: ["market-data-instruments"],
     queryFn: () => marketDataApi.instruments()
   });
-  const seriesQuery = useQuery({
-    queryKey: ["market-data-series"],
-    queryFn: () => marketDataApi.series()
-  });
   const overviewQuery = useQuery({
     queryKey: ["market-data-overview"],
     queryFn: () => marketDataApi.overview()
@@ -165,12 +127,6 @@ export function MarketDataPage() {
   const [startDate, setStartDate] = useState(defaultStart(undefined, "1d"));
   const [endDate, setEndDate] = useState(dateInputValue(new Date()));
   const [includePreclose, setIncludePreclose] = useState(false);
-  const [datasetSeriesId, setDatasetSeriesId] = useState("BTCUSDT");
-  const [datasetInterval, setDatasetInterval] = useState("1d");
-  const [datasetStartDate, setDatasetStartDate] = useState(defaultStart(undefined, "1d"));
-  const [datasetEndDate, setDatasetEndDate] = useState(dateInputValue(new Date()));
-  const [datasetMaxRows, setDatasetMaxRows] = useState(120);
-  const [datasetIndicatorIds, setDatasetIndicatorIds] = useState<string[]>([]);
   const [newInstrument, setNewInstrument] = useState<UpsertInstrumentInput>({
     symbol: "",
     display_name: "",
@@ -194,28 +150,6 @@ export function MarketDataPage() {
   const intervals = statusQuery.data?.supported_intervals ?? selected?.supported_intervals ?? ["1d"];
   const datasets = useMemo(() => statusQuery.data?.datasets ?? [], [statusQuery.data]);
   const selectedDataset = datasets.find((dataset) => dataset.interval === interval);
-  const researchSeries = seriesQuery.data?.series ?? [];
-  const tradableSeries = useMemo(() => researchSeries.filter((item) => item.tradable && item.series_type === "tradable_asset"), [researchSeries]);
-  const indicatorSeries = useMemo(() => researchSeries.filter((item) => !item.tradable || item.series_type !== "tradable_asset"), [researchSeries]);
-  const selectedDatasetSeries = tradableSeries.find((item) => item.id === datasetSeriesId) ?? tradableSeries[0];
-  const datasetIntervals = selectedDatasetSeries?.supported_intervals?.length ? selectedDatasetSeries.supported_intervals : intervals;
-
-  useEffect(() => {
-    if (!selectedDatasetSeries && tradableSeries[0]) {
-      setDatasetSeriesId(tradableSeries[0].id);
-      const nextInterval = tradableSeries[0].supported_intervals?.[0] ?? "1d";
-      setDatasetInterval(nextInterval);
-      setDatasetStartDate(defaultStart(instruments.find((item) => item.id === tradableSeries[0].id), nextInterval));
-    }
-  }, [instruments, selectedDatasetSeries, tradableSeries]);
-
-  useEffect(() => {
-    if (selectedDatasetSeries && !supportsDatasetInterval(selectedDatasetSeries, datasetInterval)) {
-      const nextInterval = selectedDatasetSeries.supported_intervals?.[0] ?? "1d";
-      setDatasetInterval(nextInterval);
-      setDatasetStartDate(defaultStart(instruments.find((item) => item.id === selectedDatasetSeries.id), nextInterval));
-    }
-  }, [datasetInterval, instruments, selectedDatasetSeries]);
 
   const importMutation = useMutation({
     mutationFn: () =>
@@ -229,18 +163,6 @@ export function MarketDataPage() {
         include_preclose_snapshots: includePreclose && interval === "1d"
       }),
     onSuccess: refreshMarketQueries
-  });
-
-  const datasetPreviewMutation = useMutation({
-    mutationFn: () =>
-      marketDataApi.datasetPreview({
-        tradable_series_ids: selectedDatasetSeries?.id ? [selectedDatasetSeries.id] : [datasetSeriesId],
-        indicator_series_ids: datasetIndicatorIds,
-        interval: datasetInterval,
-        start_time_ms: dayStartMs(datasetStartDate),
-        end_time_ms: dayEndMs(datasetEndDate),
-        max_rows: datasetMaxRows
-      })
   });
 
   const upsertMutation = useMutation({
@@ -298,7 +220,6 @@ export function MarketDataPage() {
 
   function refreshMarketQueries() {
     queryClient.invalidateQueries({ queryKey: ["market-data-instruments"] });
-    queryClient.invalidateQueries({ queryKey: ["market-data-series"] });
     queryClient.invalidateQueries({ queryKey: ["market-data-overview"] });
     queryClient.invalidateQueries({ queryKey: ["market-data"] });
     queryClient.invalidateQueries({ queryKey: ["research-status"] });
@@ -326,9 +247,6 @@ export function MarketDataPage() {
     setInstrumentId(nextId);
     setInterval(nextInterval);
     setStartDate(defaultStart(next, nextInterval));
-    setDatasetSeriesId(nextId);
-    setDatasetInterval(nextInterval);
-    setDatasetStartDate(defaultStart(next, nextInterval));
   }
 
   function changeInterval(next: string) {
@@ -362,19 +280,6 @@ export function MarketDataPage() {
     reorderMutation.mutate(ids);
   }
 
-  function changeDatasetSeries(nextId: string) {
-    const nextInstrument = instruments.find((item) => item.id === nextId);
-    const nextSeries = tradableSeries.find((item) => item.id === nextId);
-    const nextInterval = nextSeries?.supported_intervals?.[0] ?? nextInstrument?.supported_intervals?.[0] ?? "1d";
-    setDatasetSeriesId(nextId);
-    setDatasetInterval(nextInterval);
-    setDatasetStartDate(defaultStart(nextInstrument, nextInterval));
-  }
-
-  function toggleDatasetIndicator(id: string) {
-    setDatasetIndicatorIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
-  }
-
   const overviewGroups = useMemo(() => {
     const groups = new Map<string, InstrumentSummary[]>();
     for (const item of overviewQuery.data?.items ?? []) {
@@ -394,9 +299,6 @@ export function MarketDataPage() {
     const storedBars = results.reduce((sum, item) => sum + (item.stored_bars ?? 0), 0);
     return results.length ? { total: results.length, errors, skipped, updated, storedBars } : null;
   }, [updateLatestMutation.data]);
-  const datasetPreview = datasetPreviewMutation.data;
-  const datasetPreviewRows = useMemo(() => datasetPreview?.rows.slice(-8) ?? [], [datasetPreview]);
-  const datasetPreviewLastRow = datasetPreviewRows[datasetPreviewRows.length - 1];
   const maintenanceResults = repairAllMaintenanceMutation.data?.results ?? auditAllMaintenanceMutation.data?.results ?? repairMaintenanceMutation.data?.results ?? auditMaintenanceMutation.data?.results ?? [];
   const maintenanceSummary = useMemo(() => {
     const datasets = maintenanceResults.flatMap((item) => item.datasets ?? []);
@@ -633,187 +535,6 @@ export function MarketDataPage() {
             <DatasetCard key={`${dataset.instrument_id}-${dataset.interval}`} dataset={dataset} />
           ))}
         </div>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <div>
-            <CardTitle>研究資料集預覽</CardTitle>
-            <CardDescription>檢查交易商品與指標序列在參數搜尋前的對齊結果。</CardDescription>
-          </div>
-        </CardHeader>
-        <form className="grid gap-4 lg:grid-cols-6" onSubmit={(event) => {
-          event.preventDefault();
-          datasetPreviewMutation.mutate();
-        }}>
-          <label className="lg:col-span-2">
-            <span className="mb-2 block text-sm text-slate-300">主商品序列</span>
-            <select
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              value={selectedDatasetSeries?.id ?? datasetSeriesId}
-              onChange={(event) => changeDatasetSeries(event.target.value)}
-            >
-              {tradableSeries.map((item) => (
-                <option key={item.id} value={item.id}>{item.display_name}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">資料週期</span>
-            <select
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              value={datasetInterval}
-              onChange={(event) => {
-                const next = event.target.value;
-                setDatasetInterval(next);
-                setDatasetStartDate(defaultStart(instruments.find((item) => item.id === (selectedDatasetSeries?.id ?? datasetSeriesId)), next));
-              }}
-            >
-              {datasetIntervals.map((item) => (
-                <option key={item} value={item}>{intervalLabels[item] ?? item}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">開始日期</span>
-            <input
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              type="date"
-              value={datasetStartDate}
-              onChange={(event) => setDatasetStartDate(event.target.value)}
-            />
-          </label>
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">結束日期</span>
-            <input
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              type="date"
-              value={datasetEndDate}
-              onChange={(event) => setDatasetEndDate(event.target.value)}
-            />
-          </label>
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">預覽列數</span>
-            <input
-              className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-              min={10}
-              max={1000}
-              step={10}
-              type="number"
-              value={datasetMaxRows}
-              onChange={(event) => setDatasetMaxRows(Number(event.target.value))}
-            />
-          </label>
-          <div className="flex items-end lg:col-span-6">
-            <Button className="w-full" icon={Layers} loading={datasetPreviewMutation.isPending} type="submit" disabled={!selectedDatasetSeries}>
-              預覽資料集
-            </Button>
-          </div>
-          <div className="lg:col-span-6">
-            <div className="mb-2 text-sm font-semibold text-slate-200">指標序列</div>
-            {indicatorSeries.length ? (
-              <div className="flex flex-wrap gap-2">
-                {indicatorSeries.map((item) => (
-                  <label key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300">
-                    <input
-                      className="h-3.5 w-3.5 accent-[#2dd4bf]"
-                      type="checkbox"
-                      checked={datasetIndicatorIds.includes(item.id)}
-                      onChange={() => toggleDatasetIndicator(item.id)}
-                    />
-                    {item.display_name} · {seriesTypeName(item.series_type)}
-                  </label>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-slate-500">
-                目前尚未建立指標序列。
-              </div>
-            )}
-          </div>
-        </form>
-        {seriesQuery.error ? <div className="mt-4 text-sm text-[#fecaca]">{String(seriesQuery.error.message)}</div> : null}
-        {datasetPreviewMutation.error ? <div className="mt-4 text-sm text-[#fecaca]">{String(datasetPreviewMutation.error.message)}</div> : null}
-        {datasetPreview ? (
-          <div className="mt-5 space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-                <div className="text-xs text-slate-500">預覽列數</div>
-                <div className="mt-1 font-mono text-xl font-semibold text-slate-100">{datasetPreview.rows.length.toLocaleString("zh-TW")}</div>
-              </div>
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-                <div className="text-xs text-slate-500">序列數</div>
-                <div className="mt-1 font-mono text-xl font-semibold text-slate-100">{datasetPreview.series.length.toLocaleString("zh-TW")}</div>
-              </div>
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-                <div className="text-xs text-slate-500">問題數</div>
-                <div className="mt-1 font-mono text-xl font-semibold text-slate-100">{(datasetPreview.issues?.length ?? 0).toLocaleString("zh-TW")}</div>
-              </div>
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-                <div className="text-xs text-slate-500">最新決策時間</div>
-                <div className="mt-1 font-mono text-sm font-semibold text-slate-100">{formatMs(datasetPreviewLastRow?.decision_time_ms)}</div>
-              </div>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {datasetPreview.series.map((item) => (
-                <div key={item.id} className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-slate-100">{item.display_name}</div>
-                      <div className="mt-1 text-xs text-slate-500">{seriesRoleName(item.role)} · {seriesTypeName(item.series_type)} · {item.data_source}</div>
-                    </div>
-                    {item.missing_count > 0 ? <TriangleAlert className="h-4 w-4 text-[#fbbf24]" /> : <CheckCircle2 className="h-4 w-4 text-[#99f6e4]" />}
-                  </div>
-                  <div className="mt-3 grid gap-2 text-sm">
-                    <InfoRow label="來源點數" value={item.point_count.toLocaleString("zh-TW")} />
-                    <InfoRow label="預覽缺值" value={item.missing_count.toLocaleString("zh-TW")} />
-                    <InfoRow label="第一筆" value={formatMs(item.first_observed_ms)} />
-                    <InfoRow label="最後一筆" value={formatMs(item.last_observed_ms)} />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
-              <table className="min-w-full divide-y divide-white/[0.06] text-sm">
-                <thead className="bg-white/[0.03] text-xs text-slate-500">
-                  <tr>
-                    <th className="whitespace-nowrap px-3 py-2 text-left font-medium">資料時間</th>
-                    <th className="whitespace-nowrap px-3 py-2 text-left font-medium">決策時間</th>
-                    {datasetPreview.series.map((item) => (
-                      <th key={item.id} className="whitespace-nowrap px-3 py-2 text-right font-medium">{item.display_name}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {datasetPreviewRows.map((row) => (
-                    <tr key={`${row.observed_at_ms}-${row.decision_time_ms}`}>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-300">{formatMs(row.observed_at_ms)}</td>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-slate-300">{formatMs(row.decision_time_ms)}</td>
-                      {datasetPreview.series.map((item) => {
-                        const value = row.values[item.id];
-                        return (
-                          <td key={`${row.observed_at_ms}-${item.id}`} className="whitespace-nowrap px-3 py-2 text-right font-mono text-slate-200" title={value ? `資料延遲：${formatLag(value.lag_ms)}` : "缺值"}>
-                            {value ? formatNumber(value.value) : "缺值"}
-                          </td>
-                        );
-                      })}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {datasetPreview.issues?.length ? (
-              <div className="rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-4 py-3 text-sm leading-6 text-[#fde68a]">
-                {datasetPreview.issues.map((issue) => (
-                  <div key={`${issue.series_id ?? "dataset"}-${issue.code}`}>{issue.series_id ? `${issue.series_id}：` : ""}{issue.message}</div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </Card>
 
       <Card>

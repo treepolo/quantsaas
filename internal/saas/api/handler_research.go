@@ -121,21 +121,18 @@ func (h *ResearchStatusHandler) instrumentStatus(ctx context.Context, instrument
 		base[key] = value
 	}
 	if primary["status"] == "ready" {
-		if bars, ok := primary["_bars"].([]quant.Bar); ok {
+		if rows, ok := primary["_rows"].([]saasstore.KLine); ok {
 			params, _ := primary["_params"].(sigmoiddca.Params)
-			externalSignals, _ := primary["_external_signals"].(map[int64]float64)
-			if summary, ok := simulateResearchPosition(bars, params, instrument.Symbol, simulation, externalSignals); ok {
+			if summary, ok := simulateResearchPosition(rows, params, instrument.Symbol, simulation); ok {
 				base["position_simulation"] = summary
 			}
 		}
 	}
-	delete(base, "_bars")
+	delete(base, "_rows")
 	delete(base, "_params")
-	delete(base, "_external_signals")
 	for _, state := range states {
-		delete(state, "_bars")
+		delete(state, "_rows")
 		delete(state, "_params")
-		delete(state, "_external_signals")
 	}
 	return base
 }
@@ -151,41 +148,35 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 		return base
 	}
 	base["execution_mode"] = champion.ExecutionMode
-	params := sigmoiddca.ParseParamsFromParamPack([]byte(champion.ParamPack))
-	indicatorSeriesIDs := marketdata.NormalizeSeriesIDs(params.IndicatorSeriesIDs)
 
-	dataset, err := marketdata.NewService(h.db, nil).BuildDataset(ctx, marketdata.DatasetBuildRequest{
-		TradableSeriesIDs:  []string{instrument.ID},
-		IndicatorSeriesIDs: indicatorSeriesIDs,
-		Interval:           interval,
-		StartTimeMs:        1,
-		EndTimeMs:          time.Now().UTC().UnixMilli(),
-	})
-	if err != nil {
-		base["status"] = "missing_data"
-		base["error"] = err.Error()
-		return base
-	}
-	dataset = datasetRowsAvailableAt(dataset, time.Now().UTC())
-	bars, err := marketdata.PrimaryBarsFromDataset(dataset)
-	if err != nil || len(bars) == 0 {
+	var rows []saasstore.KLine
+	if err := h.db.WithContext(ctx).
+		Where("instrument_id = ? AND source = ? AND interval = ?", instrument.ID, instrument.DataSource, interval).
+		Order("open_time ASC").
+		Find(&rows).Error; err != nil || len(rows) == 0 {
 		base["status"] = "missing_data"
 		if err != nil {
 			base["error"] = err.Error()
-		} else {
-			base["error"] = "no completed bars"
 		}
 		return base
 	}
-	externalSignals := marketdata.ExternalSignalByTime(dataset)
-
-	closes := make([]float64, 0, len(bars))
-	timestamps := make([]int64, 0, len(bars))
-	for _, bar := range bars {
-		closes = append(closes, bar.Close)
-		timestamps = append(timestamps, bar.OpenTime)
+	if interval == "1d" {
+		rows = completedDailyRows(instrument, rows, time.Now().UTC())
+		if len(rows) == 0 {
+			base["status"] = "missing_data"
+			base["error"] = "no completed daily bars"
+			return base
+		}
 	}
-	latest := bars[len(bars)-1]
+
+	params := sigmoiddca.ParseParamsFromParamPack([]byte(champion.ParamPack))
+	closes := make([]float64, 0, len(rows))
+	timestamps := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		closes = append(closes, row.Close)
+		timestamps = append(timestamps, row.OpenTime)
+	}
+	latest := rows[len(rows)-1]
 	portfolio := quant.PortfolioSnapshot{
 		USDTBalance: params.Spawn.Policy.InitialUSDT,
 		TotalEquity: params.Spawn.Policy.InitialUSDT,
@@ -197,7 +188,6 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 		Timestamps: timestamps,
 		Portfolio:  portfolio,
 		Spawn:      params.Spawn,
-		AISignal:   researchAISignal(externalSignals, latest.OpenTime),
 	}, params)
 	marketState := ""
 	if raw, ok := output.RuntimeState["last_market_state"]; ok {
@@ -218,11 +208,9 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 	base["market_state"] = marketState
 	base["diagnostics"] = output.Diagnostics
 	base["parameter_values"] = paramValues
-	base["indicator_series_ids"] = indicatorSeriesIDs
-	base["_bars"] = bars
+	base["_rows"] = rows
 	base["_params"] = params
-	base["_external_signals"] = externalSignals
-	if model, ok := simulateResearchModel(bars, params, interval, champion.ExecutionMode, simulation, externalSignals); ok {
+	if model, ok := simulateResearchModel(rows, params, interval, champion.ExecutionMode, simulation); ok {
 		base["model_simulation"] = model
 		if latestTarget, ok := model["latest_practical_target_weight"]; ok {
 			base["target_weight"] = latestTarget
@@ -278,8 +266,8 @@ func instrumentSupportsInterval(instrument marketdata.ResearchInstrument, interv
 	return false
 }
 
-func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval string, executionMode string, settings positionSimulationQuery, externalSignals map[int64]float64) (gin.H, bool) {
-	if len(bars) == 0 {
+func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, interval string, executionMode string, settings positionSimulationQuery) (gin.H, bool) {
+	if len(rows) == 0 {
 		return nil, false
 	}
 	spawn := params.Spawn
@@ -289,10 +277,11 @@ func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval 
 	if settings.MonthlyDCA >= 0 {
 		spawn.Policy.MonthlyInjectUSDT = settings.MonthlyDCA
 	}
+	bars := barsFromRows(rows)
 	executionMode = marketdata.NormalizeExecutionMode(executionMode)
 	costs := researchCosts(settings)
-	path := ga.RunSigmoidDCAPathBacktestWithModeCostsStructureAndSignals(bars, bars[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs, params.PositionStructure, externalSignals)
-	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
+	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars, rows[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
+	baseline := quant.SimulateGhostDCAFrom(bars, rows[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 		UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
@@ -308,7 +297,7 @@ func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval 
 		previous = points[len(points)-2]
 	}
 	return gin.H{
-		"start_time_ms":                               bars[0].OpenTime,
+		"start_time_ms":                               rows[0].OpenTime,
 		"latest_time_ms":                              latest["time_ms"],
 		"latest_time":                                 latest["time"],
 		"initial_capital":                             spawn.Policy.InitialUSDT,
@@ -319,7 +308,6 @@ func simulateResearchModel(bars []quant.Bar, params sigmoiddca.Params, interval 
 		"force_full_threshold":                        params.Chromosome.ForceFullThreshold,
 		"force_empty_threshold":                       params.Chromosome.ForceEmptyThreshold,
 		"position_structure":                          params.PositionStructure,
-		"indicator_series_ids":                        params.IndicatorSeriesIDs,
 		"trade_count":                                 path.Metrics.TradeCount,
 		"w_mean":                                      params.Chromosome.WMean,
 		"w_momentum":                                  params.Chromosome.WMomentum,
@@ -350,13 +338,13 @@ func researchCosts(settings positionSimulationQuery) quant.ExecutionCostConfig {
 	})
 }
 
-func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol string, settings positionSimulationQuery, externalSignals map[int64]float64) (gin.H, bool) {
-	if settings.StartTimeMs <= 0 || settings.InitialCapital <= 0 || len(bars) == 0 {
+func simulateResearchPosition(rows []saasstore.KLine, params sigmoiddca.Params, symbol string, settings positionSimulationQuery) (gin.H, bool) {
+	if settings.StartTimeMs <= 0 || settings.InitialCapital <= 0 || len(rows) == 0 {
 		return nil, false
 	}
 
-	closes := make([]float64, 0, len(bars))
-	timestamps := make([]int64, 0, len(bars))
+	closes := make([]float64, 0, len(rows))
+	timestamps := make([]int64, 0, len(rows))
 	state := map[string]any{}
 	started := false
 	cash := 0.0
@@ -375,16 +363,16 @@ func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol
 	latestMs := int64(0)
 	startedAtMs := int64(0)
 
-	for _, bar := range bars {
-		if bar.Close <= 0 {
+	for _, row := range rows {
+		if row.Close <= 0 {
 			continue
 		}
-		closes = append(closes, bar.Close)
-		timestamps = append(timestamps, bar.OpenTime)
-		if !started && bar.OpenTime < settings.StartTimeMs {
+		closes = append(closes, row.Close)
+		timestamps = append(timestamps, row.OpenTime)
+		if !started && row.OpenTime < settings.StartTimeMs {
 			continue
 		}
-		year, month := time.UnixMilli(bar.OpenTime).UTC().Year(), time.UnixMilli(bar.OpenTime).UTC().Month()
+		year, month := time.UnixMilli(row.OpenTime).UTC().Year(), time.UnixMilli(row.OpenTime).UTC().Month()
 		contribution := 0.0
 		if !started {
 			started = true
@@ -392,7 +380,7 @@ func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol
 			invested = settings.InitialCapital
 			lastYear = year
 			lastMonth = month
-			startedAtMs = bar.OpenTime
+			startedAtMs = row.OpenTime
 		} else if (year != lastYear || month != lastMonth) && settings.MonthlyDCA > 0 {
 			cash += settings.MonthlyDCA
 			invested += settings.MonthlyDCA
@@ -401,7 +389,7 @@ func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol
 			lastMonth = month
 		}
 
-		equityBefore := cash + assetQty*bar.Close
+		equityBefore := cash + assetQty*row.Close
 		output := sigmoiddca.Step(quant.StrategyInput{
 			Symbol:     symbol,
 			Interval:   "1d",
@@ -414,34 +402,33 @@ func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol
 			},
 			RuntimeState: state,
 			Spawn:        params.Spawn,
-			AISignal:     researchAISignal(externalSignals, bar.OpenTime),
 		}, params)
 		state = output.RuntimeState
-		targetWeight := currentWeight(assetQty, bar.Close, equityBefore)
+		targetWeight := currentWeight(assetQty, row.Close, equityBefore)
 		if raw, ok := output.Diagnostics["target_weight"]; ok {
 			targetWeight = clamp01(raw)
 		}
 		targetValue := equityBefore * targetWeight
-		currentValue := assetQty * bar.Close
+		currentValue := assetQty * row.Close
 		deltaValue := targetValue - currentValue
 		if deltaValue > 0 {
 			buyValue := math.Min(deltaValue, cash)
-			assetQty += buyValue / bar.Close
+			assetQty += buyValue / row.Close
 			cash -= buyValue
 		} else if deltaValue < 0 {
-			sellQty := math.Min(-deltaValue/bar.Close, assetQty)
+			sellQty := math.Min(-deltaValue/row.Close, assetQty)
 			assetQty -= sellQty
-			cash += sellQty * bar.Close
+			cash += sellQty * row.Close
 		}
 
 		previousNAV = latestNAV
 		previousTargetWeight = latestTargetWeight
 		previousActualWeight = latestActualWeight
-		latestNAV = cash + assetQty*bar.Close
+		latestNAV = cash + assetQty*row.Close
 		latestTargetWeight = targetWeight
-		latestActualWeight = currentWeight(assetQty, bar.Close, latestNAV)
+		latestActualWeight = currentWeight(assetQty, row.Close, latestNAV)
 		latestContribution = contribution
-		latestMs = bar.OpenTime
+		latestMs = row.OpenTime
 		points++
 	}
 
@@ -476,6 +463,21 @@ func simulateResearchPosition(bars []quant.Bar, params sigmoiddca.Params, symbol
 		"asset_quantity":         assetQty,
 		"points":                 points,
 	}, true
+}
+
+func barsFromRows(rows []saasstore.KLine) []quant.Bar {
+	bars := make([]quant.Bar, 0, len(rows))
+	for _, row := range rows {
+		bars = append(bars, quant.Bar{
+			OpenTime: row.OpenTime,
+			Open:     row.Open,
+			High:     row.High,
+			Low:      row.Low,
+			Close:    row.Close,
+			Volume:   row.Volume,
+		})
+	}
+	return bars
 }
 
 func mergeResearchModelPoints(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []gin.H {
@@ -514,25 +516,6 @@ func mergeResearchModelPoints(strategy []ga.BacktestPoint, baseline quant.GhostD
 	return points
 }
 
-func datasetRowsAvailableAt(dataset marketdata.ResearchDataset, now time.Time) marketdata.ResearchDataset {
-	maxDecisionTimeMs := now.UTC().UnixMilli()
-	rows := make([]marketdata.DatasetRow, 0, len(dataset.Rows))
-	for _, row := range dataset.Rows {
-		if row.DecisionTimeMs <= maxDecisionTimeMs {
-			rows = append(rows, row)
-		}
-	}
-	dataset.Rows = rows
-	return dataset
-}
-
-func researchAISignal(externalSignals map[int64]float64, timeMs int64) quant.AISignalVector {
-	if len(externalSignals) == 0 {
-		return quant.AISignalVector{}
-	}
-	return quant.AISignalVector{SMarket: externalSignals[timeMs]}
-}
-
 func pctChange(current float64, previous float64) float64 {
 	if previous <= 0 {
 		return 0
@@ -549,4 +532,38 @@ func currentWeight(assetQty float64, price float64, equity float64) float64 {
 
 func clamp01(value float64) float64 {
 	return math.Max(0, math.Min(1, value))
+}
+
+func completedDailyRows(instrument marketdata.ResearchInstrument, rows []saasstore.KLine, now time.Time) []saasstore.KLine {
+	out := make([]saasstore.KLine, 0, len(rows))
+	for _, row := range rows {
+		if isCompletedDailyBar(instrument, row.OpenTime, now) {
+			out = append(out, row)
+		}
+	}
+	return out
+}
+
+func isCompletedDailyBar(instrument marketdata.ResearchInstrument, openTimeMs int64, now time.Time) bool {
+	openTime := time.UnixMilli(openTimeMs)
+	switch instrument.ID {
+	case marketdata.InstrumentBTCUSDT:
+		return !openTime.Add(24 * time.Hour).After(now)
+	case "TWII":
+		loc, err := time.LoadLocation("Asia/Taipei")
+		if err != nil {
+			loc = time.FixedZone("Asia/Taipei", 8*3600)
+		}
+		local := openTime.In(loc)
+		closeAt := time.Date(local.Year(), local.Month(), local.Day(), 13, 30, 0, 0, loc)
+		return !closeAt.UTC().After(now)
+	default:
+		loc, err := time.LoadLocation("America/New_York")
+		if err != nil {
+			loc = time.FixedZone("America/New_York", -5*3600)
+		}
+		local := openTime.In(loc)
+		closeAt := time.Date(local.Year(), local.Month(), local.Day(), 16, 0, 0, 0, loc)
+		return !closeAt.UTC().After(now)
+	}
 }

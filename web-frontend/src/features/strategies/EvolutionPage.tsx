@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
 import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
-import { marketDataApi, type ResearchSeries } from "../../shared/services/marketData";
+import { marketDataApi } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { StatusBadge } from "../../shared/ui/StatusBadge";
@@ -103,42 +103,6 @@ function formatTraceValue(value: unknown): string {
 
 function labelForInstrument(id?: string, names?: Record<string, string>) {
   return names?.[id ?? ""] ?? id ?? "未指定";
-}
-
-function isExternalIndicator(series: ResearchSeries) {
-  return series.enabled && !series.tradable && (series.series_type === "indicator" || series.series_type === "derived");
-}
-
-function IndicatorSelector({
-  series,
-  selectedIds,
-  onToggle
-}: {
-  series: ResearchSeries[];
-  selectedIds: string[];
-  onToggle: (id: string, checked: boolean) => void;
-}) {
-  return (
-    <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
-      <div className="mb-2 text-sm font-semibold text-slate-300">外部指標</div>
-      {series.length === 0 ? (
-        <div className="text-xs text-slate-500">尚無可用外部指標；未選擇時搜尋會維持單商品價格模式。</div>
-      ) : (
-        <div className="grid gap-2 md:grid-cols-2">
-          {series.map((item) => (
-            <label key={item.id} className="flex items-start gap-3 rounded-lg border border-white/[0.04] bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
-              <input className="mt-1" type="checkbox" checked={selectedIds.includes(item.id)} onChange={(event) => onToggle(item.id, event.target.checked)} />
-              <span>
-                <span className="block font-semibold text-slate-200">{item.display_name}</span>
-                <span className="mt-1 block text-xs text-slate-500">{item.id} · {item.frequency || "未指定頻率"}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      )}
-      {selectedIds.length > 0 ? <div className="mt-2 text-xs text-[#99f6e4]">已選 {selectedIds.length.toLocaleString("zh-TW")} 個指標；外部指標權重會參與演化。</div> : null}
-    </div>
-  );
 }
 
 function JsonPreview({ value }: { value?: Record<string, unknown> | null }) {
@@ -442,9 +406,7 @@ function dot(a: number[], b: number[]) {
 function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, string> }) {
   const queryClient = useQueryClient();
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
-  const seriesQuery = useQuery({ queryKey: ["market-data-series"], queryFn: () => marketDataApi.series() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
-  const indicatorSeries = useMemo(() => (seriesQuery.data?.series ?? []).filter(isExternalIndicator), [seriesQuery.data]);
   const [expanded, setExpanded] = useState(false);
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
   const selected = instruments.find((item) => item.id === instrumentId);
@@ -465,7 +427,6 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [tradePenalty, setTradePenalty] = useState(0);
   const [feeRate, setFeeRate] = useState(0);
   const [spreadRate, setSpreadRate] = useState(0);
-  const [indicatorSeriesIds, setIndicatorSeriesIds] = useState<string[]>([]);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>("off");
   const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(false);
@@ -505,7 +466,6 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     data_source: selected?.data_source,
     interval,
     execution_mode: executionMode,
-    indicator_series_ids: indicatorSeriesIds,
     train_start_ms: dayStartMs(startDate),
     train_end_ms: dayEndMs(endDate),
     monthly_dca: monthlyDCA,
@@ -529,7 +489,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     continuous_unlimited: continuousUnlimited,
     standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
     standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined
-  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveRebalanceThreshold, executionMode, feeRate, generations, indicatorSeriesIds, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveRebalanceThreshold, executionMode, feeRate, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
   const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
   const computeEstimateQuery = useQuery({
     queryKey: ["evolution-compute-estimate", taskInput],
@@ -580,10 +540,6 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     setInterval(next?.supported_intervals[0] ?? "1d");
   }
 
-  function toggleIndicatorSeries(id: string, checked: boolean) {
-    setIndicatorSeriesIds((current) => (checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)));
-  }
-
   if (running) {
     const current = running.current_generation ?? Math.round((running.progress || 0) * (running.max_generations ?? 25));
     const max = running.max_generations ?? 25;
@@ -631,7 +587,6 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 {running.compute_monitor_enabled ? <Metric label="預估剩餘" value={formatDurationSeconds(running.compute_remaining_sec)} /> : null}
                 <Metric label="初始本金" value={formatMoney(running.initial_capital ?? SEARCH_INITIAL_CAPITAL)} />
                 <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
-                <Metric label="外部指標數" value={(running.indicator_series_ids?.length ?? 0).toLocaleString("zh-TW")} />
                 <Metric label="調倉門檻" value={running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
                 <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
@@ -708,7 +663,6 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <NumberInput label="每月投入" min={0} max={1000000000} value={monthlyDCA} onChange={setMonthlyDCA} />
           <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
-          <IndicatorSelector series={indicatorSeries} selectedIds={indicatorSeriesIds} onToggle={toggleIndicatorSeries} />
           <Select label="倉位結構" value={positionStructure} onChange={(value) => setPositionStructure(value as "dual_layer" | "floating_only")} options={[["floating_only", "純浮動模型"], ["dual_layer", "雙層模型"]]} />
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
             <div className="mb-2 text-sm font-semibold text-slate-300">門檻演化</div>

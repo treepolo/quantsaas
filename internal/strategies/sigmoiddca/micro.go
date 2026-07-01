@@ -29,8 +29,6 @@ func computeMicroIntent(input quant.StrategyInput, params Params, market quant.M
 		WedgeVolRatioThreshold: c.WedgeVolRatioThreshold,
 		IsQuiet:                market.IsQuiet,
 		AISignal:               input.AISignal,
-		AIW1:                   1,
-		AIBeta:                 c.ExternalSignalWeight,
 	})
 
 	if decision.Action == "" || decision.OrderUSDT == 0 {

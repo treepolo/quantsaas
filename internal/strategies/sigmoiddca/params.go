@@ -13,10 +13,9 @@ const (
 )
 
 type Params struct {
-	Chromosome         quant.Chromosome `json:"sigmoid_dca_config"`
-	Spawn              quant.SpawnPoint `json:"spawn_point"`
-	PositionStructure  string           `json:"position_structure,omitempty"`
-	IndicatorSeriesIDs []string         `json:"indicator_series_ids,omitempty"`
+	Chromosome        quant.Chromosome `json:"sigmoid_dca_config"`
+	Spawn             quant.SpawnPoint `json:"spawn_point"`
+	PositionStructure string           `json:"position_structure,omitempty"`
 }
 
 func DefaultParams() Params {

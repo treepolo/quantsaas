@@ -416,37 +416,36 @@ func championCacheKey(strategyID string) string {
 
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
-		Pair                      string   `json:"pair"`
-		InstrumentID              string   `json:"instrument_id"`
-		DataSource                string   `json:"data_source"`
-		ExecutionMode             string   `json:"execution_mode"`
-		IndicatorSeriesIDs        []string `json:"indicator_series_ids"`
-		TrainStartMs              int64    `json:"train_start_ms"`
-		TrainEndMs                int64    `json:"train_end_ms"`
-		Interval                  string   `json:"interval"`
-		PopSize                   int      `json:"pop_size"`
-		MaxGenerations            int      `json:"max_generations"`
-		InitialCapital            float64  `json:"initial_capital"`
-		MonthlyDCA                float64  `json:"monthly_dca"`
-		EvolveRebalanceThreshold  bool     `json:"evolve_rebalance_threshold"`
-		EvolveForceFullThreshold  bool     `json:"evolve_force_full_threshold"`
-		EvolveForceEmptyThreshold bool     `json:"evolve_force_empty_threshold"`
-		EnableWMean               bool     `json:"enable_w_mean"`
-		EnableWMomentum           bool     `json:"enable_w_momentum"`
-		EnableWBreakout           bool     `json:"enable_w_breakout"`
-		PositionStructure         string   `json:"position_structure"`
-		TradePenalty              float64  `json:"trade_penalty"`
-		FeeRate                   float64  `json:"fee_rate"`
-		SpreadRate                float64  `json:"spread_rate"`
-		SpawnMode                 string   `json:"spawn_mode"`
-		TestMode                  bool     `json:"test_mode"`
-		TraceMode                 string   `json:"trace_mode"`
-		ComputeMonitorEnabled     bool     `json:"compute_monitor_enabled"`
-		ContinuousMode            string   `json:"continuous_mode"`
-		ContinuousIterations      int      `json:"continuous_iterations"`
-		ContinuousUnlimited       bool     `json:"continuous_unlimited"`
-		StandardStartMs           int64    `json:"standard_start_ms"`
-		StandardEndMs             int64    `json:"standard_end_ms"`
+		Pair                      string  `json:"pair"`
+		InstrumentID              string  `json:"instrument_id"`
+		DataSource                string  `json:"data_source"`
+		ExecutionMode             string  `json:"execution_mode"`
+		TrainStartMs              int64   `json:"train_start_ms"`
+		TrainEndMs                int64   `json:"train_end_ms"`
+		Interval                  string  `json:"interval"`
+		PopSize                   int     `json:"pop_size"`
+		MaxGenerations            int     `json:"max_generations"`
+		InitialCapital            float64 `json:"initial_capital"`
+		MonthlyDCA                float64 `json:"monthly_dca"`
+		EvolveRebalanceThreshold  bool    `json:"evolve_rebalance_threshold"`
+		EvolveForceFullThreshold  bool    `json:"evolve_force_full_threshold"`
+		EvolveForceEmptyThreshold bool    `json:"evolve_force_empty_threshold"`
+		EnableWMean               bool    `json:"enable_w_mean"`
+		EnableWMomentum           bool    `json:"enable_w_momentum"`
+		EnableWBreakout           bool    `json:"enable_w_breakout"`
+		PositionStructure         string  `json:"position_structure"`
+		TradePenalty              float64 `json:"trade_penalty"`
+		FeeRate                   float64 `json:"fee_rate"`
+		SpreadRate                float64 `json:"spread_rate"`
+		SpawnMode                 string  `json:"spawn_mode"`
+		TestMode                  bool    `json:"test_mode"`
+		TraceMode                 string  `json:"trace_mode"`
+		ComputeMonitorEnabled     bool    `json:"compute_monitor_enabled"`
+		ContinuousMode            string  `json:"continuous_mode"`
+		ContinuousIterations      int     `json:"continuous_iterations"`
+		ContinuousUnlimited       bool    `json:"continuous_unlimited"`
+		StandardStartMs           int64   `json:"standard_start_ms"`
+		StandardEndMs             int64   `json:"standard_end_ms"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -523,7 +522,6 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"instrument_id":                firstNonEmpty(task.InstrumentID, cfg.InstrumentID),
 		"data_source":                  firstNonEmpty(task.DataSource, cfg.DataSource),
 		"execution_mode":               firstNonEmpty(task.ExecutionMode, cfg.ExecutionMode),
-		"indicator_series_ids":         cfg.IndicatorSeriesIDs,
 		"train_start_ms":               firstNonZero(task.TrainStartMs, cfg.TrainStartMs),
 		"train_end_ms":                 firstNonZero(task.TrainEndMs, cfg.TrainEndMs),
 		"initial_capital":              cfg.InitialCapital,
@@ -612,7 +610,6 @@ func chromosomeSchema() []gin.H {
 		"w_mean",
 		"w_momentum",
 		"w_breakout",
-		"external_signal_weight",
 		"dust_usd",
 		"rebalance_threshold",
 		"force_full_threshold",

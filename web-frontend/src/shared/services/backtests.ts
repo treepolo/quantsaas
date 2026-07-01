@@ -21,8 +21,6 @@ export type BacktestResult = {
   benchmark_final_equity?: number;
   fee_rate?: number;
   spread_rate?: number;
-  indicator_series_ids?: string[];
-  external_signal_weight?: number;
   rebalance_threshold?: number;
   force_full_threshold?: number;
   force_empty_threshold?: number;

@@ -38,10 +38,6 @@ const (
 	ExecutionModeCloseSameBar  = "close_same_bar"
 	ExecutionModeCloseNextOpen = "close_next_open"
 	ExecutionModePreclose10m   = "preclose_10m"
-
-	ResearchSeriesTypeTradableAsset = "tradable_asset"
-	ResearchSeriesTypeIndicator     = "indicator"
-	ResearchSeriesTypeDerived       = "derived"
 )
 
 type User struct {
@@ -316,45 +312,4 @@ type DailyExecutionSnapshot struct {
 	Price        float64 `gorm:"type:numeric(30,10);not null"`
 	Volume       float64 `gorm:"type:numeric(30,10);not null;default:0"`
 	ObservedAtMs int64   `gorm:"not null;index"`
-}
-
-type ResearchSeries struct {
-	ID                 string `gorm:"size:80;primaryKey"`
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
-	SeriesType         string `gorm:"size:32;not null;index"`
-	Symbol             string `gorm:"size:96;index"`
-	DisplayName        string `gorm:"size:160;not null"`
-	DataSource         string `gorm:"size:64;not null;index"`
-	SourceInstrumentID string `gorm:"size:32;index"`
-	SupportedIntervals JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
-	Frequency          string `gorm:"size:32;not null;default:1d;index"`
-	Unit               string `gorm:"size:32;not null;default:price"`
-	Currency           string `gorm:"size:16"`
-	Market             string `gorm:"size:32;not null;default:global;index"`
-	RevisionPolicy     string `gorm:"size:64;not null;default:current_historical"`
-	Tradable           bool   `gorm:"not null;default:false;index"`
-	Enabled            bool   `gorm:"not null;default:true;index"`
-	SortOrder          int    `gorm:"not null;default:1000;index"`
-	Metadata           JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-}
-
-type SeriesPoint struct {
-	ID            uint `gorm:"primaryKey"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	SeriesID      string  `gorm:"size:80;not null;index;uniqueIndex:idx_series_points_identity"`
-	ObservedAtMs  int64   `gorm:"not null;index;uniqueIndex:idx_series_points_identity"`
-	AvailableAtMs int64   `gorm:"not null;index;uniqueIndex:idx_series_points_identity"`
-	RevisionID    string  `gorm:"size:80;not null;default:current;uniqueIndex:idx_series_points_identity"`
-	Value         float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	Open          float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	High          float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	Low           float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	Close         float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	Volume        float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	QualityFlags  JSONB   `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
-	SourcePayload JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-
-	Series ResearchSeries `gorm:"foreignKey:SeriesID;references:ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 }

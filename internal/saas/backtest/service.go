@@ -32,26 +32,25 @@ type Service struct {
 }
 
 type CreateRequest struct {
-	StrategyID         string            `json:"strategy_id"`
-	InstanceID         uint              `json:"instance_id"`
-	InstrumentID       string            `json:"instrument_id"`
-	DataSource         string            `json:"data_source"`
-	IndicatorSeriesIDs []string          `json:"indicator_series_ids"`
-	ExecutionMode      string            `json:"execution_mode"`
-	StartTimeMs        int64             `json:"start_time_ms"`
-	EndTimeMs          int64             `json:"end_time_ms"`
-	Pair               string            `json:"pair"`
-	Symbol             string            `json:"symbol"`
-	Interval           string            `json:"interval"`
-	Source             string            `json:"source"`
-	CandidateID        uint              `json:"candidate_id"`
-	GenomeID           uint              `json:"genome_id"`
-	CustomParams       json.RawMessage   `json:"custom_params"`
-	SpawnPoint         *quant.SpawnPoint `json:"spawn_point"`
-	InitialCapital     *float64          `json:"initial_capital"`
-	MonthlyDCA         *float64          `json:"monthly_dca"`
-	FeeRate            *float64          `json:"fee_rate"`
-	SpreadRate         *float64          `json:"spread_rate"`
+	StrategyID     string            `json:"strategy_id"`
+	InstanceID     uint              `json:"instance_id"`
+	InstrumentID   string            `json:"instrument_id"`
+	DataSource     string            `json:"data_source"`
+	ExecutionMode  string            `json:"execution_mode"`
+	StartTimeMs    int64             `json:"start_time_ms"`
+	EndTimeMs      int64             `json:"end_time_ms"`
+	Pair           string            `json:"pair"`
+	Symbol         string            `json:"symbol"`
+	Interval       string            `json:"interval"`
+	Source         string            `json:"source"`
+	CandidateID    uint              `json:"candidate_id"`
+	GenomeID       uint              `json:"genome_id"`
+	CustomParams   json.RawMessage   `json:"custom_params"`
+	SpawnPoint     *quant.SpawnPoint `json:"spawn_point"`
+	InitialCapital *float64          `json:"initial_capital"`
+	MonthlyDCA     *float64          `json:"monthly_dca"`
+	FeeRate        *float64          `json:"fee_rate"`
+	SpreadRate     *float64          `json:"spread_rate"`
 }
 
 type EquitySnapshot struct {
@@ -86,7 +85,6 @@ type Response struct {
 	Symbol               string             `json:"symbol"`
 	InstrumentID         string             `json:"instrument_id"`
 	DataSource           string             `json:"data_source"`
-	IndicatorSeriesIDs   []string           `json:"indicator_series_ids,omitempty"`
 	ExecutionMode        string             `json:"execution_mode"`
 	Interval             string             `json:"interval"`
 	Source               string             `json:"source"`
@@ -108,7 +106,6 @@ type Response struct {
 	WMean                float64            `json:"w_mean"`
 	WMomentum            float64            `json:"w_momentum"`
 	WBreakout            float64            `json:"w_breakout"`
-	ExternalSignalWeight float64            `json:"external_signal_weight"`
 	NAV                  []EquitySnapshot   `json:"nav"`
 	Windows              map[string]float64 `json:"windows"`
 	WindowDetails        []WindowResult     `json:"window_details"`
@@ -121,11 +118,6 @@ type instanceConfig struct {
 	InitialUSDT       float64 `json:"initial_usdt"`
 	MonthlyInjectUSDT float64 `json:"monthly_inject_usdt"`
 	ColdSealedBTC     float64 `json:"cold_sealed_btc"`
-}
-
-type loadedDataset struct {
-	Bars            []quant.Bar
-	ExternalSignals map[int64]float64
 }
 
 func NewService(db *gorm.DB) *Service {
@@ -241,22 +233,16 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		return nil, err
 	}
 
-	indicatorSeriesIDs := req.IndicatorSeriesIDs
-	if len(indicatorSeriesIDs) == 0 {
-		indicatorSeriesIDs = marketdata.NormalizeSeriesIDs(params.IndicatorSeriesIDs)
-	}
-
-	dataset, err := s.loadDataset(ctx, req, indicatorSeriesIDs)
+	bars, err := s.loadBars(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	bars := dataset.Bars
 	if len(bars) == 0 {
 		return nil, fmt.Errorf("尚未匯入 %s %s 的 K 線資料", req.Symbol, req.Interval)
 	}
 
 	costs := backtestCosts(req)
-	path := ga.RunSigmoidDCAPathBacktestWithModeCostsStructureAndSignals(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure, dataset.ExternalSignals)
+	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
 	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
@@ -264,7 +250,7 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		Costs:             costs,
 	})
 	alpha := path.Metrics.ROI - baseline.ROI
-	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure, dataset.ExternalSignals)
+	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
 
 	return &Response{
 		ID:                   runID,
@@ -273,7 +259,6 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		Symbol:               req.Symbol,
 		InstrumentID:         req.InstrumentID,
 		DataSource:           req.DataSource,
-		IndicatorSeriesIDs:   indicatorSeriesIDs,
 		ExecutionMode:        req.ExecutionMode,
 		Interval:             req.Interval,
 		Source:               req.Source,
@@ -295,7 +280,6 @@ func (s *Service) execute(ctx context.Context, userID uint, runID uint, req Crea
 		WMean:                params.Chromosome.WMean,
 		WMomentum:            params.Chromosome.WMomentum,
 		WBreakout:            params.Chromosome.WBreakout,
-		ExternalSignalWeight: params.Chromosome.ExternalSignalWeight,
 		NAV:                  mergeNAV(path.NAV, baseline),
 		Windows:              windows,
 		WindowDetails:        windowDetails,
@@ -390,21 +374,31 @@ func (s *Service) loadInstance(ctx context.Context, userID uint, id uint) (saass
 	return instance, err
 }
 
-func (s *Service) loadDataset(ctx context.Context, req CreateRequest, indicatorSeriesIDs []string) (loadedDataset, error) {
-	bars, dataset, err := marketdata.NewService(s.db, nil).BuildDatasetBars(ctx, marketdata.DatasetBuildRequest{
-		TradableSeriesIDs:  []string{req.InstrumentID},
-		IndicatorSeriesIDs: indicatorSeriesIDs,
-		Interval:           req.Interval,
-		StartTimeMs:        req.StartTimeMs,
-		EndTimeMs:          req.EndTimeMs,
-	})
-	if err == nil {
-		return loadedDataset{
-			Bars:            bars,
-			ExternalSignals: marketdata.ExternalSignalByTime(dataset),
-		}, nil
+func (s *Service) loadBars(ctx context.Context, req CreateRequest) ([]quant.Bar, error) {
+	var rows []saasstore.KLine
+	query := s.db.WithContext(ctx).
+		Where("symbol = ? AND interval = ? AND instrument_id = ? AND source = ?", req.Symbol, req.Interval, req.InstrumentID, req.DataSource)
+	if req.StartTimeMs > 0 {
+		query = query.Where("open_time >= ?", req.StartTimeMs)
 	}
-	return loadedDataset{}, err
+	if req.EndTimeMs > 0 {
+		query = query.Where("open_time <= ?", req.EndTimeMs)
+	}
+	if err := query.Order("open_time ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	bars := make([]quant.Bar, 0, len(rows))
+	for _, row := range rows {
+		bars = append(bars, quant.Bar{
+			OpenTime: row.OpenTime,
+			Open:     row.Open,
+			High:     row.High,
+			Low:      row.Low,
+			Close:    row.Close,
+			Volume:   row.Volume,
+		})
+	}
+	return bars, nil
 }
 
 func (s *Service) normalizeRequest(ctx context.Context, req CreateRequest) CreateRequest {
@@ -426,7 +420,6 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateRequest) Creat
 		req.DataSource = marketdata.DataSourceBinance
 	}
 	req.Symbol = strings.ToUpper(strings.TrimSpace(req.Symbol))
-	req.IndicatorSeriesIDs = marketdata.NormalizeSeriesIDs(req.IndicatorSeriesIDs)
 	if req.Interval == "" {
 		req.Interval = "1d"
 	}
@@ -583,12 +576,12 @@ func backtestCosts(req CreateRequest) quant.ExecutionCostConfig {
 	return quant.NormalizeExecutionCosts(costs)
 }
 
-func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, externalSignals map[int64]float64) (map[string]float64, []WindowResult) {
+func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) (map[string]float64, []WindowResult) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
 	for _, window := range windows {
-		metrics := ga.RunSigmoidDCAPathBacktestWithModeCostsStructureAndSignals(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn, costs, positionStructure, externalSignals).Metrics
+		metrics := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn, costs, positionStructure).Metrics
 		baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
