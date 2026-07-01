@@ -105,11 +105,11 @@ function labelForInstrument(id?: string, names?: Record<string, string>) {
   return names?.[id ?? ""] ?? id ?? "未指定";
 }
 
-function isExternalReference(series: ResearchSeries, primarySeriesId: string) {
-  return series.enabled && series.id !== primarySeriesId;
+function isExternalIndicator(series: ResearchSeries) {
+  return series.enabled && !series.tradable && (series.series_type === "indicator" || series.series_type === "derived");
 }
 
-function ReferenceSeriesSelector({
+function IndicatorSelector({
   series,
   selectedIds,
   onToggle
@@ -120,9 +120,9 @@ function ReferenceSeriesSelector({
 }) {
   return (
     <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
-      <div className="mb-2 text-sm font-semibold text-slate-300">外部參考序列</div>
+      <div className="mb-2 text-sm font-semibold text-slate-300">外部指標</div>
       {series.length === 0 ? (
-        <div className="text-xs text-slate-500">尚無可用外部參考序列；未選擇時搜尋會維持單商品價格模式。</div>
+        <div className="text-xs text-slate-500">尚無可用外部指標；未選擇時搜尋會維持單商品價格模式。</div>
       ) : (
         <div className="grid gap-2 md:grid-cols-2">
           {series.map((item) => (
@@ -136,7 +136,7 @@ function ReferenceSeriesSelector({
           ))}
         </div>
       )}
-      {selectedIds.length > 0 ? <div className="mt-2 text-xs text-[#99f6e4]">已選 {selectedIds.length.toLocaleString("zh-TW")} 個參考序列；外部參考權重會參與演化。</div> : null}
+      {selectedIds.length > 0 ? <div className="mt-2 text-xs text-[#99f6e4]">已選 {selectedIds.length.toLocaleString("zh-TW")} 個指標；外部指標權重會參與演化。</div> : null}
     </div>
   );
 }
@@ -444,10 +444,10 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
   const seriesQuery = useQuery({ queryKey: ["market-data-series"], queryFn: () => marketDataApi.series() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
+  const indicatorSeries = useMemo(() => (seriesQuery.data?.series ?? []).filter(isExternalIndicator), [seriesQuery.data]);
   const [expanded, setExpanded] = useState(false);
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
   const selected = instruments.find((item) => item.id === instrumentId);
-  const referenceSeries = useMemo(() => (seriesQuery.data?.series ?? []).filter((item) => isExternalReference(item, instrumentId)), [instrumentId, seriesQuery.data]);
   const [interval, setInterval] = useState("1d");
   const [executionMode, setExecutionMode] = useState("close_next_open");
   const [startDate, setStartDate] = useState(dateInputValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
@@ -495,9 +495,6 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     setStandardStartDate(nextStart);
     setStandardEndDate(nextEnd);
   }, [instrumentId, interval, selectedDataset?.first_open_ms, selectedDataset?.last_open_ms]);
-  useEffect(() => {
-    setIndicatorSeriesIds((current) => current.filter((id) => id !== instrumentId));
-  }, [instrumentId]);
   const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 1_000 });
   const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
   const animatedComputedUnits = useAnimatedNumber(running?.computed_units ?? 0);
@@ -634,7 +631,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 {running.compute_monitor_enabled ? <Metric label="預估剩餘" value={formatDurationSeconds(running.compute_remaining_sec)} /> : null}
                 <Metric label="初始本金" value={formatMoney(running.initial_capital ?? SEARCH_INITIAL_CAPITAL)} />
                 <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
-                <Metric label="外部參考數" value={(running.indicator_series_ids?.length ?? 0).toLocaleString("zh-TW")} />
+                <Metric label="外部指標數" value={(running.indicator_series_ids?.length ?? 0).toLocaleString("zh-TW")} />
                 <Metric label="調倉門檻" value={running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
                 <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
@@ -711,7 +708,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <NumberInput label="每月投入" min={0} max={1000000000} value={monthlyDCA} onChange={setMonthlyDCA} />
           <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
-          <ReferenceSeriesSelector series={referenceSeries} selectedIds={indicatorSeriesIds} onToggle={toggleIndicatorSeries} />
+          <IndicatorSelector series={indicatorSeries} selectedIds={indicatorSeriesIds} onToggle={toggleIndicatorSeries} />
           <Select label="倉位結構" value={positionStructure} onChange={(value) => setPositionStructure(value as "dual_layer" | "floating_only")} options={[["floating_only", "純浮動模型"], ["dual_layer", "雙層模型"]]} />
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
             <div className="mb-2 text-sm font-semibold text-slate-300">門檻演化</div>

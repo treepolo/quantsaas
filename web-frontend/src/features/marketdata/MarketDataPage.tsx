@@ -196,8 +196,8 @@ export function MarketDataPage() {
   const selectedDataset = datasets.find((dataset) => dataset.interval === interval);
   const researchSeries = seriesQuery.data?.series ?? [];
   const tradableSeries = useMemo(() => researchSeries.filter((item) => item.tradable && item.series_type === "tradable_asset"), [researchSeries]);
+  const indicatorSeries = useMemo(() => researchSeries.filter((item) => !item.tradable || item.series_type !== "tradable_asset"), [researchSeries]);
   const selectedDatasetSeries = tradableSeries.find((item) => item.id === datasetSeriesId) ?? tradableSeries[0];
-  const referenceSeries = useMemo(() => researchSeries.filter((item) => item.enabled && item.id !== selectedDatasetSeries?.id), [researchSeries, selectedDatasetSeries?.id]);
   const datasetIntervals = selectedDatasetSeries?.supported_intervals?.length ? selectedDatasetSeries.supported_intervals : intervals;
 
   useEffect(() => {
@@ -216,10 +216,6 @@ export function MarketDataPage() {
       setDatasetStartDate(defaultStart(instruments.find((item) => item.id === selectedDatasetSeries.id), nextInterval));
     }
   }, [datasetInterval, instruments, selectedDatasetSeries]);
-  useEffect(() => {
-    if (!selectedDatasetSeries?.id) return;
-    setDatasetIndicatorIds((current) => current.filter((id) => id !== selectedDatasetSeries.id));
-  }, [selectedDatasetSeries?.id]);
 
   const importMutation = useMutation({
     mutationFn: () =>
@@ -373,7 +369,6 @@ export function MarketDataPage() {
     setDatasetSeriesId(nextId);
     setDatasetInterval(nextInterval);
     setDatasetStartDate(defaultStart(nextInstrument, nextInterval));
-    setDatasetIndicatorIds((current) => current.filter((id) => id !== nextId));
   }
 
   function toggleDatasetIndicator(id: string) {
@@ -644,7 +639,7 @@ export function MarketDataPage() {
         <CardHeader>
           <div>
             <CardTitle>研究資料集預覽</CardTitle>
-            <CardDescription>檢查交易商品與外部參考序列在參數搜尋前的對齊結果。</CardDescription>
+            <CardDescription>檢查交易商品與指標序列在參數搜尋前的對齊結果。</CardDescription>
           </div>
         </CardHeader>
         <form className="grid gap-4 lg:grid-cols-6" onSubmit={(event) => {
@@ -715,10 +710,10 @@ export function MarketDataPage() {
             </Button>
           </div>
           <div className="lg:col-span-6">
-            <div className="mb-2 text-sm font-semibold text-slate-200">外部參考序列</div>
-            {referenceSeries.length ? (
+            <div className="mb-2 text-sm font-semibold text-slate-200">指標序列</div>
+            {indicatorSeries.length ? (
               <div className="flex flex-wrap gap-2">
-                {referenceSeries.map((item) => (
+                {indicatorSeries.map((item) => (
                   <label key={item.id} className="inline-flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300">
                     <input
                       className="h-3.5 w-3.5 accent-[#2dd4bf]"
@@ -732,7 +727,7 @@ export function MarketDataPage() {
               </div>
             ) : (
               <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-4 py-3 text-sm text-slate-500">
-                目前尚無可用外部參考序列。
+                目前尚未建立指標序列。
               </div>
             )}
           </div>
