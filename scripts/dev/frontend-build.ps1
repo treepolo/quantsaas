@@ -5,6 +5,9 @@ Set-DevConsole
 $root = Get-ProjectRoot
 Push-Location (Join-Path $root "web-frontend")
 try {
+    if (Test-Path -LiteralPath "dist") {
+        Remove-Item -LiteralPath "dist" -Recurse -Force
+    }
     npm run build
     if ($LASTEXITCODE -ne 0) {
         throw "npm run build failed, exit code: $LASTEXITCODE"

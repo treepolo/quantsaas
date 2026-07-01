@@ -4,7 +4,7 @@ WORKDIR /src/web-frontend
 COPY web-frontend/package*.json ./
 RUN npm ci
 COPY web-frontend/ ./
-RUN npm run build
+RUN rm -rf dist && npm run build
 
 FROM golang:1.25-alpine AS builder
 
