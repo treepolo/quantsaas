@@ -113,7 +113,7 @@ func (s *Service) BuildDataset(ctx context.Context, req DatasetBuildRequest) (Re
 		all = append(all, data)
 	}
 	for _, series := range indicators {
-		data, err := s.loadPointSeriesValues(ctx, series, req.EndTimeMs, maxDecisionTime)
+		data, err := s.loadReferenceSeriesValues(ctx, series, req.Interval, req.StartTimeMs, req.EndTimeMs, maxDecisionTime)
 		if err != nil {
 			return ResearchDataset{}, err
 		}
@@ -297,6 +297,15 @@ func validateDatasetRequest(req DatasetBuildRequest) error {
 	if req.StartTimeMs <= 0 || req.EndTimeMs <= 0 || req.EndTimeMs < req.StartTimeMs {
 		return fmt.Errorf("%w: invalid time range", ErrInvalidDatasetRequest)
 	}
+	tradableSet := map[string]bool{}
+	for _, id := range req.TradableSeriesIDs {
+		tradableSet[id] = true
+	}
+	for _, id := range req.IndicatorSeriesIDs {
+		if tradableSet[id] {
+			return fmt.Errorf("%w: series cannot be both tradable and reference: %s", ErrInvalidDatasetRequest, id)
+		}
+	}
 	return nil
 }
 
@@ -354,9 +363,6 @@ func (s *Service) loadDatasetSeries(ctx context.Context, req DatasetBuildRequest
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: series not found: %s", ErrInvalidDatasetRequest, id)
 		}
-		if series.SeriesType == SeriesTypeTradableAsset && series.Tradable {
-			return nil, nil, fmt.Errorf("%w: tradable series cannot be used as indicator: %s", ErrInvalidDatasetRequest, id)
-		}
 		indicators = append(indicators, series)
 	}
 	return tradables, indicators, nil
@@ -392,6 +398,17 @@ func (s *Service) loadTradableSeriesValues(ctx context.Context, series ResearchS
 		})
 	}
 	return datasetSeriesData{Series: series, Values: values}, nil
+}
+
+func (s *Service) loadReferenceSeriesValues(ctx context.Context, series ResearchSeries, interval string, startMs int64, endMs int64, maxDecisionMs int64) (datasetSeriesData, error) {
+	if series.SeriesType == SeriesTypeTradableAsset || series.Tradable {
+		data, err := s.loadTradableSeriesValues(ctx, series, interval, startMs, endMs)
+		if err != nil {
+			return datasetSeriesData{}, err
+		}
+		return data, nil
+	}
+	return s.loadPointSeriesValues(ctx, series, endMs, maxDecisionMs)
 }
 
 func (s *Service) loadPointSeriesValues(ctx context.Context, series ResearchSeries, endObservedMs int64, maxDecisionMs int64) (datasetSeriesData, error) {

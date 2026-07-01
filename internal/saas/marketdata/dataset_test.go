@@ -93,6 +93,19 @@ func TestNormalizeDatasetRequestDeduplicatesSeriesIDs(t *testing.T) {
 	}
 }
 
+func TestValidateDatasetRequestRejectsSameSeriesInBothRoles(t *testing.T) {
+	req := normalizeDatasetRequest(DatasetBuildRequest{
+		TradableSeriesIDs:  []string{"SOXL"},
+		IndicatorSeriesIDs: []string{"soxl"},
+		StartTimeMs:        1000,
+		EndTimeMs:          2000,
+	})
+
+	if err := validateDatasetRequest(req); err == nil {
+		t.Fatal("expected duplicate role usage to fail")
+	}
+}
+
 func TestPrimaryBarsFromDatasetUsesPrimaryTradableOHLCV(t *testing.T) {
 	dataset := ResearchDataset{
 		Series: []DatasetSeriesInfo{
@@ -218,6 +231,37 @@ func TestPrimaryBarsFromDatasetMatchesLegacyKLineConversion(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("bar[%d] = %#v, want %#v", i, got[i], want[i])
 		}
+	}
+}
+
+func TestExternalSignalByTimeUsesTradableReferenceSeries(t *testing.T) {
+	req := DatasetBuildRequest{Interval: "1d", StartTimeMs: 1000, EndTimeMs: 3000}
+	primary := datasetSeriesData{
+		Series: ResearchSeries{ID: "SOXL", SeriesType: SeriesTypeTradableAsset, DisplayName: "SOXL", DataSource: DataSourceYahoo, Tradable: true},
+		Role:   "primary_tradable",
+		Values: []DatasetValue{
+			{SeriesID: "SOXL", ObservedAtMs: 1000, AvailableAtMs: 1000, Close: 10, Value: 10},
+			{SeriesID: "SOXL", ObservedAtMs: 2000, AvailableAtMs: 2000, Close: 11, Value: 11},
+			{SeriesID: "SOXL", ObservedAtMs: 3000, AvailableAtMs: 3000, Close: 12, Value: 12},
+		},
+	}
+	reference := datasetSeriesData{
+		Series: ResearchSeries{ID: "TLT", SeriesType: SeriesTypeTradableAsset, DisplayName: "TLT", DataSource: DataSourceYahoo, Tradable: true},
+		Role:   "indicator",
+		Values: []DatasetValue{
+			{SeriesID: "TLT", ObservedAtMs: 1000, AvailableAtMs: 1000, Close: 90, Value: 90},
+			{SeriesID: "TLT", ObservedAtMs: 2000, AvailableAtMs: 2000, Close: 92, Value: 92},
+			{SeriesID: "TLT", ObservedAtMs: 3000, AvailableAtMs: 3000, Close: 96, Value: 96},
+		},
+	}
+	dataset := assembleDataset(req, []datasetSeriesData{primary, reference})
+	signals := ExternalSignalByTime(dataset)
+
+	if _, ok := signals[1000]; ok {
+		t.Fatal("first point should not have a z-score before any variance exists")
+	}
+	if signals[2000] <= 0 {
+		t.Fatalf("second signal = %.4f, want positive z-score", signals[2000])
 	}
 }
 
