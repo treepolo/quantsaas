@@ -300,6 +300,38 @@ func (DatasetMetadata) TableName() string {
 	return "dataset_metadata"
 }
 
+type ResearchDataset struct {
+	ID                  uint `gorm:"primaryKey"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	Name                string `gorm:"size:160;not null"`
+	Notes               string `gorm:"type:text"`
+	PrimaryInstrumentID string `gorm:"size:32;not null;index"`
+	PrimaryDataSource   string `gorm:"size:32;not null;index"`
+	PrimarySymbol       string `gorm:"size:64;not null;index"`
+	PrimaryInterval     string `gorm:"size:16;not null;index"`
+	StartTimeMs         int64  `gorm:"not null;default:0;index"`
+	EndTimeMs           int64  `gorm:"not null;default:0;index"`
+	MissingPolicy       string `gorm:"size:32;not null;default:empty"`
+	IndicatorAlgorithm  string `gorm:"size:80;not null;default:''"`
+	Config              JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+}
+
+type ResearchDatasetSeries struct {
+	ID           uint `gorm:"primaryKey"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	DatasetID    uint   `gorm:"not null;index;uniqueIndex:idx_research_dataset_series_unique"`
+	Role         string `gorm:"size:24;not null;index;uniqueIndex:idx_research_dataset_series_unique"`
+	SortOrder    int    `gorm:"not null;default:0;uniqueIndex:idx_research_dataset_series_unique"`
+	InstrumentID string `gorm:"size:32;not null;index"`
+	DataSource   string `gorm:"size:32;not null;index"`
+	Symbol       string `gorm:"size:64;not null;index"`
+	Interval     string `gorm:"size:16;not null;index"`
+
+	Dataset ResearchDataset `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
+}
+
 type DailyExecutionSnapshot struct {
 	ID           uint `gorm:"primaryKey"`
 	CreatedAt    time.Time

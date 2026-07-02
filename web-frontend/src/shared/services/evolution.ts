@@ -21,6 +21,7 @@ export type TraceSnapshot = {
 export type EvolutionTask = {
   id: number;
   strategy_id?: string;
+  research_dataset_id?: number;
   status: "pending" | "running" | "completed" | "failed" | "cancelled";
   progress: number;
   current_generation?: number;
@@ -139,6 +140,7 @@ export type GenomeRecord = {
 
 export type CreateTaskInput = {
   strategy_id: string;
+  research_dataset_id?: number;
   pair?: string;
   instrument_id?: string;
   data_source?: string;

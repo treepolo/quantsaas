@@ -47,6 +47,7 @@ type Service struct {
 
 type CreateTaskRequest struct {
 	StrategyID                string            `json:"strategy_id"`
+	ResearchDatasetID         uint              `json:"research_dataset_id"`
 	Pair                      string            `json:"pair"`
 	InstrumentID              string            `json:"instrument_id"`
 	DataSource                string            `json:"data_source"`
@@ -889,6 +890,16 @@ func (s *Service) loadChampionSpawn(ctx context.Context, req CreateTaskRequest) 
 }
 
 func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) CreateTaskRequest {
+	if req.ResearchDatasetID > 0 {
+		if dataset, err := s.loadResearchDataset(ctx, req.ResearchDatasetID); err == nil {
+			req.InstrumentID = dataset.primary.InstrumentID
+			req.Pair = dataset.primary.Symbol
+			req.DataSource = dataset.primary.DataSource
+			req.Interval = dataset.primary.Interval
+			req.TrainStartMs = dataset.record.StartTimeMs
+			req.TrainEndMs = dataset.record.EndTimeMs
+		}
+	}
 	if req.StrategyID == "" {
 		req.StrategyID = sigmoiddca.StrategyID
 	}
@@ -949,6 +960,15 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 }
 
 func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) error {
+	if req.ResearchDatasetID > 0 {
+		dataset, err := s.loadResearchDataset(ctx, req.ResearchDatasetID)
+		if err != nil {
+			return err
+		}
+		if len(dataset.indicators) > 0 && strings.TrimSpace(dataset.record.IndicatorAlgorithm) == "" {
+			return errors.New("此研究資料集含參考指標，但尚未指定已確認的指標演算法，因此不能開始參數搜尋")
+		}
+	}
 	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Pair, req.DataSource)
 	if err != nil {
 		return err
@@ -1028,6 +1048,46 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 		return errors.New("max_generations 必須介於 5 到 50")
 	}
 	return nil
+}
+
+type taskResearchDataset struct {
+	record     saasstore.ResearchDataset
+	primary    saasstore.ResearchDatasetSeries
+	indicators []saasstore.ResearchDatasetSeries
+}
+
+func (s *Service) loadResearchDataset(ctx context.Context, id uint) (taskResearchDataset, error) {
+	var record saasstore.ResearchDataset
+	if err := s.db.WithContext(ctx).First(&record, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return taskResearchDataset{}, fmt.Errorf("找不到研究資料集 #%d", id)
+		}
+		return taskResearchDataset{}, err
+	}
+	var rows []saasstore.ResearchDatasetSeries
+	if err := s.db.WithContext(ctx).
+		Where("dataset_id = ?", id).
+		Order("role ASC, sort_order ASC, id ASC").
+		Find(&rows).Error; err != nil {
+		return taskResearchDataset{}, err
+	}
+	out := taskResearchDataset{record: record}
+	for _, row := range rows {
+		if row.Role == "primary" {
+			out.primary = row
+		} else {
+			out.indicators = append(out.indicators, row)
+		}
+	}
+	if out.primary.InstrumentID == "" {
+		out.primary = saasstore.ResearchDatasetSeries{
+			InstrumentID: record.PrimaryInstrumentID,
+			DataSource:   record.PrimaryDataSource,
+			Symbol:       record.PrimarySymbol,
+			Interval:     record.PrimaryInterval,
+		}
+	}
+	return out, nil
 }
 
 func searchCosts(req CreateTaskRequest) quant.ExecutionCostConfig {

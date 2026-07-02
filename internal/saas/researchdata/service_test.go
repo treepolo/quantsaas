@@ -41,3 +41,20 @@ func TestNormalizeMissingPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestSearchReadinessRequiresConfirmedAlgorithmForIndicators(t *testing.T) {
+	canSearch, reason := searchReadiness(0, "", nil)
+	if !canSearch || reason != "" {
+		t.Fatalf("zero indicator readiness = %v %q, want true empty reason", canSearch, reason)
+	}
+
+	canSearch, reason = searchReadiness(1, "", nil)
+	if canSearch || reason == "" {
+		t.Fatalf("indicator without algorithm readiness = %v %q, want blocked", canSearch, reason)
+	}
+
+	canSearch, reason = searchReadiness(1, "confirmed-experiment", nil)
+	if !canSearch || reason != "" {
+		t.Fatalf("indicator with algorithm readiness = %v %q, want true empty reason", canSearch, reason)
+	}
+}

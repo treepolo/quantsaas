@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertTriangle, CheckCircle2, FlaskConical, Plus, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
+import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
 import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
+import { researchDataApi } from "../../shared/services/researchData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { StatusBadge } from "../../shared/ui/StatusBadge";
@@ -24,11 +25,6 @@ const traceModeOptions: Array<[TraceMode, string, string]> = [
 ];
 
 const SEARCH_INITIAL_CAPITAL = 1_000_000;
-
-type ReferenceIndicatorDraft = {
-  instrument_id: string;
-  interval: string;
-};
 
 function dateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -411,8 +407,11 @@ function dot(a: number[], b: number[]) {
 function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, string> }) {
   const queryClient = useQueryClient();
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
+  const researchDatasetsQuery = useQuery({ queryKey: ["research-datasets"], queryFn: () => researchDataApi.list() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
+  const researchDatasets = researchDatasetsQuery.data?.datasets ?? [];
   const [expanded, setExpanded] = useState(false);
+  const [researchDatasetId, setResearchDatasetId] = useState("");
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
   const selected = instruments.find((item) => item.id === instrumentId);
   const [interval, setInterval] = useState("1d");
@@ -437,42 +436,58 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [traceMode, setTraceMode] = useState<TraceMode>("off");
   const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(false);
   const [showLandscape, setShowLandscape] = useState(false);
-  const [referenceIndicators, setReferenceIndicators] = useState<ReferenceIndicatorDraft[]>([]);
   const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">("");
   const [continuousIterations, setContinuousIterations] = useState(3);
   const [continuousUnlimited, setContinuousUnlimited] = useState(false);
   const [standardStartDate, setStandardStartDate] = useState(startDate);
   const [standardEndDate, setStandardEndDate] = useState(endDate);
-  const datasetQuery = useQuery({
+  const selectedResearchDataset = useMemo(
+    () => researchDatasets.find((item) => String(item.id) === researchDatasetId),
+    [researchDatasetId, researchDatasets]
+  );
+  const marketDatasetQuery = useQuery({
     queryKey: ["market-data", selected?.id ?? instrumentId],
     queryFn: () => marketDataApi.status(selected?.id ?? instrumentId),
-    enabled: Boolean(selected?.id ?? instrumentId)
+    enabled: Boolean(selected?.id ?? instrumentId) && !selectedResearchDataset
   });
-  const selectedDataset = useMemo(
-    () => datasetQuery.data?.datasets.find((item) => item.interval === interval),
-    [datasetQuery.data, interval]
+  const selectedMarketDataset = useMemo(
+    () => marketDatasetQuery.data?.datasets.find((item) => item.interval === interval),
+    [marketDatasetQuery.data, interval]
   );
 
   useEffect(() => {
-    if (!selectedDataset?.first_open_ms || !selectedDataset?.last_open_ms) return;
-    const nextStart = msToDateInput(selectedDataset.first_open_ms);
-    const nextEnd = msToDateInput(selectedDataset.last_open_ms);
+    if (selectedResearchDataset) return;
+    if (!selectedMarketDataset?.first_open_ms || !selectedMarketDataset?.last_open_ms) return;
+    const nextStart = msToDateInput(selectedMarketDataset.first_open_ms);
+    const nextEnd = msToDateInput(selectedMarketDataset.last_open_ms);
     if (!nextStart || !nextEnd) return;
     setStartDate(nextStart);
     setEndDate(nextEnd);
     setStandardStartDate(nextStart);
     setStandardEndDate(nextEnd);
-  }, [instrumentId, interval, selectedDataset?.first_open_ms, selectedDataset?.last_open_ms]);
+  }, [instrumentId, interval, selectedMarketDataset?.first_open_ms, selectedMarketDataset?.last_open_ms, selectedResearchDataset]);
+
+  useEffect(() => {
+    if (!selectedResearchDataset) return;
+    setInstrumentId(selectedResearchDataset.primary.instrument_id);
+    setInterval(selectedResearchDataset.primary.interval);
+    const nextStart = msToDateInput(selectedResearchDataset.start_time_ms);
+    const nextEnd = msToDateInput(selectedResearchDataset.end_time_ms);
+    if (nextStart) setStartDate(nextStart);
+    if (nextEnd) setEndDate(nextEnd);
+    if (nextStart) setStandardStartDate(nextStart);
+    if (nextEnd) setStandardEndDate(nextEnd);
+  }, [selectedResearchDataset]);
   const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 1_000 });
   const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
   const animatedComputedUnits = useAnimatedNumber(running?.computed_units ?? 0);
-  const referenceIndicatorOptions = useMemo(() => instruments.filter((item) => item.id !== instrumentId), [instruments, instrumentId]);
-  const referenceIndicatorSearchBlocked = referenceIndicators.length > 0;
+  const researchDatasetSearchBlocked = Boolean(selectedResearchDataset && !selectedResearchDataset.can_search);
   const taskInput = useMemo<CreateTaskInput>(() => ({
     strategy_id: "sigmoid-dca-btc",
-    pair: selected?.symbol ?? instrumentId,
+    research_dataset_id: selectedResearchDataset?.id,
+    pair: selectedResearchDataset?.primary.symbol ?? selected?.symbol ?? instrumentId,
     instrument_id: instrumentId,
-    data_source: selected?.data_source,
+    data_source: selectedResearchDataset?.primary.data_source ?? selected?.data_source,
     interval,
     execution_mode: executionMode,
     train_start_ms: dayStartMs(startDate),
@@ -499,7 +514,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     continuous_unlimited: continuousUnlimited,
     standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
     standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined
-  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
   const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
   const computeEstimateQuery = useQuery({
     queryKey: ["evolution-compute-estimate", taskInput],
@@ -541,29 +556,19 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!enableWMean && !enableWMomentum && !enableWBreakout) return;
-    if (referenceIndicatorSearchBlocked) return;
+    if (researchDatasetSearchBlocked) return;
     createMutation.mutate();
   }
 
   function changeInstrument(nextId: string) {
+    setResearchDatasetId("");
     const next = instruments.find((item) => item.id === nextId);
     setInstrumentId(nextId);
     setInterval(next?.supported_intervals[0] ?? "1d");
-    setReferenceIndicators((current) => current.filter((item) => item.instrument_id !== nextId));
   }
 
-  function addReferenceIndicator() {
-    const next = referenceIndicatorOptions.find((item) => !referenceIndicators.some((indicator) => indicator.instrument_id === item.id));
-    if (!next) return;
-    setReferenceIndicators((current) => [...current, { instrument_id: next.id, interval: next.supported_intervals[0] ?? "1d" }]);
-  }
-
-  function updateReferenceIndicator(index: number, patch: Partial<ReferenceIndicatorDraft>) {
-    setReferenceIndicators((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
-  }
-
-  function removeReferenceIndicator(index: number) {
-    setReferenceIndicators((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  function changeResearchDataset(nextId: string) {
+    setResearchDatasetId(nextId);
   }
 
   if (running) {
@@ -678,62 +683,35 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
       </CardHeader>
       {expanded ? (
         <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
+          <Select
+            label="研究資料集"
+            value={researchDatasetId}
+            onChange={changeResearchDataset}
+            options={[
+              ["", "不使用資料集（既有單商品設定）"],
+              ...researchDatasets.map((item) => [String(item.id), `#${item.id} · ${item.name}`])
+            ]}
+          />
           <Select label="研究標的" value={instrumentId} onChange={changeInstrument} options={instruments.map((item) => [item.id, item.display_name])} />
           <Select label="資料週期" value={interval} onChange={setInterval} options={(selected?.supported_intervals ?? ["1d"]).map((item) => [item, intervalLabels[item] ?? item])} />
           <label><span className="mb-2 block text-sm text-slate-300">開始日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
           <label><span className="mb-2 block text-sm text-slate-300">結束日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
           <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes.map(([value, label]) => [value, label])} />
           <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
-          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-slate-300">參考指標</div>
-                <div className="mt-1 text-xs text-slate-500">可先建立研究資料集；正式指標演算法確認前，選了參考指標會禁止開始搜尋。</div>
+          {selectedResearchDataset ? (
+            <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+              <div className="text-sm font-semibold text-slate-300">已套用研究資料集</div>
+              <div className="mt-2 grid gap-2 text-sm md:grid-cols-4">
+                <InfoRow label="主商品" value={selectedResearchDataset.primary.display_name} />
+                <InfoRow label="資料週期" value={intervalLabels[selectedResearchDataset.primary.interval] ?? selectedResearchDataset.primary.interval} />
+                <InfoRow label="參考指標" value={`${selectedResearchDataset.indicators.length} 個`} />
+                <InfoRow label="缺值策略" value={selectedResearchDataset.missing_policy === "forward_fill" ? "延續前值" : selectedResearchDataset.missing_policy === "linear" ? "線性插值" : "保留空值"} />
               </div>
-              <Button type="button" variant="secondary" icon={Plus} onClick={addReferenceIndicator} disabled={!referenceIndicatorOptions.length}>
-                新增參考指標
-              </Button>
+              {selectedResearchDataset.search_blocked_reason ? <div className="mt-3 rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-3 py-2 text-sm leading-6 text-[#fde68a]">{selectedResearchDataset.search_blocked_reason}</div> : null}
             </div>
-            <div className="mt-3 grid gap-3">
-              {referenceIndicators.map((indicator, index) => {
-                const indicatorInstrument = instruments.find((item) => item.id === indicator.instrument_id);
-                const options = referenceIndicatorOptions.concat(indicatorInstrument && !referenceIndicatorOptions.some((item) => item.id === indicatorInstrument.id) ? [indicatorInstrument] : []);
-                return (
-                  <div key={`${indicator.instrument_id}-${index}`} className="grid gap-3 rounded-lg border border-white/[0.05] p-3 md:grid-cols-[1fr_220px_auto]">
-                    <label>
-                      <span className="mb-2 block text-xs text-slate-500">序列</span>
-                      <select
-                        className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
-                        value={indicator.instrument_id}
-                        onChange={(event) => {
-                          const next = instruments.find((item) => item.id === event.target.value);
-                          updateReferenceIndicator(index, { instrument_id: event.target.value, interval: next?.supported_intervals[0] ?? "1d" });
-                        }}
-                      >
-                        {options.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}
-                      </select>
-                    </label>
-                    <label>
-                      <span className="mb-2 block text-xs text-slate-500">週期</span>
-                      <select className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={indicator.interval} onChange={(event) => updateReferenceIndicator(index, { interval: event.target.value })}>
-                        {(indicatorInstrument?.supported_intervals ?? ["1d"]).map((item) => <option key={item} value={item}>{intervalLabels[item] ?? item}</option>)}
-                      </select>
-                    </label>
-                    <div className="flex items-end">
-                      <Button type="button" variant="danger" icon={Trash2} onClick={() => removeReferenceIndicator(index)}>移除</Button>
-                    </div>
-                  </div>
-                );
-              })}
-              {!referenceIndicators.length ? <div className="rounded-lg border border-white/[0.04] px-3 py-3 text-sm text-slate-500">未選參考指標，會使用既有單商品搜尋流程。</div> : null}
-            </div>
-            {referenceIndicatorSearchBlocked ? (
-              <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-3 py-2 text-sm leading-6 text-[#fde68a]">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>已選參考指標，但目前尚未啟用任何已確認的指標演算法；請先到「研究資料集」預覽資料，等指標演算法確定後才能開始搜尋。</span>
-              </div>
-            ) : null}
-          </div>
+          ) : (
+            <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm text-slate-500 md:col-span-2">未選研究資料集，會使用下方單商品設定，不含參考指標。</div>
+          )}
           <NumberInput label="族群數" min={10} max={500} value={population} onChange={setPopulation} />
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
           <ReadOnlyMetric label="初始本金" value={formatMoney(SEARCH_INITIAL_CAPITAL)} />
@@ -839,7 +817,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           </div>
           {showLandscape ? <ParameterLandscape query={landscapeQuery} /> : null}
           <div className="md:col-span-2">
-            <Button type="submit" loading={createMutation.isPending} disabled={referenceIndicatorSearchBlocked || (!enableWMean && !enableWMomentum && !enableWBreakout)}>開始搜尋</Button>
+            <Button type="submit" loading={createMutation.isPending} disabled={researchDatasetSearchBlocked || (!enableWMean && !enableWMomentum && !enableWBreakout)}>開始搜尋</Button>
             {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}
           </div>
         </form>

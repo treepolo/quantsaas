@@ -1,8 +1,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Layers3, Plus, Trash2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, CheckCircle2, Edit3, Layers3, Plus, Save, Trash2, X } from "lucide-react";
 import { marketDataApi, type ResearchInstrument } from "../../shared/services/marketData";
-import { researchDataApi, type IndicatorSelectionInput, type MissingPolicy, type SeriesPreview } from "../../shared/services/researchData";
+import { researchDataApi, type IndicatorSelectionInput, type MissingPolicy, type ResearchDataset, type ResearchDatasetInput, type SeriesPreview } from "../../shared/services/researchData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
@@ -36,6 +36,10 @@ function dayEndMs(value: string) {
   return new Date(`${value}T23:59:59.999Z`).getTime();
 }
 
+function msToDateInput(value?: number) {
+  return value ? new Date(value).toISOString().slice(0, 10) : "";
+}
+
 function formatMs(value?: number) {
   if (!value) return "尚無資料";
   return new Intl.DateTimeFormat("zh-TW", {
@@ -55,6 +59,20 @@ function defaultStart() {
 
 function firstInterval(instrument?: ResearchInstrument) {
   return instrument?.supported_intervals?.[0] ?? "1d";
+}
+
+function datasetToInput(dataset: ResearchDataset): ResearchDatasetInput {
+  return {
+    name: dataset.name,
+    notes: dataset.notes ?? "",
+    primary_instrument_id: dataset.primary.instrument_id,
+    primary_interval: dataset.primary.interval,
+    indicators: dataset.indicators.map((item) => ({ instrument_id: item.instrument_id, interval: item.interval })),
+    start_time_ms: dataset.start_time_ms,
+    end_time_ms: dataset.end_time_ms,
+    missing_policy: dataset.missing_policy,
+    indicator_algorithm: dataset.indicator_algorithm ?? ""
+  };
 }
 
 function SeriesPreviewRow({ title, series }: { title: string; series: SeriesPreview }) {
@@ -96,11 +114,20 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 export function ResearchDatasetPage() {
+  const queryClient = useQueryClient();
   const instrumentsQuery = useQuery({
     queryKey: ["market-data-instruments"],
     queryFn: () => marketDataApi.instruments()
   });
+  const datasetsQuery = useQuery({
+    queryKey: ["research-datasets"],
+    queryFn: () => researchDataApi.list()
+  });
   const instruments = instrumentsQuery.data?.instruments ?? [];
+  const datasets = datasetsQuery.data?.datasets ?? [];
+  const [editingID, setEditingID] = useState<number | null>(null);
+  const [name, setName] = useState("");
+  const [notes, setNotes] = useState("");
   const [primaryID, setPrimaryID] = useState("");
   const primary = instruments.find((item) => item.id === primaryID) ?? instruments[0];
   const [primaryInterval, setPrimaryInterval] = useState("1d");
@@ -116,23 +143,66 @@ export function ResearchDatasetPage() {
     }
   }, [instruments, primaryID]);
 
-  const previewMutation = useMutation({
-    mutationFn: () =>
-      researchDataApi.preview({
-        primary_instrument_id: primary?.id ?? primaryID,
-        primary_interval: primaryInterval,
-        indicators,
-        start_time_ms: dayStartMs(startDate),
-        end_time_ms: dayEndMs(endDate),
-        missing_policy: missingPolicy
-      })
+  const input = useMemo<ResearchDatasetInput>(() => ({
+    name,
+    notes,
+    primary_instrument_id: primary?.id ?? primaryID,
+    primary_interval: primaryInterval,
+    indicators,
+    start_time_ms: dayStartMs(startDate),
+    end_time_ms: dayEndMs(endDate),
+    missing_policy: missingPolicy
+  }), [endDate, indicators, missingPolicy, name, notes, primary?.id, primaryID, primaryInterval, startDate]);
+
+  const previewMutation = useMutation({ mutationFn: () => researchDataApi.preview(input) });
+  const saveMutation = useMutation({
+    mutationFn: () => (editingID ? researchDataApi.update(editingID, input) : researchDataApi.create(input)),
+    onSuccess: () => {
+      resetForm();
+      queryClient.invalidateQueries({ queryKey: ["research-datasets"] });
+    }
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => researchDataApi.delete(id),
+    onSuccess: () => {
+      if (editingID) resetForm();
+      queryClient.invalidateQueries({ queryKey: ["research-datasets"] });
+    }
   });
 
   const indicatorOptions = useMemo(() => instruments.filter((item) => item.id !== (primary?.id ?? primaryID)), [instruments, primary?.id, primaryID]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    previewMutation.mutate();
+    saveMutation.mutate();
+  }
+
+  function resetForm() {
+    setEditingID(null);
+    setName("");
+    setNotes("");
+    const first = instruments[0];
+    setPrimaryID(first?.id ?? "");
+    setPrimaryInterval(firstInterval(first));
+    setStartDate(defaultStart());
+    setEndDate(dateInputValue(new Date()));
+    setMissingPolicy("empty");
+    setIndicators([]);
+    previewMutation.reset();
+  }
+
+  function editDataset(dataset: ResearchDataset) {
+    const next = datasetToInput(dataset);
+    setEditingID(dataset.id);
+    setName(next.name ?? "");
+    setNotes(next.notes ?? "");
+    setPrimaryID(next.primary_instrument_id);
+    setPrimaryInterval(next.primary_interval);
+    setStartDate(msToDateInput(next.start_time_ms));
+    setEndDate(msToDateInput(next.end_time_ms));
+    setMissingPolicy(next.missing_policy);
+    setIndicators(next.indicators);
+    previewMutation.reset();
   }
 
   function changePrimary(nextID: string) {
@@ -160,17 +230,28 @@ export function ResearchDatasetPage() {
     <section className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold text-slate-100">研究資料集</h1>
-        <p className="mt-1 text-sm text-slate-400">預覽主商品與參考指標對齊結果；本頁不執行參數搜尋。</p>
+        <p className="mt-1 text-sm text-slate-400">建立主商品與參考指標的研究資料設定；參數搜尋頁會引用這裡保存的資料集。</p>
       </div>
 
       <Card>
         <CardHeader>
           <div>
-            <CardTitle>資料集設定</CardTitle>
-            <CardDescription>參考指標可為空；沒有參考指標時等同既有單商品模式。</CardDescription>
+            <CardTitle>{editingID ? `編輯資料集 #${editingID}` : "建立資料集"}</CardTitle>
+            <CardDescription>參考指標可以留空；只要含參考指標，在正式指標演算法確認前會禁止參數搜尋。</CardDescription>
           </div>
+          {editingID ? <Button type="button" variant="secondary" icon={X} onClick={resetForm}>取消編輯</Button> : null}
         </CardHeader>
         <form className="space-y-4" onSubmit={submit}>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label>
+              <span className="mb-2 block text-sm text-slate-300">資料集名稱</span>
+              <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={name} onChange={(event) => setName(event.target.value)} placeholder="留空會自動命名" />
+            </label>
+            <label>
+              <span className="mb-2 block text-sm text-slate-300">備註</span>
+              <input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="選填" />
+            </label>
+          </div>
           <div className="grid gap-4 md:grid-cols-5">
             <label>
               <span className="mb-2 block text-sm text-slate-300">主商品</span>
@@ -210,7 +291,7 @@ export function ResearchDatasetPage() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <div className="text-sm font-semibold text-slate-100">參考指標</div>
-                <div className="mt-1 text-xs text-slate-500">可加入多個，也可保持空白。</div>
+                <div className="mt-1 text-xs text-slate-500">可加入多個，也可以完全不加。</div>
               </div>
               <Button type="button" variant="secondary" icon={Plus} onClick={addIndicator} disabled={!indicatorOptions.length}>
                 新增參考指標
@@ -245,23 +326,29 @@ export function ResearchDatasetPage() {
                   </div>
                 );
               })}
-              {!indicators.length ? <div className="rounded-lg border border-white/[0.04] px-3 py-4 text-sm text-slate-500">目前沒有參考指標，資料集會維持單商品模式。</div> : null}
+              {!indicators.length ? <div className="rounded-lg border border-white/[0.04] px-3 py-4 text-sm text-slate-500">目前沒有參考指標；此資料集會維持既有單商品模式。</div> : null}
             </div>
           </div>
 
-          <Button className="w-full" icon={Layers3} loading={previewMutation.isPending} type="submit">
-            預覽資料集
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button icon={Layers3} loading={previewMutation.isPending} type="button" variant="secondary" onClick={() => previewMutation.mutate()}>
+              預覽對齊
+            </Button>
+            <Button icon={Save} loading={saveMutation.isPending} type="submit">
+              {editingID ? "儲存修改" : "建立資料集"}
+            </Button>
+          </div>
         </form>
         {previewMutation.error ? <div className="mt-4 text-sm text-[#fecaca]">{String(previewMutation.error.message)}</div> : null}
+        {saveMutation.error ? <div className="mt-4 text-sm text-[#fecaca]">{String(saveMutation.error.message)}</div> : null}
       </Card>
 
       {previewMutation.data ? (
         <Card>
           <CardHeader>
             <div>
-              <CardTitle>預覽結果</CardTitle>
-              <CardDescription>本結果只代表資料對齊狀態，不代表參考指標已參與參數搜尋。</CardDescription>
+              <CardTitle>對齊預覽</CardTitle>
+              <CardDescription>預覽只檢查資料品質；儲存後才會出現在參數搜尋頁。</CardDescription>
             </div>
             <div className={cn("rounded-full border px-3 py-1 text-xs", previewMutation.data.can_search ? "border-[#2dd4bf]/30 bg-[#2dd4bf]/10 text-[#99f6e4]" : "border-[#f59e0b]/30 bg-[#f59e0b]/10 text-[#fde68a]")}>
               {previewMutation.data.can_search ? "可搜尋" : "禁止搜尋"}
@@ -293,6 +380,40 @@ export function ResearchDatasetPage() {
           </div>
         </Card>
       ) : null}
+
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>已建立資料集</CardTitle>
+            <CardDescription>參數搜尋頁會從這份清單選擇資料來源。</CardDescription>
+          </div>
+        </CardHeader>
+        <div className="grid gap-3">
+          {datasets.map((dataset) => (
+            <div key={dataset.id} className="rounded-lg border border-white/[0.05] bg-white/[0.02] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-base font-semibold text-slate-100">#{dataset.id} · {dataset.name}</div>
+                  <div className="mt-1 text-sm text-slate-400">
+                    {dataset.primary.display_name} · {intervalLabels[dataset.primary.interval] ?? dataset.primary.interval} · {formatMs(dataset.start_time_ms)} - {formatMs(dataset.end_time_ms)}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    參考指標 {dataset.indicators.length} 個 · 缺值策略 {missingPolicyLabels[dataset.missing_policy]}
+                  </div>
+                  {dataset.notes ? <div className="mt-2 text-sm text-slate-300">{dataset.notes}</div> : null}
+                  {!dataset.can_search ? <div className="mt-2 text-sm text-[#fde68a]">{dataset.search_blocked_reason}</div> : null}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {dataset.can_search ? <CheckCircle2 className="h-5 w-5 text-[#2dd4bf]" /> : <AlertTriangle className="h-5 w-5 text-[#fbbf24]" />}
+                  <Button type="button" variant="secondary" icon={Edit3} onClick={() => editDataset(dataset)}>編輯</Button>
+                  <Button type="button" variant="danger" icon={Trash2} loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(dataset.id)}>刪除</Button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {!datasets.length ? <div className="rounded-lg border border-white/[0.04] px-4 py-6 text-sm text-slate-500">尚未建立資料集。</div> : null}
+        </div>
+      </Card>
     </section>
   );
 }

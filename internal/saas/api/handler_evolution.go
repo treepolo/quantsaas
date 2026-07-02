@@ -417,6 +417,7 @@ func championCacheKey(strategyID string) string {
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
 		Pair                      string  `json:"pair"`
+		ResearchDatasetID         uint    `json:"research_dataset_id"`
 		InstrumentID              string  `json:"instrument_id"`
 		DataSource                string  `json:"data_source"`
 		ExecutionMode             string  `json:"execution_mode"`
@@ -514,6 +515,7 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	return gin.H{
 		"id":                           task.ID,
 		"strategy_id":                  task.StrategyID,
+		"research_dataset_id":          cfg.ResearchDatasetID,
 		"status":                       task.Status,
 		"progress":                     task.Progress,
 		"current_generation":           currentGeneration,

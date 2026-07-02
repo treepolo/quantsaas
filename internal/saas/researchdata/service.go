@@ -2,6 +2,7 @@ package researchdata
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -18,11 +19,15 @@ const (
 	MissingPolicyEmpty       = "empty"
 	MissingPolicyForwardFill = "forward_fill"
 	MissingPolicyLinear      = "linear"
+
+	SeriesRolePrimary   = "primary"
+	SeriesRoleIndicator = "indicator"
 )
 
 var (
 	ErrInvalidDatasetRequest = errors.New("研究資料集設定不正確")
 	ErrMissingPrimaryData    = errors.New("主商品缺少可用資料")
+	ErrDatasetNotFound       = errors.New("找不到研究資料集")
 )
 
 type Service struct {
@@ -30,7 +35,9 @@ type Service struct {
 	marketData *marketdata.Service
 }
 
-type PreviewRequest struct {
+type DatasetRequest struct {
+	Name                string               `json:"name"`
+	Notes               string               `json:"notes"`
 	PrimaryInstrumentID string               `json:"primary_instrument_id"`
 	PrimaryInterval     string               `json:"primary_interval"`
 	Indicators          []IndicatorSelection `json:"indicators"`
@@ -40,9 +47,38 @@ type PreviewRequest struct {
 	IndicatorAlgorithm  string               `json:"indicator_algorithm"`
 }
 
+type PreviewRequest = DatasetRequest
+
 type IndicatorSelection struct {
 	InstrumentID string `json:"instrument_id"`
 	Interval     string `json:"interval"`
+}
+
+type DatasetResponse struct {
+	ID                  uint            `json:"id"`
+	Name                string          `json:"name"`
+	Notes               string          `json:"notes"`
+	Primary             DatasetSeries   `json:"primary"`
+	Indicators          []DatasetSeries `json:"indicators"`
+	StartTimeMs         int64           `json:"start_time_ms"`
+	EndTimeMs           int64           `json:"end_time_ms"`
+	MissingPolicy       string          `json:"missing_policy"`
+	IndicatorAlgorithm  string          `json:"indicator_algorithm"`
+	CanSearch           bool            `json:"can_search"`
+	SearchBlockedReason string          `json:"search_blocked_reason,omitempty"`
+	Warnings            []string        `json:"warnings,omitempty"`
+	Preview             *PreviewResult  `json:"preview,omitempty"`
+	CreatedAt           string          `json:"created_at"`
+	UpdatedAt           string          `json:"updated_at"`
+}
+
+type DatasetSeries struct {
+	InstrumentID string `json:"instrument_id"`
+	Symbol       string `json:"symbol"`
+	DisplayName  string `json:"display_name"`
+	DataSource   string `json:"data_source"`
+	Interval     string `json:"interval"`
+	SortOrder    int    `json:"sort_order"`
 }
 
 type PreviewResult struct {
@@ -80,11 +116,130 @@ type seriesPoint struct {
 	Close float64
 }
 
+type resolvedIndicator struct {
+	Instrument marketdata.ResearchInstrument
+	Interval   string
+}
+
 func NewService(db *gorm.DB) *Service {
 	return &Service{
 		db:         db,
 		marketData: marketdata.NewService(db, nil),
 	}
+}
+
+func (s *Service) List(ctx context.Context) ([]DatasetResponse, error) {
+	var rows []saasstore.ResearchDataset
+	if err := s.db.WithContext(ctx).Order("updated_at DESC, id DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]DatasetResponse, 0, len(rows))
+	for _, row := range rows {
+		item, err := s.responseForRecord(ctx, row, false)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (s *Service) Get(ctx context.Context, id uint, includePreview bool) (DatasetResponse, error) {
+	var row saasstore.ResearchDataset
+	if err := s.db.WithContext(ctx).First(&row, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return DatasetResponse{}, ErrDatasetNotFound
+		}
+		return DatasetResponse{}, err
+	}
+	return s.responseForRecord(ctx, row, includePreview)
+}
+
+func (s *Service) Create(ctx context.Context, req DatasetRequest) (DatasetResponse, error) {
+	normalized, primary, indicators, err := s.normalizeRequest(ctx, req)
+	if err != nil {
+		return DatasetResponse{}, err
+	}
+	if strings.TrimSpace(normalized.Name) == "" {
+		normalized.Name = defaultDatasetName(primary, normalized.PrimaryInterval, len(indicators))
+	}
+
+	var created saasstore.ResearchDataset
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		config, _ := saasstore.NewJSONB(map[string]any{})
+		created = saasstore.ResearchDataset{
+			Name:                normalized.Name,
+			Notes:               normalized.Notes,
+			PrimaryInstrumentID: primary.ID,
+			PrimaryDataSource:   primary.DataSource,
+			PrimarySymbol:       primary.Symbol,
+			PrimaryInterval:     normalized.PrimaryInterval,
+			StartTimeMs:         normalized.StartTimeMs,
+			EndTimeMs:           normalized.EndTimeMs,
+			MissingPolicy:       normalized.MissingPolicy,
+			IndicatorAlgorithm:  normalized.IndicatorAlgorithm,
+			Config:              config,
+		}
+		if err := tx.Create(&created).Error; err != nil {
+			return err
+		}
+		return replaceSeries(ctx, tx, created.ID, primary, normalized.PrimaryInterval, indicators)
+	})
+	if err != nil {
+		return DatasetResponse{}, err
+	}
+	return s.Get(ctx, created.ID, true)
+}
+
+func (s *Service) Update(ctx context.Context, id uint, req DatasetRequest) (DatasetResponse, error) {
+	normalized, primary, indicators, err := s.normalizeRequest(ctx, req)
+	if err != nil {
+		return DatasetResponse{}, err
+	}
+	if strings.TrimSpace(normalized.Name) == "" {
+		normalized.Name = defaultDatasetName(primary, normalized.PrimaryInterval, len(indicators))
+	}
+
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing saasstore.ResearchDataset
+		if err := tx.First(&existing, id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrDatasetNotFound
+			}
+			return err
+		}
+		updates := map[string]any{
+			"name":                  normalized.Name,
+			"notes":                 normalized.Notes,
+			"primary_instrument_id": primary.ID,
+			"primary_data_source":   primary.DataSource,
+			"primary_symbol":        primary.Symbol,
+			"primary_interval":      normalized.PrimaryInterval,
+			"start_time_ms":         normalized.StartTimeMs,
+			"end_time_ms":           normalized.EndTimeMs,
+			"missing_policy":        normalized.MissingPolicy,
+			"indicator_algorithm":   normalized.IndicatorAlgorithm,
+		}
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		return replaceSeries(ctx, tx, id, primary, normalized.PrimaryInterval, indicators)
+	})
+	if err != nil {
+		return DatasetResponse{}, err
+	}
+	return s.Get(ctx, id, true)
+}
+
+func (s *Service) Delete(ctx context.Context, id uint) error {
+	result := s.db.WithContext(ctx).Delete(&saasstore.ResearchDataset{}, id)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrDatasetNotFound
+	}
+	return nil
 }
 
 func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResult, error) {
@@ -114,7 +269,7 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 			EndTimeMs:           req.EndTimeMs,
 			ReferenceCount:      len(req.Indicators),
 			CanSearch:           false,
-			SearchBlockedReason: "主商品沒有可用資料，不能建立研究資料集。",
+			SearchBlockedReason: "主商品沒有可用資料，不能建立可搜尋的研究資料集",
 		}, nil
 	}
 
@@ -123,8 +278,6 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 		timeline = append(timeline, row.Time)
 	}
 	primary.AlignedRows = len(timeline)
-	primary.MissingRows = 0
-	primary.FilledRows = 0
 	primary.FirstAlignedTimeMs = timeline[0]
 	primary.LastAlignedTimeMs = timeline[len(timeline)-1]
 
@@ -165,27 +318,12 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 			preview.LastAlignedTimeMs = timeline[len(timeline)-1]
 		}
 		if selection.Interval != req.PrimaryInterval {
-			warnings = append(warnings, fmt.Sprintf("%s 使用 %s，與主商品 %s 不同，將依缺值策略對齊。", instrument.DisplayName, selection.Interval, req.PrimaryInterval))
+			warnings = append(warnings, fmt.Sprintf("%s 使用 %s，與主商品 %s 不同，會依缺值策略對齊", instrument.DisplayName, selection.Interval, req.PrimaryInterval))
 		}
 		indicators = append(indicators, preview)
 	}
 
-	blocked := ""
-	canSearch := true
-	if len(req.Indicators) > 0 && strings.TrimSpace(req.IndicatorAlgorithm) == "" {
-		canSearch = false
-		blocked = "已建立參考指標資料集，但尚未啟用任何已確認的指標演算法，因此不能開始參數搜尋。"
-	}
-	for _, indicator := range indicators {
-		if indicator.Error != "" {
-			canSearch = false
-			if blocked == "" {
-				blocked = "參考指標資料有錯誤，不能開始參數搜尋。"
-			}
-			break
-		}
-	}
-
+	canSearch, blocked := searchReadiness(len(req.Indicators), req.IndicatorAlgorithm, indicators)
 	return PreviewResult{
 		Primary:             primary,
 		Indicators:          indicators,
@@ -198,6 +336,154 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 		SearchBlockedReason: blocked,
 		Warnings:            warnings,
 	}, nil
+}
+
+func (s *Service) normalizeRequest(ctx context.Context, req DatasetRequest) (DatasetRequest, marketdata.ResearchInstrument, []resolvedIndicator, error) {
+	req.Name = strings.TrimSpace(req.Name)
+	req.Notes = strings.TrimSpace(req.Notes)
+	req.PrimaryInstrumentID = strings.TrimSpace(req.PrimaryInstrumentID)
+	req.PrimaryInterval = strings.TrimSpace(req.PrimaryInterval)
+	req.MissingPolicy = normalizeMissingPolicy(req.MissingPolicy)
+	req.IndicatorAlgorithm = strings.TrimSpace(req.IndicatorAlgorithm)
+	if req.PrimaryInstrumentID == "" || req.PrimaryInterval == "" {
+		return req, marketdata.ResearchInstrument{}, nil, fmt.Errorf("%w: 主商品與資料週期必填", ErrInvalidDatasetRequest)
+	}
+	if req.StartTimeMs <= 0 || req.EndTimeMs <= 0 || req.StartTimeMs > req.EndTimeMs {
+		return req, marketdata.ResearchInstrument{}, nil, fmt.Errorf("%w: 資料起訖時間不正確", ErrInvalidDatasetRequest)
+	}
+	primary, err := s.marketData.ResolveInstrument(ctx, req.PrimaryInstrumentID, "", "")
+	if err != nil {
+		return req, marketdata.ResearchInstrument{}, nil, err
+	}
+	indicators := make([]resolvedIndicator, 0, len(req.Indicators))
+	seen := map[string]bool{}
+	for index, selection := range req.Indicators {
+		selection.InstrumentID = strings.TrimSpace(selection.InstrumentID)
+		selection.Interval = strings.TrimSpace(selection.Interval)
+		if selection.InstrumentID == "" || selection.Interval == "" {
+			return req, marketdata.ResearchInstrument{}, nil, fmt.Errorf("%w: 第 %d 個參考指標不完整", ErrInvalidDatasetRequest, index+1)
+		}
+		if selection.InstrumentID == primary.ID {
+			return req, marketdata.ResearchInstrument{}, nil, fmt.Errorf("%w: 參考指標不能與主商品相同", ErrInvalidDatasetRequest)
+		}
+		key := selection.InstrumentID + "|" + selection.Interval
+		if seen[key] {
+			return req, marketdata.ResearchInstrument{}, nil, fmt.Errorf("%w: 參考指標重複", ErrInvalidDatasetRequest)
+		}
+		seen[key] = true
+		instrument, err := s.marketData.ResolveInstrument(ctx, selection.InstrumentID, "", "")
+		if err != nil {
+			return req, marketdata.ResearchInstrument{}, nil, err
+		}
+		req.Indicators[index] = selection
+		indicators = append(indicators, resolvedIndicator{Instrument: instrument, Interval: selection.Interval})
+	}
+	return req, primary, indicators, nil
+}
+
+func (s *Service) responseForRecord(ctx context.Context, row saasstore.ResearchDataset, includePreview bool) (DatasetResponse, error) {
+	var seriesRows []saasstore.ResearchDatasetSeries
+	if err := s.db.WithContext(ctx).
+		Where("dataset_id = ?", row.ID).
+		Order("role ASC, sort_order ASC, id ASC").
+		Find(&seriesRows).Error; err != nil {
+		return DatasetResponse{}, err
+	}
+	response := DatasetResponse{
+		ID:                 row.ID,
+		Name:               row.Name,
+		Notes:              row.Notes,
+		StartTimeMs:        row.StartTimeMs,
+		EndTimeMs:          row.EndTimeMs,
+		MissingPolicy:      normalizeMissingPolicy(row.MissingPolicy),
+		IndicatorAlgorithm: row.IndicatorAlgorithm,
+		CreatedAt:          row.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:          row.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}
+	for _, item := range seriesRows {
+		series := DatasetSeries{
+			InstrumentID: item.InstrumentID,
+			Symbol:       item.Symbol,
+			DisplayName:  item.Symbol,
+			DataSource:   item.DataSource,
+			Interval:     item.Interval,
+			SortOrder:    item.SortOrder,
+		}
+		if instrument, err := s.marketData.ResolveInstrument(ctx, item.InstrumentID, "", ""); err == nil {
+			series.DisplayName = instrument.DisplayName
+		}
+		if item.Role == SeriesRolePrimary {
+			response.Primary = series
+		} else {
+			response.Indicators = append(response.Indicators, series)
+		}
+	}
+	if response.Primary.InstrumentID == "" {
+		response.Primary = DatasetSeries{
+			InstrumentID: row.PrimaryInstrumentID,
+			Symbol:       row.PrimarySymbol,
+			DisplayName:  row.PrimarySymbol,
+			DataSource:   row.PrimaryDataSource,
+			Interval:     row.PrimaryInterval,
+		}
+	}
+	response.CanSearch, response.SearchBlockedReason = searchReadiness(len(response.Indicators), response.IndicatorAlgorithm, nil)
+	if includePreview {
+		preview, err := s.Preview(ctx, response.toRequest())
+		if err != nil {
+			return response, nil
+		}
+		response.Preview = &preview
+		response.CanSearch = preview.CanSearch
+		response.SearchBlockedReason = preview.SearchBlockedReason
+		response.Warnings = preview.Warnings
+	}
+	return response, nil
+}
+
+func (d DatasetResponse) toRequest() DatasetRequest {
+	indicators := make([]IndicatorSelection, 0, len(d.Indicators))
+	for _, item := range d.Indicators {
+		indicators = append(indicators, IndicatorSelection{InstrumentID: item.InstrumentID, Interval: item.Interval})
+	}
+	return DatasetRequest{
+		Name:                d.Name,
+		Notes:               d.Notes,
+		PrimaryInstrumentID: d.Primary.InstrumentID,
+		PrimaryInterval:     d.Primary.Interval,
+		Indicators:          indicators,
+		StartTimeMs:         d.StartTimeMs,
+		EndTimeMs:           d.EndTimeMs,
+		MissingPolicy:       d.MissingPolicy,
+		IndicatorAlgorithm:  d.IndicatorAlgorithm,
+	}
+}
+
+func replaceSeries(ctx context.Context, tx *gorm.DB, datasetID uint, primary marketdata.ResearchInstrument, primaryInterval string, indicators []resolvedIndicator) error {
+	if err := tx.WithContext(ctx).Where("dataset_id = ?", datasetID).Delete(&saasstore.ResearchDatasetSeries{}).Error; err != nil {
+		return err
+	}
+	rows := []saasstore.ResearchDatasetSeries{{
+		DatasetID:    datasetID,
+		Role:         SeriesRolePrimary,
+		SortOrder:    0,
+		InstrumentID: primary.ID,
+		DataSource:   primary.DataSource,
+		Symbol:       primary.Symbol,
+		Interval:     primaryInterval,
+	}}
+	for index, indicator := range indicators {
+		rows = append(rows, saasstore.ResearchDatasetSeries{
+			DatasetID:    datasetID,
+			Role:         SeriesRoleIndicator,
+			SortOrder:    index + 1,
+			InstrumentID: indicator.Instrument.ID,
+			DataSource:   indicator.Instrument.DataSource,
+			Symbol:       indicator.Instrument.Symbol,
+			Interval:     indicator.Interval,
+		})
+	}
+	return tx.WithContext(ctx).Create(&rows).Error
 }
 
 func (s *Service) loadSeries(ctx context.Context, instrument marketdata.ResearchInstrument, interval string, startMs int64, endMs int64) ([]seriesPoint, error) {
@@ -285,4 +571,31 @@ func normalizeMissingPolicy(value string) string {
 	default:
 		return MissingPolicyEmpty
 	}
+}
+
+func searchReadiness(indicatorCount int, algorithm string, indicators []SeriesPreview) (bool, string) {
+	for _, indicator := range indicators {
+		if indicator.Error != "" {
+			return false, "參考指標資料有錯誤，不能開始參數搜尋"
+		}
+	}
+	if indicatorCount > 0 && strings.TrimSpace(algorithm) == "" {
+		return false, "此資料集含參考指標，但尚未指定已確認的指標演算法，因此不能開始參數搜尋"
+	}
+	return true, ""
+}
+
+func defaultDatasetName(primary marketdata.ResearchInstrument, interval string, indicatorCount int) string {
+	if indicatorCount == 0 {
+		return fmt.Sprintf("%s %s 單商品資料集", primary.DisplayName, interval)
+	}
+	return fmt.Sprintf("%s %s + %d 個參考指標", primary.DisplayName, interval, indicatorCount)
+}
+
+func marshalConfig(v any) saasstore.JSONB {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return saasstore.JSONB(`{}`)
+	}
+	return saasstore.JSONB(raw)
 }
