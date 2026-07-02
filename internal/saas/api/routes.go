@@ -76,6 +76,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	bt := NewBacktestHandler(deps.Config.AppRole, deps.DB)
 	md := NewMarketDataHandler(deps.Config.AppRole, deps.DB)
 	research := NewResearchStatusHandler(deps.DB)
+	researchData := NewResearchDataHandler(deps.Config.AppRole, deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
@@ -105,6 +106,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/market-data/maintenance/audit/:id", md.AuditMaintenance)
 	lab.POST("/market-data/maintenance/repair", md.RepairMaintenance)
 	lab.POST("/market-data/maintenance/repair/:id", md.RepairMaintenance)
+	lab.POST("/research-datasets/preview", researchData.Preview)
 	lab.GET("/research/status", research.Status)
 
 	if deps.WSHandler != nil {

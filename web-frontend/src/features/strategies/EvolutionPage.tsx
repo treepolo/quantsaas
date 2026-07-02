@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, FlaskConical, Plus, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
 import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
@@ -24,6 +24,11 @@ const traceModeOptions: Array<[TraceMode, string, string]> = [
 ];
 
 const SEARCH_INITIAL_CAPITAL = 1_000_000;
+
+type ReferenceIndicatorDraft = {
+  instrument_id: string;
+  interval: string;
+};
 
 function dateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -432,6 +437,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [traceMode, setTraceMode] = useState<TraceMode>("off");
   const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(false);
   const [showLandscape, setShowLandscape] = useState(false);
+  const [referenceIndicators, setReferenceIndicators] = useState<ReferenceIndicatorDraft[]>([]);
   const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">("");
   const [continuousIterations, setContinuousIterations] = useState(3);
   const [continuousUnlimited, setContinuousUnlimited] = useState(false);
@@ -460,6 +466,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 1_000 });
   const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
   const animatedComputedUnits = useAnimatedNumber(running?.computed_units ?? 0);
+  const referenceIndicatorOptions = useMemo(() => instruments.filter((item) => item.id !== instrumentId), [instruments, instrumentId]);
+  const referenceIndicatorSearchBlocked = referenceIndicators.length > 0;
   const taskInput = useMemo<CreateTaskInput>(() => ({
     strategy_id: "sigmoid-dca-btc",
     pair: selected?.symbol ?? instrumentId,
@@ -533,6 +541,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!enableWMean && !enableWMomentum && !enableWBreakout) return;
+    if (referenceIndicatorSearchBlocked) return;
     createMutation.mutate();
   }
 
@@ -540,6 +549,21 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     const next = instruments.find((item) => item.id === nextId);
     setInstrumentId(nextId);
     setInterval(next?.supported_intervals[0] ?? "1d");
+    setReferenceIndicators((current) => current.filter((item) => item.instrument_id !== nextId));
+  }
+
+  function addReferenceIndicator() {
+    const next = referenceIndicatorOptions.find((item) => !referenceIndicators.some((indicator) => indicator.instrument_id === item.id));
+    if (!next) return;
+    setReferenceIndicators((current) => [...current, { instrument_id: next.id, interval: next.supported_intervals[0] ?? "1d" }]);
+  }
+
+  function updateReferenceIndicator(index: number, patch: Partial<ReferenceIndicatorDraft>) {
+    setReferenceIndicators((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)));
+  }
+
+  function removeReferenceIndicator(index: number) {
+    setReferenceIndicators((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   if (running) {
@@ -660,6 +684,56 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <label><span className="mb-2 block text-sm text-slate-300">結束日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
           <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes.map(([value, label]) => [value, label])} />
           <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-300">參考指標</div>
+                <div className="mt-1 text-xs text-slate-500">可先建立研究資料集；正式指標演算法確認前，選了參考指標會禁止開始搜尋。</div>
+              </div>
+              <Button type="button" variant="secondary" icon={Plus} onClick={addReferenceIndicator} disabled={!referenceIndicatorOptions.length}>
+                新增參考指標
+              </Button>
+            </div>
+            <div className="mt-3 grid gap-3">
+              {referenceIndicators.map((indicator, index) => {
+                const indicatorInstrument = instruments.find((item) => item.id === indicator.instrument_id);
+                const options = referenceIndicatorOptions.concat(indicatorInstrument && !referenceIndicatorOptions.some((item) => item.id === indicatorInstrument.id) ? [indicatorInstrument] : []);
+                return (
+                  <div key={`${indicator.instrument_id}-${index}`} className="grid gap-3 rounded-lg border border-white/[0.05] p-3 md:grid-cols-[1fr_220px_auto]">
+                    <label>
+                      <span className="mb-2 block text-xs text-slate-500">序列</span>
+                      <select
+                        className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]"
+                        value={indicator.instrument_id}
+                        onChange={(event) => {
+                          const next = instruments.find((item) => item.id === event.target.value);
+                          updateReferenceIndicator(index, { instrument_id: event.target.value, interval: next?.supported_intervals[0] ?? "1d" });
+                        }}
+                      >
+                        {options.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}
+                      </select>
+                    </label>
+                    <label>
+                      <span className="mb-2 block text-xs text-slate-500">週期</span>
+                      <select className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={indicator.interval} onChange={(event) => updateReferenceIndicator(index, { interval: event.target.value })}>
+                        {(indicatorInstrument?.supported_intervals ?? ["1d"]).map((item) => <option key={item} value={item}>{intervalLabels[item] ?? item}</option>)}
+                      </select>
+                    </label>
+                    <div className="flex items-end">
+                      <Button type="button" variant="danger" icon={Trash2} onClick={() => removeReferenceIndicator(index)}>移除</Button>
+                    </div>
+                  </div>
+                );
+              })}
+              {!referenceIndicators.length ? <div className="rounded-lg border border-white/[0.04] px-3 py-3 text-sm text-slate-500">未選參考指標，會使用既有單商品搜尋流程。</div> : null}
+            </div>
+            {referenceIndicatorSearchBlocked ? (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-3 py-2 text-sm leading-6 text-[#fde68a]">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>已選參考指標，但目前尚未啟用任何已確認的指標演算法；請先到「研究資料集」預覽資料，等指標演算法確定後才能開始搜尋。</span>
+              </div>
+            ) : null}
+          </div>
           <NumberInput label="族群數" min={10} max={500} value={population} onChange={setPopulation} />
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
           <ReadOnlyMetric label="初始本金" value={formatMoney(SEARCH_INITIAL_CAPITAL)} />
@@ -765,7 +839,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           </div>
           {showLandscape ? <ParameterLandscape query={landscapeQuery} /> : null}
           <div className="md:col-span-2">
-            <Button type="submit" loading={createMutation.isPending}>開始搜尋</Button>
+            <Button type="submit" loading={createMutation.isPending} disabled={referenceIndicatorSearchBlocked || (!enableWMean && !enableWMomentum && !enableWBreakout)}>開始搜尋</Button>
             {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}
           </div>
         </form>
