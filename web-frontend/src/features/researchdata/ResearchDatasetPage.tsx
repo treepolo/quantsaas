@@ -52,13 +52,16 @@ function formatMs(value?: number) {
   }).format(new Date(value));
 }
 
-function defaultStart() {
-  const now = new Date();
-  return dateInputValue(new Date(Date.UTC(now.getUTCFullYear() - 10, now.getUTCMonth(), now.getUTCDate())));
-}
-
 function firstInterval(instrument?: ResearchInstrument) {
   return instrument?.supported_intervals?.[0] ?? "1d";
+}
+
+function datasetStart(instrument?: ResearchInstrument, interval = "1d") {
+  const detected = instrument?.available_start_ms?.[interval];
+  if (detected && detected > 0) return dateInputValue(new Date(detected));
+  const starts = Object.values(instrument?.available_start_ms ?? {}).filter((value) => value > 0);
+  if (starts.length > 0) return dateInputValue(new Date(Math.min(...starts)));
+  return dateInputValue(new Date());
 }
 
 function datasetToInput(dataset: ResearchDataset): ResearchDatasetInput {
@@ -131,7 +134,7 @@ export function ResearchDatasetPage() {
   const [primaryID, setPrimaryID] = useState("");
   const primary = instruments.find((item) => item.id === primaryID) ?? instruments[0];
   const [primaryInterval, setPrimaryInterval] = useState("1d");
-  const [startDate, setStartDate] = useState(defaultStart());
+  const [startDate, setStartDate] = useState(dateInputValue(new Date()));
   const [endDate, setEndDate] = useState(dateInputValue(new Date()));
   const [missingPolicy, setMissingPolicy] = useState<MissingPolicy>("empty");
   const [indicators, setIndicators] = useState<IndicatorSelectionInput[]>([]);
@@ -139,7 +142,9 @@ export function ResearchDatasetPage() {
   useEffect(() => {
     if (!primaryID && instruments[0]) {
       setPrimaryID(instruments[0].id);
-      setPrimaryInterval(firstInterval(instruments[0]));
+      const nextInterval = firstInterval(instruments[0]);
+      setPrimaryInterval(nextInterval);
+      setStartDate(datasetStart(instruments[0], nextInterval));
     }
   }, [instruments, primaryID]);
 
@@ -182,9 +187,10 @@ export function ResearchDatasetPage() {
     setName("");
     setNotes("");
     const first = instruments[0];
+    const nextInterval = firstInterval(first);
     setPrimaryID(first?.id ?? "");
-    setPrimaryInterval(firstInterval(first));
-    setStartDate(defaultStart());
+    setPrimaryInterval(nextInterval);
+    setStartDate(datasetStart(first, nextInterval));
     setEndDate(dateInputValue(new Date()));
     setMissingPolicy("empty");
     setIndicators([]);
@@ -207,9 +213,16 @@ export function ResearchDatasetPage() {
 
   function changePrimary(nextID: string) {
     const next = instruments.find((item) => item.id === nextID);
+    const nextInterval = firstInterval(next);
     setPrimaryID(nextID);
-    setPrimaryInterval(firstInterval(next));
+    setPrimaryInterval(nextInterval);
+    setStartDate(datasetStart(next, nextInterval));
     setIndicators((current) => current.filter((item) => item.instrument_id !== nextID));
+  }
+
+  function changePrimaryInterval(nextInterval: string) {
+    setPrimaryInterval(nextInterval);
+    setStartDate(datasetStart(primary, nextInterval));
   }
 
   function addIndicator() {
@@ -263,7 +276,7 @@ export function ResearchDatasetPage() {
             </label>
             <label>
               <span className="mb-2 block text-sm text-slate-300">主商品週期</span>
-              <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={primaryInterval} onChange={(event) => setPrimaryInterval(event.target.value)}>
+              <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={primaryInterval} onChange={(event) => changePrimaryInterval(event.target.value)}>
                 {(primary?.supported_intervals ?? ["1d"]).map((item) => (
                   <option key={item} value={item}>{intervalLabels[item] ?? item}</option>
                 ))}
