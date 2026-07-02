@@ -29,6 +29,7 @@ const (
 	PriceAdjustmentRawExchange   = "raw_exchange_v1"
 	PriceAdjustmentYahooAdjusted = "yahoo_adjusted_ohlc_v1"
 	PriceAdjustmentYahooIntraday = "yahoo_raw_intraday_v1"
+	PriceAdjustmentFredValue     = "fred_observation_value_v1"
 
 	yahooUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 QuantSaaS/0.1"
 	yahooMinRequestInterval = 1200 * time.Millisecond
@@ -84,6 +85,7 @@ type Service struct {
 	db          *gorm.DB
 	client      *Client
 	yahooClient *YahooClient
+	fredClient  *FredClient
 	instruments *InstrumentStore
 	now         func() time.Time
 }
@@ -189,7 +191,7 @@ func NewService(db *gorm.DB, client *Client) *Service {
 	if client == nil {
 		client = NewClient(DefaultBaseURL)
 	}
-	return &Service{db: db, client: client, yahooClient: NewYahooClient(DefaultYahooBaseURL), instruments: NewInstrumentStore(db), now: func() time.Time { return time.Now().UTC() }}
+	return &Service{db: db, client: client, yahooClient: NewYahooClient(DefaultYahooBaseURL), fredClient: NewFredClient(DefaultFredBaseURL, ""), instruments: NewInstrumentStore(db), now: func() time.Time { return time.Now().UTC() }}
 }
 
 func NewClient(baseURL string) *Client {
@@ -299,6 +301,34 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 			}
 			result.PrecloseSnapshotCount = count
 		}
+		return result, nil
+	}
+	if req.DataSource == DataSourceFRED {
+		rows, err := s.fredClient.FetchObservations(ctx, req.Symbol, req.StartTimeMs, req.EndTimeMs)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		if len(rows) > 0 && isFullCoverageImport(existing, req) {
+			if err := s.deleteKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval); err != nil {
+				return ImportResult{}, err
+			}
+		}
+		stored, err := s.storeKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval, rows)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		result.FetchedBars = len(rows)
+		result.StoredBars = stored
+		if len(rows) > 0 {
+			result.FirstOpenMs = rows[0].OpenTime
+			result.LastOpenMs = rows[len(rows)-1].OpenTime
+		}
+		adjustment, err := s.recordDatasetMetadata(ctx, req, result, existing)
+		if err != nil {
+			return ImportResult{}, err
+		}
+		result.PriceAdjustment = adjustment
+		result.PriceAdjustmentLabel = priceAdjustmentLabel(adjustment)
 		return result, nil
 	}
 
@@ -856,6 +886,12 @@ func (s *Service) detectAvailableStart(ctx context.Context, instrument ResearchI
 			return 0, err
 		}
 		return firstRowOpenTime(rows), nil
+	case DataSourceFRED:
+		rows, err := s.fredClient.FetchObservations(ctx, instrument.Symbol, 0, end)
+		if err != nil {
+			return 0, err
+		}
+		return firstRowOpenTime(rows), nil
 	default:
 		return 0, ErrUnsupportedSource
 	}
@@ -1236,6 +1272,9 @@ func (s *Service) enrichPriceAdjustment(instrument ResearchInstrument, item *Dat
 }
 
 func currentPriceAdjustment(source string, interval string) string {
+	if normalizeSource(source) == DataSourceFRED {
+		return PriceAdjustmentFredValue
+	}
 	if normalizeSource(source) != DataSourceYahoo {
 		return PriceAdjustmentRawExchange
 	}
@@ -1253,6 +1292,9 @@ func priceAdjustmentLabel(value string) string {
 }
 
 func priceAdjustmentText(value string) (string, string) {
+	if value == PriceAdjustmentFredValue {
+		return "FRED 觀測值", "使用 FRED 單一日期觀測值；open/high/low/close 皆存為同一數值，供研究資料集對齊。"
+	}
 	switch value {
 	case PriceAdjustmentYahooAdjusted:
 		return "Yahoo 調整後價格", "使用 Yahoo adjclose 調整 OHLC，並回推修正大型公司行動斷層。"
@@ -1290,6 +1332,9 @@ func normalizeYahooRowsForStorage(req ImportRequest, rows []BinanceKLine, now ti
 }
 
 func expectedLatestOpenMs(instrument ResearchInstrument, interval string, now time.Time) int64 {
+	if instrument.DataSource == DataSourceFRED {
+		return 0
+	}
 	interval = normalizeInterval(interval)
 	switch interval {
 	case "1d":
@@ -2011,6 +2056,9 @@ func aggregatePeriodForInstrument(instrument ResearchInstrument, openTimeMs int6
 func isCanonicalKLineOpenTime(instrument ResearchInstrument, interval string, openTimeMs int64) bool {
 	if openTimeMs <= 0 {
 		return false
+	}
+	if instrument.DataSource == DataSourceFRED {
+		return normalizeInterval(interval) == "1d" && time.UnixMilli(openTimeMs).UTC().Format("15:04:05") == "00:00:00"
 	}
 	switch normalizeInterval(interval) {
 	case "1d":

@@ -36,6 +36,7 @@ services:
       REDIS_DB: "0"
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
       SERVER_ADDR: :8080
+      FRED_API_KEY: ${FRED_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy

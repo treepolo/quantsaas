@@ -19,6 +19,18 @@ const intervalLabels: Record<string, string> = {
 
 const yahooIntervals = ["1d", "1h", "1m", "1w", "1M"];
 const binanceIntervals = ["1d", "1h", "15m", "5m", "1m", "1s", "1w", "1M"];
+const fredIntervals = ["1d"];
+const builtinFredIndicators = [
+  { id: "UNRATE", symbol: "UNRATE", display_name: "美國失業率" },
+  { id: "SOFR", symbol: "SOFR", display_name: "SOFR 擔保隔夜融資利率" },
+  { id: "BAMLH0A0HYM2", symbol: "BAMLH0A0HYM2", display_name: "美國高收益債信用利差" }
+];
+
+function intervalsForSource(source?: string) {
+  if (source === "binance") return binanceIntervals;
+  if (source === "fred") return fredIntervals;
+  return yahooIntervals;
+}
 
 function dateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -59,6 +71,7 @@ function marketName(market?: string) {
   if (market === "tw") return "台股";
   if (market === "us") return "美股";
   if (market === "crypto") return "加密貨幣";
+  if (market === "macro") return "總經指標";
   return market || "其他";
 }
 
@@ -258,8 +271,8 @@ export function MarketDataPage() {
     setNewInstrument((current) => ({
       ...current,
       data_source: source,
-      market: source === "binance" ? "crypto" : current.market || "us",
-      supported_intervals: source === "binance" ? binanceIntervals : yahooIntervals
+      market: source === "binance" ? "crypto" : source === "fred" ? "macro" : current.market || "us",
+      supported_intervals: intervalsForSource(source)
     }));
   }
 
@@ -268,6 +281,18 @@ export function MarketDataPage() {
       const currentIntervals = current.supported_intervals ?? [];
       const next = currentIntervals.includes(value) ? currentIntervals.filter((item) => item !== value) : [...currentIntervals, value];
       return { ...current, supported_intervals: next };
+    });
+  }
+
+  function applyBuiltinFredIndicator(item: (typeof builtinFredIndicators)[number]) {
+    setNewInstrument({
+      id: item.id,
+      symbol: item.symbol,
+      display_name: item.display_name,
+      data_source: "fred",
+      market: "macro",
+      supported_intervals: fredIntervals,
+      sort_order: 1000
     });
   }
 
@@ -286,7 +311,7 @@ export function MarketDataPage() {
       const key = item.instrument.market ?? "other";
       groups.set(key, [...(groups.get(key) ?? []), item]);
     }
-    return ["tw", "us", "crypto", "other"].flatMap((key) => {
+    return ["tw", "us", "crypto", "macro", "other"].flatMap((key) => {
       const items = groups.get(key);
       return items?.length ? [{ key, items }] : [];
     });
@@ -544,6 +569,16 @@ export function MarketDataPage() {
             <CardDescription>新增或停用商品後，所有研究頁面會共用同一份清單。</CardDescription>
           </div>
         </CardHeader>
+        <div className="mb-4 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+          <div className="text-sm font-semibold text-slate-100">FRED 內建總經指標</div>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {builtinFredIndicators.map((item) => (
+              <Button key={item.id} type="button" variant="secondary" onClick={() => applyBuiltinFredIndicator(item)}>
+                {item.display_name}
+              </Button>
+            ))}
+          </div>
+        </div>
         <form className="grid gap-4 lg:grid-cols-6" onSubmit={submitNewInstrument}>
           <label>
             <span className="mb-2 block text-sm text-slate-300">代碼</span>
@@ -558,6 +593,7 @@ export function MarketDataPage() {
             <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={newInstrument.data_source} onChange={(event) => changeSource(event.target.value)}>
               <option value="yahoo">Yahoo Finance</option>
               <option value="binance">Binance</option>
+              <option value="fred">FRED</option>
             </select>
           </label>
           <label>
@@ -566,6 +602,7 @@ export function MarketDataPage() {
               <option value="us">美股</option>
               <option value="tw">台股</option>
               <option value="crypto">加密貨幣</option>
+              <option value="macro">總經指標</option>
               <option value="other">其他</option>
             </select>
           </label>
@@ -577,7 +614,7 @@ export function MarketDataPage() {
             <Button className="w-full" icon={Plus} loading={upsertMutation.isPending} type="submit">新增</Button>
           </div>
           <div className="flex flex-wrap gap-2 lg:col-span-6">
-            {((newInstrument.data_source === "binance" ? binanceIntervals : yahooIntervals)).map((item) => (
+            {intervalsForSource(newInstrument.data_source).map((item) => (
               <label key={item} className="inline-flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300">
                 <input className="h-3.5 w-3.5 accent-[#2dd4bf]" type="checkbox" checked={(newInstrument.supported_intervals ?? []).includes(item)} onChange={() => toggleNewInterval(item)} />
                 {intervalLabels[item] ?? item}

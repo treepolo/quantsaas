@@ -16,6 +16,7 @@ import (
 const (
 	DataSourceBinance = "binance"
 	DataSourceYahoo   = "yahoo"
+	DataSourceFRED    = "fred"
 
 	InstrumentBTCUSDT = "BTCUSDT"
 
@@ -63,6 +64,7 @@ type ReorderInstrumentRequest struct {
 
 var defaultYahooIntervals = []string{"1d", "1h", "1m", "1w", "1M"}
 var defaultBinanceIntervals = []string{"1d", "1h", "15m", "5m", "1m", "1s", "1w", "1M"}
+var defaultFredIntervals = []string{"1d"}
 
 var seededResearchInstruments = []ResearchInstrument{
 	{ID: "TQQQ", Symbol: "TQQQ", DisplayName: "TQQQ 三倍做多納指 ETF", DataSource: DataSourceYahoo, SupportedIntervals: defaultYahooIntervals, Market: "us", SortOrder: 10, Enabled: true},
@@ -74,6 +76,14 @@ var seededResearchInstruments = []ResearchInstrument{
 	{ID: "NDX", Symbol: "^NDX", DisplayName: "納斯達克 100 指數", DataSource: DataSourceYahoo, SupportedIntervals: defaultYahooIntervals, Market: "us", SortOrder: 70, Enabled: true},
 	{ID: "SOX", Symbol: "^SOX", DisplayName: "費城半導體指數", DataSource: DataSourceYahoo, SupportedIntervals: defaultYahooIntervals, Market: "us", SortOrder: 80, Enabled: true},
 	{ID: InstrumentBTCUSDT, Symbol: "BTCUSDT", DisplayName: "比特幣現貨", DataSource: DataSourceBinance, SupportedIntervals: defaultBinanceIntervals, Market: "crypto", SortOrder: 90, Enabled: true},
+}
+
+func init() {
+	seededResearchInstruments = append(seededResearchInstruments,
+		ResearchInstrument{ID: "UNRATE", Symbol: "UNRATE", DisplayName: "美國失業率", DataSource: DataSourceFRED, SupportedIntervals: defaultFredIntervals, Market: "macro", SortOrder: 200, Enabled: true},
+		ResearchInstrument{ID: "SOFR", Symbol: "SOFR", DisplayName: "SOFR 擔保隔夜融資利率", DataSource: DataSourceFRED, SupportedIntervals: defaultFredIntervals, Market: "macro", SortOrder: 210, Enabled: true},
+		ResearchInstrument{ID: "BAMLH0A0HYM2", Symbol: "BAMLH0A0HYM2", DisplayName: "美國高收益債信用利差", DataSource: DataSourceFRED, SupportedIntervals: defaultFredIntervals, Market: "macro", SortOrder: 220, Enabled: true},
+	)
 }
 
 func Instruments() []ResearchInstrument {
@@ -251,7 +261,7 @@ func normalizeUpsertInstrument(req UpsertInstrumentRequest) (ResearchInstrument,
 	if source == "" {
 		source = DataSourceYahoo
 	}
-	if source != DataSourceYahoo && source != DataSourceBinance {
+	if source != DataSourceYahoo && source != DataSourceBinance && source != DataSourceFRED {
 		return ResearchInstrument{}, ErrUnsupportedSource
 	}
 	symbol := normalizeSymbol(req.Symbol)
@@ -273,6 +283,8 @@ func normalizeUpsertInstrument(req UpsertInstrumentRequest) (ResearchInstrument,
 	if len(intervals) == 0 {
 		if source == DataSourceBinance {
 			intervals = defaultBinanceIntervals
+		} else if source == DataSourceFRED {
+			intervals = defaultFredIntervals
 		} else {
 			intervals = defaultYahooIntervals
 		}
@@ -312,6 +324,9 @@ func normalizeIntervals(values []string) []string {
 }
 
 func inferMarket(id string, symbol string, source string) string {
+	if source == DataSourceFRED {
+		return "macro"
+	}
 	if source == DataSourceBinance || strings.Contains(symbol, "USDT") {
 		return "crypto"
 	}

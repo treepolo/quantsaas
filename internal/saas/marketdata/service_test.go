@@ -251,6 +251,63 @@ func TestYahooClientAdjustsOHLCWithAdjustedClose(t *testing.T) {
 	}
 }
 
+func TestFredClientFetchObservationsParsesValues(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/fred/series/observations" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("series_id"); got != "UNRATE" {
+			t.Fatalf("series_id = %s", got)
+		}
+		if got := r.URL.Query().Get("api_key"); got != "test-key" {
+			t.Fatalf("api_key = %s", got)
+		}
+		if got := r.URL.Query().Get("file_type"); got != "json" {
+			t.Fatalf("file_type = %s", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"observations": [
+				{"date": "2026-01-01", "value": "4.1"},
+				{"date": "2026-02-01", "value": "."},
+				{"date": "2026-03-01", "value": "4.3"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewFredClient(server.URL, "test-key")
+	rows, err := client.FetchObservations(context.Background(), "UNRATE", time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), time.Date(2026, 3, 31, 0, 0, 0, 0, time.UTC).UnixMilli())
+	if err != nil {
+		t.Fatalf("FetchObservations failed: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows len = %d, want 2", len(rows))
+	}
+	if rows[0].OpenTime != time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli() || rows[0].Close != 4.1 {
+		t.Fatalf("unexpected first row: %+v", rows[0])
+	}
+	if rows[1].Open != 4.3 || rows[1].High != 4.3 || rows[1].Low != 4.3 || rows[1].Close != 4.3 || rows[1].Volume != 0 {
+		t.Fatalf("unexpected value mapping: %+v", rows[1])
+	}
+}
+
+func TestFredSourceDefaultsToDailyMacro(t *testing.T) {
+	instrument, err := normalizeUpsertInstrument(UpsertInstrumentRequest{
+		Symbol:     "SOFR",
+		DataSource: DataSourceFRED,
+	})
+	if err != nil {
+		t.Fatalf("normalizeUpsertInstrument failed: %v", err)
+	}
+	if instrument.DataSource != DataSourceFRED || instrument.Market != "macro" {
+		t.Fatalf("unexpected source/market: %+v", instrument)
+	}
+	if len(instrument.SupportedIntervals) != 1 || instrument.SupportedIntervals[0] != "1d" {
+		t.Fatalf("supported intervals = %+v", instrument.SupportedIntervals)
+	}
+}
+
 func TestDetectYahooAvailableStartUsesFirstReturnedRow(t *testing.T) {
 	first := time.Date(2010, 3, 11, 14, 30, 0, 0, time.UTC).Unix()
 	second := time.Date(2010, 3, 12, 14, 30, 0, 0, time.UTC).Unix()
