@@ -164,6 +164,31 @@ func TestSampleProducesValidForceThresholdOrder(t *testing.T) {
 	}
 }
 
+func TestNormalizeGeneDisablesGammaByDefault(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Chromosome.Gamma = 4.2
+
+	normalized := NewSigmoidDCAEvolvable().NormalizeGene(params.Chromosome, GeneOptions{
+		PositionStructure: sigmoiddca.PositionStructureFloatingOnly,
+	}).(quant.Chromosome)
+	if normalized.Gamma != 0 {
+		t.Fatalf("gamma = %.4f, want 0 when gamma evolution is disabled", normalized.Gamma)
+	}
+}
+
+func TestNormalizeGeneKeepsGammaWhenEnabled(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Chromosome.Gamma = 4.2
+
+	normalized := NewSigmoidDCAEvolvable().NormalizeGene(params.Chromosome, GeneOptions{
+		EvolveGamma:       true,
+		PositionStructure: sigmoiddca.PositionStructureFloatingOnly,
+	}).(quant.Chromosome)
+	if math.Abs(normalized.Gamma-4.2) > 1e-12 {
+		t.Fatalf("gamma = %.4f, want 4.2 when gamma evolution is enabled", normalized.Gamma)
+	}
+}
+
 func flatTestBars(n int) []quant.Bar {
 	start := time.Date(2026, 1, 2, 14, 30, 0, 0, time.UTC)
 	bars := make([]quant.Bar, 0, n)

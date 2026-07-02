@@ -168,6 +168,9 @@ func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
 	if !options.EvolveForceEmptyThreshold {
 		c.ForceEmptyThreshold = 0
 	}
+	if !options.EvolveGamma {
+		c.Gamma = 0
+	}
 	if !options.EnableWMean {
 		c.WMean = 0
 	}

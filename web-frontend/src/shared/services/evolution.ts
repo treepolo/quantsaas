@@ -37,6 +37,7 @@ export type EvolutionTask = {
   evolve_rebalance_threshold?: boolean;
   evolve_force_full_threshold?: boolean;
   evolve_force_empty_threshold?: boolean;
+  evolve_gamma?: boolean;
   enable_w_mean?: boolean;
   enable_w_momentum?: boolean;
   enable_w_breakout?: boolean;
@@ -105,6 +106,7 @@ export type GenomeRecord = {
     evolve_rebalance_threshold?: boolean;
     evolve_force_full_threshold?: boolean;
     evolve_force_empty_threshold?: boolean;
+    evolve_gamma?: boolean;
     enable_w_mean?: boolean;
     enable_w_momentum?: boolean;
     enable_w_breakout?: boolean;
@@ -114,6 +116,7 @@ export type GenomeRecord = {
       EvolveRebalanceThreshold?: boolean;
       EvolveForceFullThreshold?: boolean;
       EvolveForceEmptyThreshold?: boolean;
+      EvolveGamma?: boolean;
       EnableWMean?: boolean;
       EnableWMomentum?: boolean;
       EnableWBreakout?: boolean;
@@ -147,6 +150,7 @@ export type CreateTaskInput = {
   evolve_rebalance_threshold?: boolean;
   evolve_force_full_threshold?: boolean;
   evolve_force_empty_threshold?: boolean;
+  evolve_gamma?: boolean;
   enable_w_mean?: boolean;
   enable_w_momentum?: boolean;
   enable_w_breakout?: boolean;

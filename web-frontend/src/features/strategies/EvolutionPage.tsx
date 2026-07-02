@@ -420,6 +420,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(true);
   const [evolveForceFullThreshold, setEvolveForceFullThreshold] = useState(true);
   const [evolveForceEmptyThreshold, setEvolveForceEmptyThreshold] = useState(true);
+  const [evolveGamma, setEvolveGamma] = useState(false);
   const [enableWMean, setEnableWMean] = useState(true);
   const [enableWMomentum, setEnableWMomentum] = useState(true);
   const [enableWBreakout, setEnableWBreakout] = useState(true);
@@ -472,6 +473,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     evolve_rebalance_threshold: evolveRebalanceThreshold,
     evolve_force_full_threshold: evolveForceFullThreshold,
     evolve_force_empty_threshold: evolveForceEmptyThreshold,
+    evolve_gamma: evolveGamma,
     enable_w_mean: enableWMean,
     enable_w_momentum: enableWMomentum,
     enable_w_breakout: enableWBreakout,
@@ -489,7 +491,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     continuous_unlimited: continuousUnlimited,
     standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
     standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined
-  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveRebalanceThreshold, executionMode, feeRate, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
   const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
   const computeEstimateQuery = useQuery({
     queryKey: ["evolution-compute-estimate", taskInput],
@@ -588,6 +590,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <Metric label="初始本金" value={formatMoney(running.initial_capital ?? SEARCH_INITIAL_CAPITAL)} />
                 <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
                 <Metric label="調倉門檻" value={running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
+                <Metric label="倉位回饋 Gamma" value={running.evolve_gamma ? "參與演化" : "固定為 0"} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
                 <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
                 <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
@@ -680,6 +683,16 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 演化強制空倉門檻
               </label>
             </div>
+          </div>
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <div className="mb-2 text-sm font-semibold text-slate-300">倉位回饋</div>
+            <label className="flex items-start gap-3 text-sm text-slate-300">
+              <input className="mt-1" type="checkbox" checked={evolveGamma} onChange={(event) => setEvolveGamma(event.target.checked)} />
+              <span>
+                <span className="block">演化倉位回饋 Gamma</span>
+                <span className="mt-1 block text-xs text-slate-500">預設關閉；關閉時 Gamma 固定為 0，目標權重只由市場訊號產生。</span>
+              </span>
+            </label>
           </div>
           <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
           {!continuousUnlimited ? <NumberInput label="連續輪數" min={1} max={100} value={continuousIterations} onChange={setContinuousIterations} /> : <div />}
@@ -1031,6 +1044,7 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                     <InfoRow label="調倉門檻" value={searchConfig.evolve_rebalance_threshold || searchConfig.gene_options?.EvolveRebalanceThreshold || searchConfig.gene_options?.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                     <InfoRow label="強制滿倉門檻" value={searchConfig.evolve_force_full_threshold || searchConfig.gene_options?.EvolveForceFullThreshold ? "參與演化" : "固定為 100%"} />
                     <InfoRow label="強制空倉門檻" value={searchConfig.evolve_force_empty_threshold || searchConfig.gene_options?.EvolveForceEmptyThreshold ? "參與演化" : "固定為 0%"} />
+                    <InfoRow label="倉位回饋 Gamma" value={searchConfig.evolve_gamma || searchConfig.gene_options?.EvolveGamma ? "參與演化" : "固定為 0"} />
                     <InfoRow label="倉位結構" value={(searchConfig.position_structure ?? searchConfig.gene_options?.PositionStructure) === "floating_only" ? "純浮動模型" : "雙層模型"} />
                     <InfoRow label="啟用訊號" value={`${searchConfig.enable_w_mean ?? searchConfig.gene_options?.EnableWMean ?? true ? "均值" : "-"} / ${searchConfig.enable_w_momentum ?? searchConfig.gene_options?.EnableWMomentum ?? true ? "動能" : "-"} / ${searchConfig.enable_w_breakout ?? searchConfig.gene_options?.EnableWBreakout ?? true ? "突破" : "-"}`} />
                     <InfoRow label="每次交易懲罰" value={searchConfig.trade_penalty !== undefined ? Number(searchConfig.trade_penalty).toFixed(4) : "0.0000"} />

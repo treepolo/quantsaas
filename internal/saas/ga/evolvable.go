@@ -64,6 +64,7 @@ type GeneOptions struct {
 	EvolveRebalanceThreshold  bool
 	EvolveForceFullThreshold  bool
 	EvolveForceEmptyThreshold bool
+	EvolveGamma               bool
 	EnableWMean               bool
 	EnableWMomentum           bool
 	EnableWBreakout           bool

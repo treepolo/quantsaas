@@ -70,6 +70,7 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 			EvolveRebalanceThreshold:  true,
 			EvolveForceFullThreshold:  true,
 			EvolveForceEmptyThreshold: true,
+			EvolveGamma:               true,
 			EnableWMean:               true,
 			EnableWMomentum:           true,
 			EnableWBreakout:           true,
@@ -104,6 +105,9 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	}
 	if geneOptions["EvolveRebalanceThreshold"] != true {
 		t.Fatalf("EvolveRebalanceThreshold = %v, want true", geneOptions["EvolveRebalanceThreshold"])
+	}
+	if geneOptions["EvolveGamma"] != true {
+		t.Fatalf("EvolveGamma = %v, want true", geneOptions["EvolveGamma"])
 	}
 	if geneOptions["PositionStructure"] != "floating_only" {
 		t.Fatalf("PositionStructure = %v, want floating_only", geneOptions["PositionStructure"])

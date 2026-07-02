@@ -63,6 +63,7 @@ type CreateTaskRequest struct {
 	EvolveRebalanceThreshold  bool              `json:"evolve_rebalance_threshold"`
 	EvolveForceFullThreshold  bool              `json:"evolve_force_full_threshold"`
 	EvolveForceEmptyThreshold bool              `json:"evolve_force_empty_threshold"`
+	EvolveGamma               bool              `json:"evolve_gamma"`
 	EnableWMean               *bool             `json:"enable_w_mean"`
 	EnableWMomentum           *bool             `json:"enable_w_momentum"`
 	EnableWBreakout           *bool             `json:"enable_w_breakout"`
@@ -557,6 +558,7 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"evolve_rebalance_threshold":   req.EvolveRebalanceThreshold,
 		"evolve_force_full_threshold":  req.EvolveForceFullThreshold,
 		"evolve_force_empty_threshold": req.EvolveForceEmptyThreshold,
+		"evolve_gamma":                 req.EvolveGamma,
 		"enable_w_mean":                boolValue(req.EnableWMean),
 		"enable_w_momentum":            boolValue(req.EnableWMomentum),
 		"enable_w_breakout":            boolValue(req.EnableWBreakout),
@@ -1058,6 +1060,7 @@ func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
 		EvolveRebalanceThreshold:  req.EvolveRebalanceThreshold,
 		EvolveForceFullThreshold:  req.EvolveForceFullThreshold,
 		EvolveForceEmptyThreshold: req.EvolveForceEmptyThreshold,
+		EvolveGamma:               req.EvolveGamma,
 		EnableWMean:               boolValue(req.EnableWMean),
 		EnableWMomentum:           boolValue(req.EnableWMomentum),
 		EnableWBreakout:           boolValue(req.EnableWBreakout),

@@ -430,6 +430,7 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		EvolveRebalanceThreshold  bool    `json:"evolve_rebalance_threshold"`
 		EvolveForceFullThreshold  bool    `json:"evolve_force_full_threshold"`
 		EvolveForceEmptyThreshold bool    `json:"evolve_force_empty_threshold"`
+		EvolveGamma               bool    `json:"evolve_gamma"`
 		EnableWMean               bool    `json:"enable_w_mean"`
 		EnableWMomentum           bool    `json:"enable_w_momentum"`
 		EnableWBreakout           bool    `json:"enable_w_breakout"`
@@ -529,6 +530,7 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"evolve_rebalance_threshold":   cfg.EvolveRebalanceThreshold,
 		"evolve_force_full_threshold":  cfg.EvolveForceFullThreshold,
 		"evolve_force_empty_threshold": cfg.EvolveForceEmptyThreshold,
+		"evolve_gamma":                 cfg.EvolveGamma,
 		"enable_w_mean":                cfg.EnableWMean,
 		"enable_w_momentum":            cfg.EnableWMomentum,
 		"enable_w_breakout":            cfg.EnableWBreakout,
