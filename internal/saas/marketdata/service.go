@@ -904,11 +904,11 @@ func (s *Service) detectAvailableStart(ctx context.Context, instrument ResearchI
 		}
 		return firstRowOpenTime(rows), nil
 	case DataSourceFRED:
-		observationRows, err := s.fredClient.FetchObservations(ctx, instrument.Symbol, 0, end)
+		first, err := s.fredClient.FetchFirstObservationTime(ctx, instrument.Symbol)
 		if err != nil {
 			return 0, err
 		}
-		return firstRowOpenTime(fredObservationBars(observationRows)), nil
+		return first, nil
 	default:
 		return 0, ErrUnsupportedSource
 	}

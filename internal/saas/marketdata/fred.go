@@ -28,6 +28,7 @@ type FredClient struct {
 
 type fredObservationResponse struct {
 	Observations []fredObservation `json:"observations"`
+	Count        int               `json:"count"`
 	ErrorCode    int               `json:"error_code,omitempty"`
 	ErrorMessage string            `json:"error_message,omitempty"`
 }
@@ -81,6 +82,13 @@ func (c *FredClient) FetchObservations(ctx context.Context, seriesID string, sta
 	if strings.TrimSpace(c.APIKey) == "" {
 		return nil, fmt.Errorf("FRED_API_KEY is required")
 	}
+	hasRows, err := c.observationRangeHasRows(ctx, seriesID, startTimeMs, endTimeMs)
+	if err != nil {
+		return nil, err
+	}
+	if !hasRows {
+		return nil, nil
+	}
 	vintageDates, err := c.fetchVintageDates(ctx, seriesID, startTimeMs)
 	if err != nil {
 		return nil, err
@@ -111,6 +119,74 @@ func (c *FredClient) FetchObservations(ctx context.Context, seriesID string, sta
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Bar.OpenTime < rows[j].Bar.OpenTime })
 	return rows, nil
+}
+
+func (c *FredClient) FetchFirstObservationTime(ctx context.Context, seriesID string) (int64, error) {
+	seriesID = normalizeSymbol(seriesID)
+	if seriesID == "" {
+		return 0, ErrUnsupportedInstrument
+	}
+	if strings.TrimSpace(c.APIKey) == "" {
+		return 0, fmt.Errorf("FRED_API_KEY is required")
+	}
+	endpoint, err := url.Parse(c.BaseURL + "/fred/series/observations")
+	if err != nil {
+		return 0, err
+	}
+	query := endpoint.Query()
+	query.Set("series_id", seriesID)
+	query.Set("api_key", c.APIKey)
+	query.Set("file_type", "json")
+	query.Set("sort_order", "asc")
+	query.Set("limit", "1")
+	query.Set("output_type", "1")
+	endpoint.RawQuery = query.Encode()
+
+	var payload fredObservationResponse
+	if err := c.getJSON(ctx, endpoint.String(), &payload, "fred observations"); err != nil {
+		return 0, err
+	}
+	if payload.ErrorCode != 0 {
+		return 0, fmt.Errorf("fred error %d: %s", payload.ErrorCode, payload.ErrorMessage)
+	}
+	if len(payload.Observations) == 0 {
+		return 0, nil
+	}
+	date, err := time.Parse(fredDateLayout, payload.Observations[0].Date)
+	if err != nil {
+		return 0, err
+	}
+	return date.UTC().UnixMilli(), nil
+}
+
+func (c *FredClient) observationRangeHasRows(ctx context.Context, seriesID string, startTimeMs int64, endTimeMs int64) (bool, error) {
+	endpoint, err := url.Parse(c.BaseURL + "/fred/series/observations")
+	if err != nil {
+		return false, err
+	}
+	query := endpoint.Query()
+	query.Set("series_id", seriesID)
+	query.Set("api_key", c.APIKey)
+	query.Set("file_type", "json")
+	query.Set("sort_order", "asc")
+	query.Set("limit", "1")
+	query.Set("output_type", "1")
+	if startTimeMs > 0 {
+		query.Set("observation_start", time.UnixMilli(startTimeMs).UTC().Format(fredDateLayout))
+	}
+	if endTimeMs > 0 {
+		query.Set("observation_end", time.UnixMilli(endTimeMs).UTC().Format(fredDateLayout))
+	}
+	endpoint.RawQuery = query.Encode()
+
+	var payload fredObservationResponse
+	if err := c.getJSON(ctx, endpoint.String(), &payload, "fred observations"); err != nil {
+		return false, err
+	}
+	if payload.ErrorCode != 0 {
+		return false, fmt.Errorf("fred error %d: %s", payload.ErrorCode, payload.ErrorMessage)
+	}
+	return payload.Count > 0 || len(payload.Observations) > 0, nil
 }
 
 func (c *FredClient) fetchVintageDates(ctx context.Context, seriesID string, startTimeMs int64) ([]string, error) {

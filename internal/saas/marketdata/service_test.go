@@ -275,6 +275,13 @@ func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 			}`))
 			return
 		}
+		if got := r.URL.Query().Get("output_type"); got == "1" {
+			_, _ = w.Write([]byte(`{
+				"count": 3,
+				"observations": [{"date": "2026-01-01", "value": "4.1"}]
+			}`))
+			return
+		}
 		if got := r.URL.Query().Get("output_type"); got != "3" {
 			t.Fatalf("output_type = %s", got)
 		}
@@ -310,6 +317,37 @@ func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 	}
 	if rows[1].Bar.Open != 4.3 || rows[1].Bar.High != 4.3 || rows[1].Bar.Low != 4.3 || rows[1].Bar.Close != 4.3 || rows[1].Bar.Volume != 0 {
 		t.Fatalf("unexpected value mapping: %+v", rows[1])
+	}
+}
+
+func TestFredClientFetchObservationsSkipsVintageLookupWhenRangeIsEmpty(t *testing.T) {
+	calledVintageDates := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/fred/series/vintagedates" {
+			calledVintageDates = true
+			t.Fatalf("vintage dates should not be fetched for empty observation range")
+		}
+		if r.URL.Path != "/fred/series/observations" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("output_type"); got != "1" {
+			t.Fatalf("output_type = %s", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"count":0,"observations":[]}`))
+	}))
+	defer server.Close()
+
+	client := NewFredClient(server.URL, "test-key")
+	rows, err := client.FetchObservations(context.Background(), "SOFR", time.Date(2010, 3, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), time.Date(2016, 7, 3, 0, 0, 0, 0, time.UTC).UnixMilli())
+	if err != nil {
+		t.Fatalf("FetchObservations failed: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("rows len = %d, want 0", len(rows))
+	}
+	if calledVintageDates {
+		t.Fatalf("vintage dates should not have been called")
 	}
 }
 
