@@ -4,17 +4,25 @@
 
 ## 匯入規則
 
-FRED 匯入使用 `fred/series/observations`，並固定帶入：
+FRED 官方文件列出 `output_type=4` 可代表初次發布版本，但目前實測內建序列會回 HTTP 400。因此系統不直接使用 `output_type=4`。
+
+目前匯入流程：
+
+1. 使用 `fred/series/vintagedates` 取得該序列的 vintage date 清單。
+2. 分批呼叫 `fred/series/observations`，並帶入：
 
 - `file_type=json`
 - `sort_order=asc`
-- `output_type=4`
+- `output_type=2`
+- `vintage_dates=<分批 vintage date 清單>`
 
-`output_type=4` 代表只取初次發布版本。匯入時，系統會保存以下時間：
+3. 對每個 `observation_date`，取第一次出現有效值的 vintage date，視為初版發布日。
+
+匯入時，系統會保存以下時間：
 
 - `observation_date`：FRED 回傳的 `date`，存入 K 線 `open_time`，代表該筆資料描述的經濟期間。
-- `realtime_start`：FRED 回傳的初版即時起始日，存入 `k_line_observation_metadata.realtime_start_ms`。
-- `realtime_end`：FRED 回傳的初版即時結束日，存入 `k_line_observation_metadata.realtime_end_ms`。
+- `realtime_start`：該觀測值第一次出現有效值的 vintage date，存入 `k_line_observation_metadata.realtime_start_ms`。
+- `realtime_end`：目前與 `realtime_start` 相同，存入 `k_line_observation_metadata.realtime_end_ms`。
 - `available_at`：目前固定為 `realtime_start + 1 day`，存入 `k_line_observation_metadata.available_at_ms`。
 
 ## 對齊規則

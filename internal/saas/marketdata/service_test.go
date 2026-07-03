@@ -253,7 +253,7 @@ func TestYahooClientAdjustsOHLCWithAdjustedClose(t *testing.T) {
 
 func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/fred/series/observations" {
+		if r.URL.Path != "/fred/series/vintagedates" && r.URL.Path != "/fred/series/observations" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if got := r.URL.Query().Get("series_id"); got != "UNRATE" {
@@ -265,15 +265,27 @@ func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 		if got := r.URL.Query().Get("file_type"); got != "json" {
 			t.Fatalf("file_type = %s", got)
 		}
-		if got := r.URL.Query().Get("output_type"); got != "4" {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/fred/series/vintagedates" {
+			_, _ = w.Write([]byte(`{
+				"count": 4,
+				"offset": 0,
+				"limit": 1000,
+				"vintage_dates": ["2026-01-08", "2026-02-06", "2026-03-06", "2026-04-03"]
+			}`))
+			return
+		}
+		if got := r.URL.Query().Get("output_type"); got != "2" {
 			t.Fatalf("output_type = %s", got)
 		}
-		w.Header().Set("Content-Type", "application/json")
+		if got := r.URL.Query().Get("vintage_dates"); got != "2026-01-08,2026-02-06,2026-03-06,2026-04-03" {
+			t.Fatalf("vintage_dates = %s", got)
+		}
 		_, _ = w.Write([]byte(`{
 			"observations": [
-				{"realtime_start": "2026-01-08", "realtime_end": "2026-01-08", "date": "2026-01-01", "value": "4.1"},
-				{"realtime_start": "2026-02-06", "realtime_end": "2026-02-06", "date": "2026-02-01", "value": "."},
-				{"realtime_start": "2026-03-06", "realtime_end": "2026-03-06", "date": "2026-03-01", "value": "4.3"}
+				{"date": "2026-01-01", "UNRATE_20260108": "4.1", "UNRATE_20260206": "4.2"},
+				{"date": "2026-02-01", "UNRATE_20260206": "."},
+				{"date": "2026-03-01", "UNRATE_20260306": "4.3", "UNRATE_20260403": "4.4"}
 			]
 		}`))
 	}))
