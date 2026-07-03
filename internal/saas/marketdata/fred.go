@@ -17,7 +17,7 @@ import (
 const (
 	DefaultFredBaseURL = "https://api.stlouisfed.org"
 	fredDateLayout     = "2006-01-02"
-	fredVintageChunk   = 50
+	fredVintageChunk   = 500
 )
 
 type FredClient struct {
@@ -163,7 +163,7 @@ func (c *FredClient) fetchObservationVintages(ctx context.Context, seriesID stri
 	query.Set("file_type", "json")
 	query.Set("sort_order", "asc")
 	query.Set("limit", "100000")
-	query.Set("output_type", "2")
+	query.Set("output_type", "3")
 	query.Set("vintage_dates", strings.Join(vintageDates, ","))
 	if startTimeMs > 0 {
 		query.Set("observation_start", time.UnixMilli(startTimeMs).UTC().Format(fredDateLayout))

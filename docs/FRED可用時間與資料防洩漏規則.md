@@ -13,7 +13,7 @@ FRED 官方文件列出 `output_type=4` 可代表初次發布版本，但目前�
 
 - `file_type=json`
 - `sort_order=asc`
-- `output_type=2`
+- `output_type=3`
 - `vintage_dates=<分批 vintage date 清單>`
 
 3. 對每個 `observation_date`，取第一次出現有效值的 vintage date，視為初版發布日。

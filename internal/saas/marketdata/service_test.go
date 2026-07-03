@@ -275,7 +275,7 @@ func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 			}`))
 			return
 		}
-		if got := r.URL.Query().Get("output_type"); got != "2" {
+		if got := r.URL.Query().Get("output_type"); got != "3" {
 			t.Fatalf("output_type = %s", got)
 		}
 		if got := r.URL.Query().Get("vintage_dates"); got != "2026-01-08,2026-02-06,2026-03-06,2026-04-03" {
