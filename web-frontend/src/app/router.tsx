@@ -10,6 +10,7 @@ import { MarketStatusPage } from "../features/research/MarketStatusPage";
 import { EvolutionPage } from "../features/strategies/EvolutionPage";
 import { BacktestingPage } from "../features/backtesting/BacktestingPage";
 import { MarketDataPage } from "../features/marketdata/MarketDataPage";
+import { MarketDataGeneratorPage } from "../features/marketdata/MarketDataGeneratorPage";
 import { ResearchDatasetPage } from "../features/researchdata/ResearchDatasetPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 
@@ -58,6 +59,7 @@ export function AppRouter() {
               </Route>
               <Route element={<FeatureGate feature="backtesting" />}>
                 <Route path="data" element={<MarketDataPage />} />
+                <Route path="generator" element={<MarketDataGeneratorPage />} />
                 <Route path="datasets" element={<ResearchDatasetPage />} />
                 <Route path="status" element={<MarketStatusPage />} />
                 <Route path="backtesting" element={<BacktestingPage />} />

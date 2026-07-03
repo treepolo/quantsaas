@@ -102,6 +102,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.GET("/market-data/klines/overview", md.Overview)
 	lab.POST("/market-data/klines/import", md.Import)
 	lab.POST("/market-data/klines/update-latest", md.UpdateLatest)
+	lab.POST("/market-data/generate/leveraged", md.GenerateLeveraged)
 	lab.POST("/market-data/maintenance/audit", md.AuditMaintenance)
 	lab.POST("/market-data/maintenance/audit/:id", md.AuditMaintenance)
 	lab.POST("/market-data/maintenance/repair", md.RepairMaintenance)

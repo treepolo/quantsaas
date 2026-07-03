@@ -2,6 +2,7 @@ package marketdata
 
 import (
 	"context"
+	"errors"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +57,61 @@ func TestValidateImportRequestRejectsUnsupportedInterval(t *testing.T) {
 	})
 	if err != ErrUnsupportedInterval {
 		t.Fatalf("expected ErrUnsupportedInterval, got %v", err)
+	}
+}
+
+func TestBuildDailyLeveragedRowsUsesPreviousClose(t *testing.T) {
+	previousClose := 100.0
+	rows, usedFallback, err := buildDailyLeveragedRows([]BinanceKLine{
+		{OpenTime: 1000, Open: 110, Close: 120},
+		{OpenTime: 2000, Open: 126, Close: 108},
+	}, &previousClose, 2)
+	if err != nil {
+		t.Fatalf("buildDailyLeveragedRows failed: %v", err)
+	}
+	if usedFallback {
+		t.Fatal("did not expect fallback baseline")
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows len = %d, want 2", len(rows))
+	}
+	if !nearlyEqual(rows[0].Open, 1.2) || !nearlyEqual(rows[0].Close, 1.4) {
+		t.Fatalf("unexpected first row: %+v", rows[0])
+	}
+	if !nearlyEqual(rows[1].Open, 1.54) || !nearlyEqual(rows[1].Close, 1.12) {
+		t.Fatalf("unexpected second row: %+v", rows[1])
+	}
+	if !nearlyEqual(rows[1].High, 1.54) || !nearlyEqual(rows[1].Low, 1.12) {
+		t.Fatalf("unexpected high/low: %+v", rows[1])
+	}
+}
+
+func TestBuildDailyLeveragedRowsFallsBackToFirstOpen(t *testing.T) {
+	rows, usedFallback, err := buildDailyLeveragedRows([]BinanceKLine{
+		{OpenTime: 1000, Open: 100, Close: 110},
+		{OpenTime: 2000, Open: 121, Close: 99},
+	}, nil, 3)
+	if err != nil {
+		t.Fatalf("buildDailyLeveragedRows failed: %v", err)
+	}
+	if !usedFallback {
+		t.Fatal("expected fallback baseline")
+	}
+	if !nearlyEqual(rows[0].Open, 1) || !nearlyEqual(rows[0].Close, 1.3) {
+		t.Fatalf("unexpected first row: %+v", rows[0])
+	}
+	if !nearlyEqual(rows[1].Open, 1.69) || !nearlyEqual(rows[1].Close, 0.91) {
+		t.Fatalf("unexpected second row: %+v", rows[1])
+	}
+}
+
+func TestBuildDailyLeveragedRowsRejectsNonPositiveGeneratedPrice(t *testing.T) {
+	previousClose := 100.0
+	_, _, err := buildDailyLeveragedRows([]BinanceKLine{
+		{OpenTime: 1000, Open: 100, Close: 40},
+	}, &previousClose, 2)
+	if !errors.Is(err, ErrInvalidGenerateRequest) {
+		t.Fatalf("expected ErrInvalidGenerateRequest, got %v", err)
 	}
 }
 

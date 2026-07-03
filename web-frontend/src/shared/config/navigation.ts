@@ -7,7 +7,8 @@ import {
   Layers3,
   LucideIcon,
   Settings,
-  Telescope
+  Telescope,
+  WandSparkles
 } from "lucide-react";
 import type { AppFeature } from "./features";
 
@@ -23,6 +24,7 @@ export type NavItem = {
 export const navItems: NavItem[] = [
   { to: "/", labelKey: "nav.research", icon: Telescope, placement: "main", feature: "dashboard", end: true },
   { to: "/data", labelKey: "nav.marketData", icon: Database, placement: "main", feature: "backtesting" },
+  { to: "/generator", labelKey: "行情產生器", icon: WandSparkles, placement: "main", feature: "backtesting" },
   { to: "/datasets", labelKey: "研究資料集", icon: Layers3, placement: "main", feature: "backtesting" },
   { to: "/status", labelKey: "市場狀態", icon: Gauge, placement: "main", feature: "backtesting" },
   { to: "/evolution", labelKey: "nav.evolution", icon: FlaskConical, placement: "main", feature: "strategies" },

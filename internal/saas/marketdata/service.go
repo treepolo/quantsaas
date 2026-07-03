@@ -25,11 +25,12 @@ const (
 	DefaultYahooBaseURL = "https://query1.finance.yahoo.com"
 	DefaultSymbol       = "BTCUSDT"
 
-	PriceAdjustmentLegacyUnknown = "legacy_unknown"
-	PriceAdjustmentRawExchange   = "raw_exchange_v1"
-	PriceAdjustmentYahooAdjusted = "yahoo_adjusted_ohlc_v1"
-	PriceAdjustmentYahooIntraday = "yahoo_raw_intraday_v1"
-	PriceAdjustmentFredValue     = "fred_observation_value_v1"
+	PriceAdjustmentLegacyUnknown          = "legacy_unknown"
+	PriceAdjustmentRawExchange            = "raw_exchange_v1"
+	PriceAdjustmentYahooAdjusted          = "yahoo_adjusted_ohlc_v1"
+	PriceAdjustmentYahooIntraday          = "yahoo_raw_intraday_v1"
+	PriceAdjustmentFredValue              = "fred_observation_value_v1"
+	PriceAdjustmentGeneratedDailyLeverage = "generated_daily_leverage_v1"
 
 	FredAvailabilityRuleReleaseDate = "fred_release_date_v2"
 
@@ -627,6 +628,9 @@ func (s *Service) UpdateLatest(ctx context.Context) ([]AutoUpdateResult, error) 
 	results := make([]AutoUpdateResult, 0)
 	now := s.now()
 	for _, instrument := range instruments {
+		if instrument.DataSource == DataSourceGenerated {
+			continue
+		}
 		var instrumentErr string
 		for _, interval := range autoUpdateIntervals(instrument.SupportedIntervals) {
 			latestOpenMs := s.latestDatasetOpenMs(instrument, interval)
@@ -687,6 +691,21 @@ func (s *Service) RefreshAvailableStarts(ctx context.Context, instrumentID strin
 		Symbol:       instrument.Symbol,
 		Starts:       map[string]int64{},
 		Errors:       map[string]string{},
+	}
+	if instrument.DataSource == DataSourceGenerated {
+		for _, rawInterval := range instrument.SupportedIntervals {
+			interval := normalizeInterval(rawInterval)
+			if interval == "" {
+				continue
+			}
+			if bounds := s.datasetBounds(ctx, ImportRequest{InstrumentID: instrument.ID, DataSource: instrument.DataSource, Symbol: instrument.Symbol, Interval: interval}); bounds.FirstOpenMs > 0 {
+				result.Starts[interval] = bounds.FirstOpenMs
+			}
+		}
+		if len(result.Errors) == 0 {
+			result.Errors = nil
+		}
+		return result, nil
 	}
 	for interval, start := range instrument.AvailableStartMs {
 		if start > 0 {
@@ -1289,7 +1308,10 @@ func (s *Service) enrichPriceAdjustment(instrument ResearchInstrument, item *Dat
 }
 
 func currentPriceAdjustment(source string, interval string) string {
-	if normalizeSource(source) == DataSourceFRED {
+	switch normalizeSource(source) {
+	case DataSourceGenerated:
+		return PriceAdjustmentGeneratedDailyLeverage
+	case DataSourceFRED:
 		return PriceAdjustmentFredValue
 	}
 	if normalizeSource(source) != DataSourceYahoo {
@@ -1313,6 +1335,8 @@ func priceAdjustmentText(value string) (string, string) {
 		return "FRED 觀測值", "使用 FRED 單一日期觀測值；open/high/low/close 皆存為同一數值，供研究資料集對齊。"
 	}
 	switch value {
+	case PriceAdjustmentGeneratedDailyLeverage:
+		return "產生器每日倍數做多", "由已匯入母行情依每日倍數做多規則產生；成交量為 0，最高與最低價由開收價補齊。"
 	case PriceAdjustmentYahooAdjusted:
 		return "Yahoo 調整後價格", "使用 Yahoo adjclose 調整 OHLC，並回推修正大型公司行動斷層。"
 	case PriceAdjustmentYahooIntraday:

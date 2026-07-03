@@ -235,6 +235,33 @@ func (h *MarketDataHandler) Import(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (h *MarketDataHandler) GenerateLeveraged(c *gin.Context) {
+	if !h.canUseLab() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "lab/dev only"})
+		return
+	}
+	var req marketdata.GenerateLeveragedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := h.service.GenerateLeveraged(c.Request.Context(), req)
+	if err != nil {
+		switch {
+		case errors.Is(err, marketdata.ErrInvalidGenerateRequest),
+			errors.Is(err, marketdata.ErrInvalidRange),
+			errors.Is(err, marketdata.ErrUnsupportedInterval),
+			errors.Is(err, marketdata.ErrUnsupportedInstrument),
+			errors.Is(err, marketdata.ErrNoSourceRows):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *MarketDataHandler) canUseLab() bool {
 	return h.appRole == config.AppRoleLab || h.appRole == config.AppRoleDev
 }

@@ -86,6 +86,33 @@ export type ImportKLinesResult = {
   price_adjustment_label?: string;
 };
 
+export type GenerateLeveragedInput = {
+  source_instrument_id: string;
+  source_interval: string;
+  start_time_ms: number;
+  end_time_ms: number;
+  multiplier: number;
+  target_instrument_id: string;
+  target_symbol: string;
+  target_display_name?: string;
+};
+
+export type GenerateLeveragedResult = {
+  instrument: ResearchInstrument;
+  source_instrument_id: string;
+  source_data_source: string;
+  source_symbol: string;
+  interval: string;
+  multiplier: number;
+  generated_bars: number;
+  stored_bars: number;
+  first_open_ms?: number;
+  last_open_ms?: number;
+  used_fallback_baseline?: boolean;
+  price_adjustment?: string;
+  price_adjustment_label?: string;
+};
+
 export type AutoUpdateResult = {
   instrument_id: string;
   data_source: string;
@@ -179,6 +206,12 @@ export const marketDataApi = {
   },
   importKLines(input: ImportKLinesInput) {
     return apiFetch<ImportKLinesResult>("/market-data/klines/import", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  },
+  generateLeveraged(input: GenerateLeveragedInput) {
+    return apiFetch<GenerateLeveragedResult>("/market-data/generate/leveraged", {
       method: "POST",
       body: JSON.stringify(input)
     });

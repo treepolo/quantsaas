@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	DataSourceBinance = "binance"
-	DataSourceYahoo   = "yahoo"
-	DataSourceFRED    = "fred"
+	DataSourceBinance   = "binance"
+	DataSourceYahoo     = "yahoo"
+	DataSourceFRED      = "fred"
+	DataSourceGenerated = "generated"
 
 	InstrumentBTCUSDT = "BTCUSDT"
 
@@ -261,7 +262,7 @@ func normalizeUpsertInstrument(req UpsertInstrumentRequest) (ResearchInstrument,
 	if source == "" {
 		source = DataSourceYahoo
 	}
-	if source != DataSourceYahoo && source != DataSourceBinance && source != DataSourceFRED {
+	if source != DataSourceYahoo && source != DataSourceBinance && source != DataSourceFRED && source != DataSourceGenerated {
 		return ResearchInstrument{}, ErrUnsupportedSource
 	}
 	symbol := normalizeSymbol(req.Symbol)
@@ -285,6 +286,8 @@ func normalizeUpsertInstrument(req UpsertInstrumentRequest) (ResearchInstrument,
 			intervals = defaultBinanceIntervals
 		} else if source == DataSourceFRED {
 			intervals = defaultFredIntervals
+		} else if source == DataSourceGenerated {
+			intervals = []string{"1d"}
 		} else {
 			intervals = defaultYahooIntervals
 		}
@@ -326,6 +329,9 @@ func normalizeIntervals(values []string) []string {
 func inferMarket(id string, symbol string, source string) string {
 	if source == DataSourceFRED {
 		return "macro"
+	}
+	if source == DataSourceGenerated {
+		return "generated"
 	}
 	if source == DataSourceBinance || strings.Contains(symbol, "USDT") {
 		return "crypto"
