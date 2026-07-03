@@ -216,7 +216,7 @@ func buildDailyLeveragedRows(sourceRows []BinanceKLine, previousClose *float64, 
 		return nil, false, ErrNoSourceRows
 	}
 	out := make([]BinanceKLine, 0, len(sourceRows))
-	prevChildClose := 1.0
+	prevChildClose := 10000.0
 	prevSourceClose := 0.0
 	usedFallback := previousClose == nil
 	if previousClose != nil {
@@ -229,7 +229,7 @@ func buildDailyLeveragedRows(sourceRows []BinanceKLine, previousClose *float64, 
 		childOpen := 0.0
 		childClose := 0.0
 		if index == 0 && usedFallback {
-			childOpen = 1
+			childOpen = prevChildClose
 			childClose = prevChildClose * (1 + multiplier*(row.Close/row.Open-1))
 		} else {
 			if prevSourceClose <= 0 {
