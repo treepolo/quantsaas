@@ -282,6 +282,26 @@ type KLine struct {
 	Volume       float64 `gorm:"type:numeric(30,10);not null"`
 }
 
+type KLineObservationMetadata struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	InstrumentID      string `gorm:"size:32;not null;index"`
+	Source            string `gorm:"size:32;not null;index;uniqueIndex:idx_kline_observation_metadata_identity"`
+	Symbol            string `gorm:"size:64;not null;index;uniqueIndex:idx_kline_observation_metadata_identity"`
+	Interval          string `gorm:"size:16;not null;index;uniqueIndex:idx_kline_observation_metadata_identity"`
+	OpenTime          int64  `gorm:"not null;index;uniqueIndex:idx_kline_observation_metadata_identity"`
+	ObservationTimeMs int64  `gorm:"not null;default:0"`
+	RealtimeStartMs   int64  `gorm:"not null;default:0"`
+	RealtimeEndMs     int64  `gorm:"not null;default:0"`
+	AvailableAtMs     int64  `gorm:"not null;default:0;index"`
+	AvailabilityRule  string `gorm:"size:80;not null;default:fred_realtime_start_plus_1d_v1"`
+}
+
+func (KLineObservationMetadata) TableName() string {
+	return "k_line_observation_metadata"
+}
+
 type DatasetMetadata struct {
 	ID              uint `gorm:"primaryKey"`
 	CreatedAt       time.Time

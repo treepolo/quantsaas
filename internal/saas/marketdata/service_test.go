@@ -265,12 +265,15 @@ func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 		if got := r.URL.Query().Get("file_type"); got != "json" {
 			t.Fatalf("file_type = %s", got)
 		}
+		if got := r.URL.Query().Get("output_type"); got != "4" {
+			t.Fatalf("output_type = %s", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
 			"observations": [
-				{"date": "2026-01-01", "value": "4.1"},
-				{"date": "2026-02-01", "value": "."},
-				{"date": "2026-03-01", "value": "4.3"}
+				{"realtime_start": "2026-01-08", "realtime_end": "2026-01-08", "date": "2026-01-01", "value": "4.1"},
+				{"realtime_start": "2026-02-06", "realtime_end": "2026-02-06", "date": "2026-02-01", "value": "."},
+				{"realtime_start": "2026-03-06", "realtime_end": "2026-03-06", "date": "2026-03-01", "value": "4.3"}
 			]
 		}`))
 	}))
@@ -284,10 +287,16 @@ func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows len = %d, want 2", len(rows))
 	}
-	if rows[0].OpenTime != time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli() || rows[0].Close != 4.1 {
+	if rows[0].Bar.OpenTime != time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli() || rows[0].Bar.Close != 4.1 {
 		t.Fatalf("unexpected first row: %+v", rows[0])
 	}
-	if rows[1].Open != 4.3 || rows[1].High != 4.3 || rows[1].Low != 4.3 || rows[1].Close != 4.3 || rows[1].Volume != 0 {
+	if rows[0].RealtimeStartMs != time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC).UnixMilli() {
+		t.Fatalf("unexpected realtime_start: %+v", rows[0])
+	}
+	if rows[0].AvailableAtMs != time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC).UnixMilli() {
+		t.Fatalf("unexpected available_at: %+v", rows[0])
+	}
+	if rows[1].Bar.Open != 4.3 || rows[1].Bar.High != 4.3 || rows[1].Bar.Low != 4.3 || rows[1].Bar.Close != 4.3 || rows[1].Bar.Volume != 0 {
 		t.Fatalf("unexpected value mapping: %+v", rows[1])
 	}
 }

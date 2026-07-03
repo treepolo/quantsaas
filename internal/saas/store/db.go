@@ -47,6 +47,7 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		&BacktestRun{},
 		&ResearchInstrument{},
 		&KLine{},
+		&KLineObservationMetadata{},
 		&DatasetMetadata{},
 		&ResearchDataset{},
 		&ResearchDatasetSeries{},

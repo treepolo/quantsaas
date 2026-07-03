@@ -30,8 +30,18 @@ type fredObservationResponse struct {
 }
 
 type fredObservation struct {
-	Date  string `json:"date"`
-	Value string `json:"value"`
+	RealtimeStart string `json:"realtime_start"`
+	RealtimeEnd   string `json:"realtime_end"`
+	Date          string `json:"date"`
+	Value         string `json:"value"`
+}
+
+type FredObservationRow struct {
+	Bar               BinanceKLine
+	ObservationTimeMs int64
+	RealtimeStartMs   int64
+	RealtimeEndMs     int64
+	AvailableAtMs     int64
 }
 
 func NewFredClient(baseURL string, apiKey string) *FredClient {
@@ -50,7 +60,7 @@ func NewFredClient(baseURL string, apiKey string) *FredClient {
 	}
 }
 
-func (c *FredClient) FetchObservations(ctx context.Context, seriesID string, startTimeMs int64, endTimeMs int64) ([]BinanceKLine, error) {
+func (c *FredClient) FetchObservations(ctx context.Context, seriesID string, startTimeMs int64, endTimeMs int64) ([]FredObservationRow, error) {
 	seriesID = normalizeSymbol(seriesID)
 	if seriesID == "" {
 		return nil, ErrUnsupportedInstrument
@@ -68,6 +78,7 @@ func (c *FredClient) FetchObservations(ctx context.Context, seriesID string, sta
 	query.Set("file_type", "json")
 	query.Set("sort_order", "asc")
 	query.Set("limit", "100000")
+	query.Set("output_type", "4")
 	if startTimeMs > 0 {
 		query.Set("observation_start", time.UnixMilli(startTimeMs).UTC().Format(fredDateLayout))
 	}
@@ -99,23 +110,41 @@ func (c *FredClient) FetchObservations(ctx context.Context, seriesID string, sta
 	if payload.ErrorCode != 0 {
 		return nil, fmt.Errorf("fred error %d: %s", payload.ErrorCode, payload.ErrorMessage)
 	}
-	rows := make([]BinanceKLine, 0, len(payload.Observations))
+	rows := make([]FredObservationRow, 0, len(payload.Observations))
 	for _, item := range payload.Observations {
 		date, err := time.Parse(fredDateLayout, item.Date)
 		if err != nil {
 			continue
 		}
+		realtimeStart, err := time.Parse(fredDateLayout, item.RealtimeStart)
+		if err != nil {
+			continue
+		}
+		realtimeEnd := realtimeStart
+		if strings.TrimSpace(item.RealtimeEnd) != "" {
+			if parsed, err := time.Parse(fredDateLayout, item.RealtimeEnd); err == nil {
+				realtimeEnd = parsed
+			}
+		}
 		value, err := strconv.ParseFloat(strings.TrimSpace(item.Value), 64)
 		if err != nil {
 			continue
 		}
-		rows = append(rows, BinanceKLine{
-			OpenTime: date.UTC().UnixMilli(),
-			Open:     value,
-			High:     value,
-			Low:      value,
-			Close:    value,
-			Volume:   0,
+		observationTimeMs := date.UTC().UnixMilli()
+		realtimeStartMs := realtimeStart.UTC().UnixMilli()
+		rows = append(rows, FredObservationRow{
+			Bar: BinanceKLine{
+				OpenTime: observationTimeMs,
+				Open:     value,
+				High:     value,
+				Low:      value,
+				Close:    value,
+				Volume:   0,
+			},
+			ObservationTimeMs: observationTimeMs,
+			RealtimeStartMs:   realtimeStartMs,
+			RealtimeEndMs:     realtimeEnd.UTC().UnixMilli(),
+			AvailableAtMs:     realtimeStart.UTC().AddDate(0, 0, 1).UnixMilli(),
 		})
 	}
 	return rows, nil

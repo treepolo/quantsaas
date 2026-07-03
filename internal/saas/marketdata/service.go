@@ -31,6 +31,8 @@ const (
 	PriceAdjustmentYahooIntraday = "yahoo_raw_intraday_v1"
 	PriceAdjustmentFredValue     = "fred_observation_value_v1"
 
+	FredAvailabilityRuleReleasePlusOneDay = "fred_realtime_start_plus_1d_v1"
+
 	yahooUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 QuantSaaS/0.1"
 	yahooMinRequestInterval = 1200 * time.Millisecond
 	yahooDailyReadyDelay    = 90 * time.Minute
@@ -304,10 +306,11 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 		return result, nil
 	}
 	if req.DataSource == DataSourceFRED {
-		rows, err := s.fredClient.FetchObservations(ctx, req.Symbol, req.StartTimeMs, req.EndTimeMs)
+		observationRows, err := s.fredClient.FetchObservations(ctx, req.Symbol, req.StartTimeMs, req.EndTimeMs)
 		if err != nil {
 			return ImportResult{}, err
 		}
+		rows := fredObservationBars(observationRows)
 		if len(rows) > 0 && isFullCoverageImport(existing, req) {
 			if err := s.deleteKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval); err != nil {
 				return ImportResult{}, err
@@ -315,6 +318,9 @@ func (s *Service) Import(ctx context.Context, req ImportRequest) (ImportResult, 
 		}
 		stored, err := s.storeKLines(ctx, req.InstrumentID, req.DataSource, req.Symbol, req.Interval, rows)
 		if err != nil {
+			return ImportResult{}, err
+		}
+		if err := s.storeKLineObservationMetadata(ctx, req, observationRows); err != nil {
 			return ImportResult{}, err
 		}
 		result.FetchedBars = len(rows)
@@ -501,10 +507,21 @@ func (s *Service) deleteKLinesReturningRows(ctx context.Context, instrumentID st
 	if s.db == nil {
 		return 0, nil
 	}
-	tx := s.db.WithContext(ctx).
+	db := s.db.WithContext(ctx)
+	tx := db.
 		Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ?", instrumentID, source, symbol, interval).
 		Delete(&saasstore.KLine{})
-	return tx.RowsAffected, tx.Error
+	if tx.Error != nil {
+		return tx.RowsAffected, tx.Error
+	}
+	if source == DataSourceFRED {
+		if err := db.
+			Where("source = ? AND symbol = ? AND interval = ?", source, symbol, interval).
+			Delete(&saasstore.KLineObservationMetadata{}).Error; err != nil {
+			return tx.RowsAffected, err
+		}
+	}
+	return tx.RowsAffected, nil
 }
 
 func (s *Service) recordDatasetMetadata(ctx context.Context, req ImportRequest, result ImportResult, existing datasetBounds) (string, error) {
@@ -887,11 +904,11 @@ func (s *Service) detectAvailableStart(ctx context.Context, instrument ResearchI
 		}
 		return firstRowOpenTime(rows), nil
 	case DataSourceFRED:
-		rows, err := s.fredClient.FetchObservations(ctx, instrument.Symbol, 0, end)
+		observationRows, err := s.fredClient.FetchObservations(ctx, instrument.Symbol, 0, end)
 		if err != nil {
 			return 0, err
 		}
-		return firstRowOpenTime(rows), nil
+		return firstRowOpenTime(fredObservationBars(observationRows)), nil
 	default:
 		return 0, ErrUnsupportedSource
 	}
@@ -1443,6 +1460,55 @@ func (s *Service) storeKLines(ctx context.Context, instrumentID string, source s
 		}),
 	}).CreateInBatches(records, 1000)
 	return tx.RowsAffected, tx.Error
+}
+
+func (s *Service) storeKLineObservationMetadata(ctx context.Context, req ImportRequest, rows []FredObservationRow) error {
+	if s.db == nil || len(rows) == 0 {
+		return nil
+	}
+	now := s.now()
+	records := make([]saasstore.KLineObservationMetadata, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, saasstore.KLineObservationMetadata{
+			CreatedAt:         now,
+			UpdatedAt:         now,
+			InstrumentID:      req.InstrumentID,
+			Source:            req.DataSource,
+			Symbol:            req.Symbol,
+			Interval:          req.Interval,
+			OpenTime:          row.Bar.OpenTime,
+			ObservationTimeMs: row.ObservationTimeMs,
+			RealtimeStartMs:   row.RealtimeStartMs,
+			RealtimeEndMs:     row.RealtimeEndMs,
+			AvailableAtMs:     row.AvailableAtMs,
+			AvailabilityRule:  FredAvailabilityRuleReleasePlusOneDay,
+		})
+	}
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "source"},
+			{Name: "symbol"},
+			{Name: "interval"},
+			{Name: "open_time"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{
+			"instrument_id",
+			"observation_time_ms",
+			"realtime_start_ms",
+			"realtime_end_ms",
+			"available_at_ms",
+			"availability_rule",
+			"updated_at",
+		}),
+	}).CreateInBatches(records, 1000).Error
+}
+
+func fredObservationBars(rows []FredObservationRow) []BinanceKLine {
+	out := make([]BinanceKLine, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.Bar)
+	}
+	return out
 }
 
 func (s *Service) importPrecloseSnapshots(ctx context.Context, req ImportRequest) (int64, error) {

@@ -112,8 +112,9 @@ type SeriesPreview struct {
 }
 
 type seriesPoint struct {
-	Time  int64
-	Close float64
+	Time          int64
+	AvailableTime int64
+	Close         float64
 }
 
 type resolvedIndicator struct {
@@ -498,8 +499,26 @@ func (s *Service) loadSeries(ctx context.Context, instrument marketdata.Research
 		return nil, err
 	}
 	points := make([]seriesPoint, 0, len(rows))
+	availability := map[int64]int64{}
+	if instrument.DataSource == marketdata.DataSourceFRED && len(rows) > 0 {
+		var metadata []saasstore.KLineObservationMetadata
+		if err := s.db.WithContext(ctx).
+			Where("source = ? AND symbol = ? AND interval = ? AND open_time BETWEEN ? AND ?", instrument.DataSource, instrument.Symbol, interval, startMs, endMs).
+			Find(&metadata).Error; err != nil {
+			return nil, err
+		}
+		for _, item := range metadata {
+			if item.AvailabilityRule == marketdata.FredAvailabilityRuleReleasePlusOneDay && item.AvailableAtMs > 0 {
+				availability[item.OpenTime] = item.AvailableAtMs
+			}
+		}
+	}
 	for _, row := range rows {
-		points = append(points, seriesPoint{Time: row.OpenTime, Close: row.Close})
+		availableAt := row.OpenTime
+		if instrument.DataSource == marketdata.DataSourceFRED {
+			availableAt = availability[row.OpenTime]
+		}
+		points = append(points, seriesPoint{Time: row.OpenTime, AvailableTime: availableAt, Close: row.Close})
 	}
 	return points, nil
 }
@@ -532,7 +551,7 @@ func alignStats(timeline []int64, rows []seriesPoint, policy string) (aligned in
 		byTime[row.Time] = row
 	}
 	for _, ts := range timeline {
-		if _, ok := byTime[ts]; ok {
+		if row, ok := byTime[ts]; ok && pointAvailableAt(row, ts) {
 			aligned++
 			continue
 		}
@@ -547,19 +566,41 @@ func alignStats(timeline []int64, rows []seriesPoint, policy string) (aligned in
 }
 
 func valueAvailableAt(ts int64, rows []seriesPoint, policy string) bool {
+	normalized := normalizeSeriesPoints(rows)
 	switch policy {
 	case MissingPolicyForwardFill:
-		idx := sort.Search(len(rows), func(i int) bool { return rows[i].Time > ts })
-		return idx > 0
-	case MissingPolicyLinear:
-		idx := sort.Search(len(rows), func(i int) bool { return rows[i].Time >= ts })
-		if idx < len(rows) && rows[idx].Time == ts {
-			return !math.IsNaN(rows[idx].Close)
+		idx := sort.Search(len(normalized), func(i int) bool { return normalized[i].Time > ts })
+		for i := idx - 1; i >= 0; i-- {
+			if pointAvailableAt(normalized[i], ts) {
+				return true
+			}
 		}
-		return idx > 0 && idx < len(rows)
+		return false
+	case MissingPolicyLinear:
+		idx := sort.Search(len(normalized), func(i int) bool { return normalized[i].Time >= ts })
+		if idx < len(normalized) && normalized[idx].Time == ts {
+			return pointAvailableAt(normalized[idx], ts) && !math.IsNaN(normalized[idx].Close)
+		}
+		if idx <= 0 || idx >= len(normalized) {
+			return false
+		}
+		return pointAvailableAt(normalized[idx-1], ts) && pointAvailableAt(normalized[idx], ts)
 	default:
 		return false
 	}
+}
+
+func normalizeSeriesPoints(rows []seriesPoint) []seriesPoint {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := append([]seriesPoint(nil), rows...)
+	sort.Slice(out, func(i, j int) bool { return out[i].Time < out[j].Time })
+	return out
+}
+
+func pointAvailableAt(row seriesPoint, ts int64) bool {
+	return row.AvailableTime > 0 && row.AvailableTime <= ts
 }
 
 func normalizeMissingPolicy(value string) string {

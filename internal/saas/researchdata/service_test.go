@@ -1,12 +1,20 @@
 package researchdata
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestAlignStatsMissingPolicies(t *testing.T) {
-	timeline := []int64{10, 20, 30, 40}
+	timeline := []int64{
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC).UnixMilli(),
+	}
 	rows := []seriesPoint{
-		{Time: 10, Close: 1},
-		{Time: 30, Close: 3},
+		{Time: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), AvailableTime: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli(), Close: 1},
+		{Time: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(), AvailableTime: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(), Close: 3},
 	}
 
 	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyEmpty)
@@ -20,8 +28,8 @@ func TestAlignStatsMissingPolicies(t *testing.T) {
 	}
 
 	aligned, missing, filled = alignStats(timeline, rows, MissingPolicyLinear)
-	if aligned != 3 || missing != 1 || filled != 1 {
-		t.Fatalf("linear = aligned %d missing %d filled %d, want 3/1/1", aligned, missing, filled)
+	if aligned != 2 || missing != 2 || filled != 0 {
+		t.Fatalf("linear = aligned %d missing %d filled %d, want 2/2/0", aligned, missing, filled)
 	}
 }
 
@@ -39,6 +47,36 @@ func TestNormalizeMissingPolicy(t *testing.T) {
 		if got := normalizeMissingPolicy(tt.input); got != tt.want {
 			t.Fatalf("normalizeMissingPolicy(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestAlignStatsRespectsIndicatorAvailability(t *testing.T) {
+	timeline := []int64{
+		time.Date(2026, 1, 2, 21, 30, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 1, 5, 21, 30, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 1, 6, 21, 30, 0, 0, time.UTC).UnixMilli(),
+	}
+	rows := []seriesPoint{
+		{
+			Time:          time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC).UnixMilli(),
+			AvailableTime: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(),
+			Close:         4.1,
+		},
+		{
+			Time:          time.Date(2026, 1, 6, 0, 0, 0, 0, time.UTC).UnixMilli(),
+			AvailableTime: time.Date(2026, 1, 7, 0, 0, 0, 0, time.UTC).UnixMilli(),
+			Close:         4.2,
+		},
+	}
+
+	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyEmpty)
+	if aligned != 0 || missing != 3 || filled != 0 {
+		t.Fatalf("availability empty = aligned %d missing %d filled %d, want 0/3/0", aligned, missing, filled)
+	}
+
+	aligned, missing, filled = alignStats(timeline, rows, MissingPolicyForwardFill)
+	if aligned != 2 || missing != 1 || filled != 2 {
+		t.Fatalf("availability forward_fill = aligned %d missing %d filled %d, want 2/1/2", aligned, missing, filled)
 	}
 }
 
