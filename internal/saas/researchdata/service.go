@@ -550,12 +550,23 @@ func alignStats(timeline []int64, rows []seriesPoint, policy string) (aligned in
 	for _, row := range rows {
 		byTime[row.Time] = row
 	}
+	normalized := normalizeSeriesPoints(rows)
+	hasReleaseAvailability := hasAvailability(rows)
+	normalizedByRelease := []seriesPoint(nil)
+	if hasReleaseAvailability {
+		normalizedByRelease = normalizeSeriesPointsByAvailableTime(rows)
+	}
 	for _, ts := range timeline {
 		if row, ok := byTime[ts]; ok && pointAvailableAt(row, ts) {
 			aligned++
 			continue
 		}
-		if valueAvailableAt(ts, rows, policy) {
+		if hasReleaseAvailability && valueAvailableByRelease(ts, normalizedByRelease) {
+			aligned++
+			filled++
+			continue
+		}
+		if valueAvailableAt(ts, normalized, policy) {
 			aligned++
 			filled++
 		} else {
@@ -565,8 +576,21 @@ func alignStats(timeline []int64, rows []seriesPoint, policy string) (aligned in
 	return aligned, missing, filled
 }
 
-func valueAvailableAt(ts int64, rows []seriesPoint, policy string) bool {
-	normalized := normalizeSeriesPoints(rows)
+func hasAvailability(rows []seriesPoint) bool {
+	for _, row := range rows {
+		if row.AvailableTime > 0 && row.AvailableTime != row.Time {
+			return true
+		}
+	}
+	return false
+}
+
+func valueAvailableByRelease(ts int64, rows []seriesPoint) bool {
+	idx := sort.Search(len(rows), func(i int) bool { return rows[i].AvailableTime > ts })
+	return idx > 0
+}
+
+func valueAvailableAt(ts int64, normalized []seriesPoint, policy string) bool {
 	switch policy {
 	case MissingPolicyForwardFill:
 		idx := sort.Search(len(normalized), func(i int) bool { return normalized[i].Time > ts })
@@ -596,6 +620,15 @@ func normalizeSeriesPoints(rows []seriesPoint) []seriesPoint {
 	}
 	out := append([]seriesPoint(nil), rows...)
 	sort.Slice(out, func(i, j int) bool { return out[i].Time < out[j].Time })
+	return out
+}
+
+func normalizeSeriesPointsByAvailableTime(rows []seriesPoint) []seriesPoint {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := append([]seriesPoint(nil), rows...)
+	sort.Slice(out, func(i, j int) bool { return out[i].AvailableTime < out[j].AvailableTime })
 	return out
 }
 
