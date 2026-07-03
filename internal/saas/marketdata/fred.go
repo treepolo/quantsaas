@@ -113,8 +113,15 @@ func (c *FredClient) FetchObservations(ctx context.Context, seriesID string, sta
 			}
 		}
 	}
-	rows := make([]FredObservationRow, 0, len(byObservation))
+	byRelease := map[int64]FredObservationRow{}
 	for _, row := range byObservation {
+		existing, ok := byRelease[row.Bar.OpenTime]
+		if !ok || row.ObservationTimeMs > existing.ObservationTimeMs {
+			byRelease[row.Bar.OpenTime] = row
+		}
+	}
+	rows := make([]FredObservationRow, 0, len(byRelease))
+	for _, row := range byRelease {
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Bar.OpenTime < rows[j].Bar.OpenTime })
@@ -325,7 +332,7 @@ func fredInitialObservationRow(seriesID string, item fredObservation, vintageDat
 	realtimeStartMs := realtimeStart.UTC().UnixMilli()
 	return FredObservationRow{
 		Bar: BinanceKLine{
-			OpenTime: observationTimeMs,
+			OpenTime: realtimeStartMs,
 			Open:     value,
 			High:     value,
 			Low:      value,
@@ -335,7 +342,7 @@ func fredInitialObservationRow(seriesID string, item fredObservation, vintageDat
 		ObservationTimeMs: observationTimeMs,
 		RealtimeStartMs:   realtimeStartMs,
 		RealtimeEndMs:     realtimeStartMs,
-		AvailableAtMs:     realtimeStart.UTC().AddDate(0, 0, 1).UnixMilli(),
+		AvailableAtMs:     realtimeStartMs,
 	}, true
 }
 

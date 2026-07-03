@@ -17,19 +17,9 @@ func TestAlignStatsMissingPolicies(t *testing.T) {
 		{Time: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(), AvailableTime: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(), Close: 3},
 	}
 
-	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyEmpty)
-	if aligned != 2 || missing != 2 || filled != 0 {
-		t.Fatalf("empty = aligned %d missing %d filled %d, want 2/2/0", aligned, missing, filled)
-	}
-
-	aligned, missing, filled = alignStats(timeline, rows, MissingPolicyForwardFill)
+	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyForwardFill)
 	if aligned != 4 || missing != 0 || filled != 2 {
 		t.Fatalf("forward_fill = aligned %d missing %d filled %d, want 4/0/2", aligned, missing, filled)
-	}
-
-	aligned, missing, filled = alignStats(timeline, rows, MissingPolicyLinear)
-	if aligned != 2 || missing != 2 || filled != 0 {
-		t.Fatalf("linear = aligned %d missing %d filled %d, want 2/2/0", aligned, missing, filled)
 	}
 }
 
@@ -38,10 +28,11 @@ func TestNormalizeMissingPolicy(t *testing.T) {
 		input string
 		want  string
 	}{
-		{input: "", want: MissingPolicyEmpty},
-		{input: "unknown", want: MissingPolicyEmpty},
+		{input: "", want: MissingPolicyForwardFill},
+		{input: "unknown", want: MissingPolicyForwardFill},
+		{input: "empty", want: MissingPolicyForwardFill},
 		{input: MissingPolicyForwardFill, want: MissingPolicyForwardFill},
-		{input: MissingPolicyLinear, want: MissingPolicyLinear},
+		{input: "linear", want: MissingPolicyForwardFill},
 	}
 	for _, tt := range tests {
 		if got := normalizeMissingPolicy(tt.input); got != tt.want {
@@ -69,12 +60,7 @@ func TestAlignStatsRespectsIndicatorAvailability(t *testing.T) {
 		},
 	}
 
-	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyEmpty)
-	if aligned != 2 || missing != 1 || filled != 2 {
-		t.Fatalf("availability empty = aligned %d missing %d filled %d, want 2/1/2", aligned, missing, filled)
-	}
-
-	aligned, missing, filled = alignStats(timeline, rows, MissingPolicyForwardFill)
+	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyForwardFill)
 	if aligned != 2 || missing != 1 || filled != 2 {
 		t.Fatalf("availability forward_fill = aligned %d missing %d filled %d, want 2/1/2", aligned, missing, filled)
 	}
@@ -94,9 +80,29 @@ func TestAlignStatsUsesReleasedIndicatorValueAcrossLaterTimeline(t *testing.T) {
 		},
 	}
 
-	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyEmpty)
+	aligned, missing, filled := alignStats(timeline, rows, MissingPolicyForwardFill)
 	if aligned != 2 || missing != 1 || filled != 2 {
 		t.Fatalf("released indicator alignment = aligned %d missing %d filled %d, want 2/1/2", aligned, missing, filled)
+	}
+}
+
+func TestSummarizeAlignmentReportsActualAlignedWindow(t *testing.T) {
+	timeline := []int64{
+		time.Date(2026, 1, 2, 21, 30, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 1, 5, 21, 30, 0, 0, time.UTC).UnixMilli(),
+		time.Date(2026, 1, 6, 21, 30, 0, 0, time.UTC).UnixMilli(),
+	}
+	rows := []seriesPoint{
+		{
+			Time:          time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(),
+			AvailableTime: time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC).UnixMilli(),
+			Close:         4.1,
+		},
+	}
+
+	stats := summarizeAlignment(timeline, rows, MissingPolicyForwardFill)
+	if stats.firstAlignedTime != timeline[1] || stats.lastAlignedTime != timeline[2] {
+		t.Fatalf("aligned window = %d..%d, want %d..%d", stats.firstAlignedTime, stats.lastAlignedTime, timeline[1], timeline[2])
 	}
 }
 

@@ -306,13 +306,13 @@ func TestFredClientFetchObservationsParsesValues(t *testing.T) {
 	if len(rows) != 2 {
 		t.Fatalf("rows len = %d, want 2", len(rows))
 	}
-	if rows[0].Bar.OpenTime != time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).UnixMilli() || rows[0].Bar.Close != 4.1 {
+	if rows[0].Bar.OpenTime != time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC).UnixMilli() || rows[0].Bar.Close != 4.1 {
 		t.Fatalf("unexpected first row: %+v", rows[0])
 	}
 	if rows[0].RealtimeStartMs != time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC).UnixMilli() {
 		t.Fatalf("unexpected realtime_start: %+v", rows[0])
 	}
-	if rows[0].AvailableAtMs != time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC).UnixMilli() {
+	if rows[0].AvailableAtMs != time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC).UnixMilli() {
 		t.Fatalf("unexpected available_at: %+v", rows[0])
 	}
 	if rows[1].Bar.Open != 4.3 || rows[1].Bar.High != 4.3 || rows[1].Bar.Low != 4.3 || rows[1].Bar.Close != 4.3 || rows[1].Bar.Volume != 0 {

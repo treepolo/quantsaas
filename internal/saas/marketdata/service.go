@@ -31,7 +31,7 @@ const (
 	PriceAdjustmentYahooIntraday = "yahoo_raw_intraday_v1"
 	PriceAdjustmentFredValue     = "fred_observation_value_v1"
 
-	FredAvailabilityRuleReleasePlusOneDay = "fred_realtime_start_plus_1d_v1"
+	FredAvailabilityRuleReleaseDate = "fred_release_date_v2"
 
 	yahooUserAgent          = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36 QuantSaaS/0.1"
 	yahooMinRequestInterval = 1200 * time.Millisecond
@@ -1481,7 +1481,7 @@ func (s *Service) storeKLineObservationMetadata(ctx context.Context, req ImportR
 			RealtimeStartMs:   row.RealtimeStartMs,
 			RealtimeEndMs:     row.RealtimeEndMs,
 			AvailableAtMs:     row.AvailableAtMs,
-			AvailabilityRule:  FredAvailabilityRuleReleasePlusOneDay,
+			AvailabilityRule:  FredAvailabilityRuleReleaseDate,
 		})
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{

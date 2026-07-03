@@ -295,7 +295,7 @@ type KLineObservationMetadata struct {
 	RealtimeStartMs   int64  `gorm:"not null;default:0"`
 	RealtimeEndMs     int64  `gorm:"not null;default:0"`
 	AvailableAtMs     int64  `gorm:"not null;default:0;index"`
-	AvailabilityRule  string `gorm:"size:80;not null;default:fred_realtime_start_plus_1d_v1"`
+	AvailabilityRule  string `gorm:"size:80;not null;default:fred_release_date_v2"`
 }
 
 func (KLineObservationMetadata) TableName() string {
@@ -332,7 +332,7 @@ type ResearchDataset struct {
 	PrimaryInterval     string `gorm:"size:16;not null;index"`
 	StartTimeMs         int64  `gorm:"not null;default:0;index"`
 	EndTimeMs           int64  `gorm:"not null;default:0;index"`
-	MissingPolicy       string `gorm:"size:32;not null;default:empty"`
+	MissingPolicy       string `gorm:"size:32;not null;default:forward_fill"`
 	IndicatorAlgorithm  string `gorm:"size:80;not null;default:''"`
 	Config              JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
 }

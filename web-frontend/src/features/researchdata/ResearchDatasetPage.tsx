@@ -19,9 +19,7 @@ const intervalLabels: Record<string, string> = {
 };
 
 const missingPolicyLabels: Record<MissingPolicy, string> = {
-  empty: "保留空值",
-  forward_fill: "延續前值",
-  linear: "線性插值"
+  forward_fill: "延續前值"
 };
 
 function dateInputValue(date: Date) {
@@ -52,6 +50,11 @@ function formatMs(value?: number) {
   }).format(new Date(value));
 }
 
+function formatAvailabilityDelay(value?: { enabled: boolean; days: number }) {
+  if (!value?.enabled) return "發布日當日";
+  return `發布日 + ${Math.max(0, value.days || 0)} 天`;
+}
+
 function firstInterval(instrument?: ResearchInstrument) {
   return instrument?.supported_intervals?.[0] ?? "1d";
 }
@@ -74,7 +77,8 @@ function datasetToInput(dataset: ResearchDataset): ResearchDatasetInput {
     start_time_ms: dataset.start_time_ms,
     end_time_ms: dataset.end_time_ms,
     missing_policy: dataset.missing_policy,
-    indicator_algorithm: dataset.indicator_algorithm ?? ""
+    indicator_algorithm: dataset.indicator_algorithm ?? "",
+    availability_delay: dataset.availability_delay ?? { enabled: false, days: 0 }
   };
 }
 
@@ -136,7 +140,9 @@ export function ResearchDatasetPage() {
   const [primaryInterval, setPrimaryInterval] = useState("1d");
   const [startDate, setStartDate] = useState(dateInputValue(new Date()));
   const [endDate, setEndDate] = useState(dateInputValue(new Date()));
-  const [missingPolicy, setMissingPolicy] = useState<MissingPolicy>("empty");
+  const [missingPolicy, setMissingPolicy] = useState<MissingPolicy>("forward_fill");
+  const [availabilityDelayEnabled, setAvailabilityDelayEnabled] = useState(false);
+  const [availabilityDelayDays, setAvailabilityDelayDays] = useState(0);
   const [indicators, setIndicators] = useState<IndicatorSelectionInput[]>([]);
 
   useEffect(() => {
@@ -156,8 +162,9 @@ export function ResearchDatasetPage() {
     indicators,
     start_time_ms: dayStartMs(startDate),
     end_time_ms: dayEndMs(endDate),
-    missing_policy: missingPolicy
-  }), [endDate, indicators, missingPolicy, name, notes, primary?.id, primaryID, primaryInterval, startDate]);
+    missing_policy: missingPolicy,
+    availability_delay: { enabled: availabilityDelayEnabled, days: availabilityDelayDays }
+  }), [availabilityDelayDays, availabilityDelayEnabled, endDate, indicators, missingPolicy, name, notes, primary?.id, primaryID, primaryInterval, startDate]);
 
   const previewMutation = useMutation({ mutationFn: () => researchDataApi.preview(input) });
   const saveMutation = useMutation({
@@ -192,7 +199,9 @@ export function ResearchDatasetPage() {
     setPrimaryInterval(nextInterval);
     setStartDate(datasetStart(first, nextInterval));
     setEndDate(dateInputValue(new Date()));
-    setMissingPolicy("empty");
+    setMissingPolicy("forward_fill");
+    setAvailabilityDelayEnabled(false);
+    setAvailabilityDelayDays(0);
     setIndicators([]);
     previewMutation.reset();
   }
@@ -207,6 +216,8 @@ export function ResearchDatasetPage() {
     setStartDate(msToDateInput(next.start_time_ms));
     setEndDate(msToDateInput(next.end_time_ms));
     setMissingPolicy(next.missing_policy);
+    setAvailabilityDelayEnabled(next.availability_delay?.enabled ?? false);
+    setAvailabilityDelayDays(next.availability_delay?.days ?? 0);
     setIndicators(next.indicators);
     previewMutation.reset();
   }
@@ -300,6 +311,20 @@ export function ResearchDatasetPage() {
             </label>
           </div>
 
+          <div className="grid gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 md:grid-cols-[auto_180px_1fr]">
+            <label className="flex items-center gap-2 text-sm text-slate-300">
+              <input className="h-4 w-4 accent-[#2dd4bf]" type="checkbox" checked={availabilityDelayEnabled} onChange={(event) => setAvailabilityDelayEnabled(event.target.checked)} />
+              發布日期延後可用
+            </label>
+            <label>
+              <span className="mb-2 block text-xs text-slate-500">延後天數</span>
+              <input className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="number" min={0} max={3650} step={1} value={availabilityDelayDays} onChange={(event) => setAvailabilityDelayDays(Math.max(0, Number(event.target.value) || 0))} disabled={!availabilityDelayEnabled} />
+            </label>
+            <div className="flex items-end text-xs leading-5 text-slate-500">
+              未勾選時，參考指標於發布日期當日視為可用；勾選後會改成發布日期加上指定天數後才可用。
+            </div>
+          </div>
+
           <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -371,6 +396,7 @@ export function ResearchDatasetPage() {
             <Metric label="對齊時間點" value={previewMutation.data.aligned_rows.toLocaleString("zh-TW")} />
             <Metric label="參考指標數" value={previewMutation.data.reference_count.toLocaleString("zh-TW")} />
             <Metric label="缺值策略" value={missingPolicyLabels[previewMutation.data.missing_policy]} />
+            <Metric label="可用時間" value={formatAvailabilityDelay(previewMutation.data.availability_delay)} />
             <Metric label="資料區間" value={`${formatMs(previewMutation.data.start_time_ms)} - ${formatMs(previewMutation.data.end_time_ms)}`} />
           </div>
           {previewMutation.data.search_blocked_reason ? (
@@ -411,7 +437,7 @@ export function ResearchDatasetPage() {
                     {dataset.primary.display_name} · {intervalLabels[dataset.primary.interval] ?? dataset.primary.interval} · {formatMs(dataset.start_time_ms)} - {formatMs(dataset.end_time_ms)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    參考指標 {dataset.indicators.length} 個 · 缺值策略 {missingPolicyLabels[dataset.missing_policy]}
+                    參考指標 {dataset.indicators.length} 個 · 缺值策略 {missingPolicyLabels[dataset.missing_policy]} · 可用時間 {formatAvailabilityDelay(dataset.availability_delay)}
                   </div>
                   {dataset.notes ? <div className="mt-2 text-sm text-slate-300">{dataset.notes}</div> : null}
                   {!dataset.can_search ? <div className="mt-2 text-sm text-[#fde68a]">{dataset.search_blocked_reason}</div> : null}

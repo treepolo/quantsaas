@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 
@@ -16,9 +15,7 @@ import (
 )
 
 const (
-	MissingPolicyEmpty       = "empty"
 	MissingPolicyForwardFill = "forward_fill"
-	MissingPolicyLinear      = "linear"
 
 	SeriesRolePrimary   = "primary"
 	SeriesRoleIndicator = "indicator"
@@ -45,6 +42,7 @@ type DatasetRequest struct {
 	EndTimeMs           int64                `json:"end_time_ms"`
 	MissingPolicy       string               `json:"missing_policy"`
 	IndicatorAlgorithm  string               `json:"indicator_algorithm"`
+	AvailabilityDelay   AvailabilityDelay    `json:"availability_delay"`
 }
 
 type PreviewRequest = DatasetRequest
@@ -55,21 +53,22 @@ type IndicatorSelection struct {
 }
 
 type DatasetResponse struct {
-	ID                  uint            `json:"id"`
-	Name                string          `json:"name"`
-	Notes               string          `json:"notes"`
-	Primary             DatasetSeries   `json:"primary"`
-	Indicators          []DatasetSeries `json:"indicators"`
-	StartTimeMs         int64           `json:"start_time_ms"`
-	EndTimeMs           int64           `json:"end_time_ms"`
-	MissingPolicy       string          `json:"missing_policy"`
-	IndicatorAlgorithm  string          `json:"indicator_algorithm"`
-	CanSearch           bool            `json:"can_search"`
-	SearchBlockedReason string          `json:"search_blocked_reason,omitempty"`
-	Warnings            []string        `json:"warnings,omitempty"`
-	Preview             *PreviewResult  `json:"preview,omitempty"`
-	CreatedAt           string          `json:"created_at"`
-	UpdatedAt           string          `json:"updated_at"`
+	ID                  uint              `json:"id"`
+	Name                string            `json:"name"`
+	Notes               string            `json:"notes"`
+	Primary             DatasetSeries     `json:"primary"`
+	Indicators          []DatasetSeries   `json:"indicators"`
+	StartTimeMs         int64             `json:"start_time_ms"`
+	EndTimeMs           int64             `json:"end_time_ms"`
+	MissingPolicy       string            `json:"missing_policy"`
+	IndicatorAlgorithm  string            `json:"indicator_algorithm"`
+	AvailabilityDelay   AvailabilityDelay `json:"availability_delay"`
+	CanSearch           bool              `json:"can_search"`
+	SearchBlockedReason string            `json:"search_blocked_reason,omitempty"`
+	Warnings            []string          `json:"warnings,omitempty"`
+	Preview             *PreviewResult    `json:"preview,omitempty"`
+	CreatedAt           string            `json:"created_at"`
+	UpdatedAt           string            `json:"updated_at"`
 }
 
 type DatasetSeries struct {
@@ -82,16 +81,17 @@ type DatasetSeries struct {
 }
 
 type PreviewResult struct {
-	Primary             SeriesPreview   `json:"primary"`
-	Indicators          []SeriesPreview `json:"indicators"`
-	MissingPolicy       string          `json:"missing_policy"`
-	StartTimeMs         int64           `json:"start_time_ms"`
-	EndTimeMs           int64           `json:"end_time_ms"`
-	AlignedRows         int             `json:"aligned_rows"`
-	ReferenceCount      int             `json:"reference_count"`
-	CanSearch           bool            `json:"can_search"`
-	SearchBlockedReason string          `json:"search_blocked_reason,omitempty"`
-	Warnings            []string        `json:"warnings,omitempty"`
+	Primary             SeriesPreview     `json:"primary"`
+	Indicators          []SeriesPreview   `json:"indicators"`
+	MissingPolicy       string            `json:"missing_policy"`
+	AvailabilityDelay   AvailabilityDelay `json:"availability_delay"`
+	StartTimeMs         int64             `json:"start_time_ms"`
+	EndTimeMs           int64             `json:"end_time_ms"`
+	AlignedRows         int               `json:"aligned_rows"`
+	ReferenceCount      int               `json:"reference_count"`
+	CanSearch           bool              `json:"can_search"`
+	SearchBlockedReason string            `json:"search_blocked_reason,omitempty"`
+	Warnings            []string          `json:"warnings,omitempty"`
 }
 
 type SeriesPreview struct {
@@ -109,6 +109,15 @@ type SeriesPreview struct {
 	FirstAlignedTimeMs int64  `json:"first_aligned_time_ms,omitempty"`
 	LastAlignedTimeMs  int64  `json:"last_aligned_time_ms,omitempty"`
 	Error              string `json:"error,omitempty"`
+}
+
+type AvailabilityDelay struct {
+	Enabled bool `json:"enabled"`
+	Days    int  `json:"days"`
+}
+
+type datasetConfig struct {
+	AvailabilityDelay AvailabilityDelay `json:"availability_delay"`
 }
 
 type seriesPoint struct {
@@ -164,10 +173,11 @@ func (s *Service) Create(ctx context.Context, req DatasetRequest) (DatasetRespon
 	if strings.TrimSpace(normalized.Name) == "" {
 		normalized.Name = defaultDatasetName(primary, normalized.PrimaryInterval, len(indicators))
 	}
+	config := datasetConfig{AvailabilityDelay: normalized.AvailabilityDelay}
+	configRaw, _ := saasstore.NewJSONB(config)
 
 	var created saasstore.ResearchDataset
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		config, _ := saasstore.NewJSONB(map[string]any{})
 		created = saasstore.ResearchDataset{
 			Name:                normalized.Name,
 			Notes:               normalized.Notes,
@@ -179,7 +189,7 @@ func (s *Service) Create(ctx context.Context, req DatasetRequest) (DatasetRespon
 			EndTimeMs:           normalized.EndTimeMs,
 			MissingPolicy:       normalized.MissingPolicy,
 			IndicatorAlgorithm:  normalized.IndicatorAlgorithm,
-			Config:              config,
+			Config:              configRaw,
 		}
 		if err := tx.Create(&created).Error; err != nil {
 			return err
@@ -200,6 +210,8 @@ func (s *Service) Update(ctx context.Context, id uint, req DatasetRequest) (Data
 	if strings.TrimSpace(normalized.Name) == "" {
 		normalized.Name = defaultDatasetName(primary, normalized.PrimaryInterval, len(indicators))
 	}
+	config := datasetConfig{AvailabilityDelay: normalized.AvailabilityDelay}
+	configRaw, _ := saasstore.NewJSONB(config)
 
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing saasstore.ResearchDataset
@@ -220,6 +232,7 @@ func (s *Service) Update(ctx context.Context, id uint, req DatasetRequest) (Data
 			"end_time_ms":           normalized.EndTimeMs,
 			"missing_policy":        normalized.MissingPolicy,
 			"indicator_algorithm":   normalized.IndicatorAlgorithm,
+			"config":                configRaw,
 		}
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 			return err
@@ -245,6 +258,7 @@ func (s *Service) Delete(ctx context.Context, id uint) error {
 
 func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResult, error) {
 	req.MissingPolicy = normalizeMissingPolicy(req.MissingPolicy)
+	req.AvailabilityDelay = normalizeAvailabilityDelay(req.AvailabilityDelay)
 	if strings.TrimSpace(req.PrimaryInstrumentID) == "" || strings.TrimSpace(req.PrimaryInterval) == "" {
 		return PreviewResult{}, fmt.Errorf("%w: 主商品與資料週期必填", ErrInvalidDatasetRequest)
 	}
@@ -256,7 +270,7 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	primaryRows, err := s.loadSeries(ctx, primaryInstrument, req.PrimaryInterval, req.StartTimeMs, req.EndTimeMs)
+	primaryRows, err := s.loadSeries(ctx, primaryInstrument, req.PrimaryInterval, req.StartTimeMs, req.EndTimeMs, AvailabilityDelay{})
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -266,6 +280,7 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 		return PreviewResult{
 			Primary:             primary,
 			MissingPolicy:       req.MissingPolicy,
+			AvailabilityDelay:   req.AvailabilityDelay,
 			StartTimeMs:         req.StartTimeMs,
 			EndTimeMs:           req.EndTimeMs,
 			ReferenceCount:      len(req.Indicators),
@@ -300,7 +315,7 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 			})
 			continue
 		}
-		rows, err := s.loadSeries(ctx, instrument, selection.Interval, req.StartTimeMs, req.EndTimeMs)
+		rows, err := s.loadSeries(ctx, instrument, selection.Interval, req.StartTimeMs, req.EndTimeMs, req.AvailabilityDelay)
 		if err != nil {
 			indicators = append(indicators, SeriesPreview{
 				InstrumentID: instrument.ID,
@@ -313,10 +328,13 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 			continue
 		}
 		preview := previewForRawSeries(instrument, selection.Interval, rows)
-		preview.AlignedRows, preview.MissingRows, preview.FilledRows = alignStats(timeline, rows, req.MissingPolicy)
-		if preview.AlignedRows > 0 {
-			preview.FirstAlignedTimeMs = timeline[0]
-			preview.LastAlignedTimeMs = timeline[len(timeline)-1]
+		stats := summarizeAlignment(timeline, rows, req.MissingPolicy)
+		preview.AlignedRows = stats.aligned
+		preview.MissingRows = stats.missing
+		preview.FilledRows = stats.filled
+		if stats.aligned > 0 {
+			preview.FirstAlignedTimeMs = stats.firstAlignedTime
+			preview.LastAlignedTimeMs = stats.lastAlignedTime
 		}
 		if selection.Interval != req.PrimaryInterval {
 			warnings = append(warnings, fmt.Sprintf("%s 使用 %s，與主商品 %s 不同，會依缺值策略對齊", instrument.DisplayName, selection.Interval, req.PrimaryInterval))
@@ -329,6 +347,7 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 		Primary:             primary,
 		Indicators:          indicators,
 		MissingPolicy:       req.MissingPolicy,
+		AvailabilityDelay:   req.AvailabilityDelay,
 		StartTimeMs:         req.StartTimeMs,
 		EndTimeMs:           req.EndTimeMs,
 		AlignedRows:         len(timeline),
@@ -346,6 +365,7 @@ func (s *Service) normalizeRequest(ctx context.Context, req DatasetRequest) (Dat
 	req.PrimaryInterval = strings.TrimSpace(req.PrimaryInterval)
 	req.MissingPolicy = normalizeMissingPolicy(req.MissingPolicy)
 	req.IndicatorAlgorithm = strings.TrimSpace(req.IndicatorAlgorithm)
+	req.AvailabilityDelay = normalizeAvailabilityDelay(req.AvailabilityDelay)
 	if req.PrimaryInstrumentID == "" || req.PrimaryInterval == "" {
 		return req, marketdata.ResearchInstrument{}, nil, fmt.Errorf("%w: 主商品與資料週期必填", ErrInvalidDatasetRequest)
 	}
@@ -390,6 +410,7 @@ func (s *Service) responseForRecord(ctx context.Context, row saasstore.ResearchD
 		Find(&seriesRows).Error; err != nil {
 		return DatasetResponse{}, err
 	}
+	config := configForRecord(row)
 	response := DatasetResponse{
 		ID:                 row.ID,
 		Name:               row.Name,
@@ -397,6 +418,7 @@ func (s *Service) responseForRecord(ctx context.Context, row saasstore.ResearchD
 		StartTimeMs:        row.StartTimeMs,
 		EndTimeMs:          row.EndTimeMs,
 		MissingPolicy:      normalizeMissingPolicy(row.MissingPolicy),
+		AvailabilityDelay:  config.AvailabilityDelay,
 		IndicatorAlgorithm: row.IndicatorAlgorithm,
 		CreatedAt:          row.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt:          row.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -457,6 +479,7 @@ func (d DatasetResponse) toRequest() DatasetRequest {
 		EndTimeMs:           d.EndTimeMs,
 		MissingPolicy:       d.MissingPolicy,
 		IndicatorAlgorithm:  d.IndicatorAlgorithm,
+		AvailabilityDelay:   d.AvailabilityDelay,
 	}
 }
 
@@ -487,7 +510,7 @@ func replaceSeries(ctx context.Context, tx *gorm.DB, datasetID uint, primary mar
 	return tx.WithContext(ctx).Create(&rows).Error
 }
 
-func (s *Service) loadSeries(ctx context.Context, instrument marketdata.ResearchInstrument, interval string, startMs int64, endMs int64) ([]seriesPoint, error) {
+func (s *Service) loadSeries(ctx context.Context, instrument marketdata.ResearchInstrument, interval string, startMs int64, endMs int64, delay AvailabilityDelay) ([]seriesPoint, error) {
 	if s.db == nil {
 		return nil, nil
 	}
@@ -499,24 +522,12 @@ func (s *Service) loadSeries(ctx context.Context, instrument marketdata.Research
 		return nil, err
 	}
 	points := make([]seriesPoint, 0, len(rows))
-	availability := map[int64]int64{}
-	if instrument.DataSource == marketdata.DataSourceFRED && len(rows) > 0 {
-		var metadata []saasstore.KLineObservationMetadata
-		if err := s.db.WithContext(ctx).
-			Where("source = ? AND symbol = ? AND interval = ? AND open_time BETWEEN ? AND ?", instrument.DataSource, instrument.Symbol, interval, startMs, endMs).
-			Find(&metadata).Error; err != nil {
-			return nil, err
-		}
-		for _, item := range metadata {
-			if item.AvailabilityRule == marketdata.FredAvailabilityRuleReleasePlusOneDay && item.AvailableAtMs > 0 {
-				availability[item.OpenTime] = item.AvailableAtMs
-			}
-		}
-	}
 	for _, row := range rows {
 		availableAt := row.OpenTime
 		if instrument.DataSource == marketdata.DataSourceFRED {
-			availableAt = availability[row.OpenTime]
+			if delay.Enabled && delay.Days > 0 {
+				availableAt = row.OpenTime + int64(delay.Days)*24*60*60*1000
+			}
 		}
 		points = append(points, seriesPoint{Time: row.OpenTime, AvailableTime: availableAt, Close: row.Close})
 	}
@@ -540,54 +551,54 @@ func previewForRawSeries(instrument marketdata.ResearchInstrument, interval stri
 }
 
 func alignStats(timeline []int64, rows []seriesPoint, policy string) (aligned int, missing int, filled int) {
+	stats := summarizeAlignment(timeline, rows, policy)
+	return stats.aligned, stats.missing, stats.filled
+}
+
+type alignmentStats struct {
+	aligned          int
+	missing          int
+	filled           int
+	firstAlignedTime int64
+	lastAlignedTime  int64
+}
+
+func summarizeAlignment(timeline []int64, rows []seriesPoint, policy string) alignmentStats {
 	if len(timeline) == 0 {
-		return 0, 0, 0
+		return alignmentStats{}
 	}
 	if len(rows) == 0 {
-		return 0, len(timeline), 0
+		return alignmentStats{missing: len(timeline)}
 	}
 	byTime := make(map[int64]seriesPoint, len(rows))
 	for _, row := range rows {
 		byTime[row.Time] = row
 	}
 	normalized := normalizeSeriesPoints(rows)
-	hasReleaseAvailability := hasAvailability(rows)
-	normalizedByRelease := []seriesPoint(nil)
-	if hasReleaseAvailability {
-		normalizedByRelease = normalizeSeriesPointsByAvailableTime(rows)
-	}
+	stats := alignmentStats{}
 	for _, ts := range timeline {
 		if row, ok := byTime[ts]; ok && pointAvailableAt(row, ts) {
-			aligned++
-			continue
-		}
-		if hasReleaseAvailability && valueAvailableByRelease(ts, normalizedByRelease) {
-			aligned++
-			filled++
+			stats.markAligned(ts, false)
 			continue
 		}
 		if valueAvailableAt(ts, normalized, policy) {
-			aligned++
-			filled++
+			stats.markAligned(ts, true)
 		} else {
-			missing++
+			stats.missing++
 		}
 	}
-	return aligned, missing, filled
+	return stats
 }
 
-func hasAvailability(rows []seriesPoint) bool {
-	for _, row := range rows {
-		if row.AvailableTime > 0 && row.AvailableTime != row.Time {
-			return true
-		}
+func (s *alignmentStats) markAligned(ts int64, filled bool) {
+	s.aligned++
+	if filled {
+		s.filled++
 	}
-	return false
-}
-
-func valueAvailableByRelease(ts int64, rows []seriesPoint) bool {
-	idx := sort.Search(len(rows), func(i int) bool { return rows[i].AvailableTime > ts })
-	return idx > 0
+	if s.firstAlignedTime == 0 {
+		s.firstAlignedTime = ts
+	}
+	s.lastAlignedTime = ts
 }
 
 func valueAvailableAt(ts int64, normalized []seriesPoint, policy string) bool {
@@ -600,15 +611,6 @@ func valueAvailableAt(ts int64, normalized []seriesPoint, policy string) bool {
 			}
 		}
 		return false
-	case MissingPolicyLinear:
-		idx := sort.Search(len(normalized), func(i int) bool { return normalized[i].Time >= ts })
-		if idx < len(normalized) && normalized[idx].Time == ts {
-			return pointAvailableAt(normalized[idx], ts) && !math.IsNaN(normalized[idx].Close)
-		}
-		if idx <= 0 || idx >= len(normalized) {
-			return false
-		}
-		return pointAvailableAt(normalized[idx-1], ts) && pointAvailableAt(normalized[idx], ts)
 	default:
 		return false
 	}
@@ -623,28 +625,34 @@ func normalizeSeriesPoints(rows []seriesPoint) []seriesPoint {
 	return out
 }
 
-func normalizeSeriesPointsByAvailableTime(rows []seriesPoint) []seriesPoint {
-	if len(rows) == 0 {
-		return nil
-	}
-	out := append([]seriesPoint(nil), rows...)
-	sort.Slice(out, func(i, j int) bool { return out[i].AvailableTime < out[j].AvailableTime })
-	return out
-}
-
 func pointAvailableAt(row seriesPoint, ts int64) bool {
 	return row.AvailableTime > 0 && row.AvailableTime <= ts
 }
 
 func normalizeMissingPolicy(value string) string {
-	switch strings.TrimSpace(value) {
-	case MissingPolicyForwardFill:
-		return MissingPolicyForwardFill
-	case MissingPolicyLinear:
-		return MissingPolicyLinear
-	default:
-		return MissingPolicyEmpty
+	return MissingPolicyForwardFill
+}
+
+func normalizeAvailabilityDelay(value AvailabilityDelay) AvailabilityDelay {
+	if !value.Enabled {
+		return AvailabilityDelay{}
 	}
+	if value.Days < 0 {
+		value.Days = 0
+	}
+	if value.Days > 3650 {
+		value.Days = 3650
+	}
+	return value
+}
+
+func configForRecord(row saasstore.ResearchDataset) datasetConfig {
+	config := datasetConfig{}
+	if len(row.Config) > 0 {
+		_ = json.Unmarshal(row.Config, &config)
+	}
+	config.AvailabilityDelay = normalizeAvailabilityDelay(config.AvailabilityDelay)
+	return config
 }
 
 func searchReadiness(indicatorCount int, algorithm string, indicators []SeriesPreview) (bool, string) {

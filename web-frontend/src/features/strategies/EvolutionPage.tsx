@@ -705,7 +705,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <InfoRow label="主商品" value={selectedResearchDataset.primary.display_name} />
                 <InfoRow label="資料週期" value={intervalLabels[selectedResearchDataset.primary.interval] ?? selectedResearchDataset.primary.interval} />
                 <InfoRow label="參考指標" value={`${selectedResearchDataset.indicators.length} 個`} />
-                <InfoRow label="缺值策略" value={selectedResearchDataset.missing_policy === "forward_fill" ? "延續前值" : selectedResearchDataset.missing_policy === "linear" ? "線性插值" : "保留空值"} />
+                <InfoRow label="缺值策略" value="延續前值" />
+                <InfoRow label="可用時間" value={selectedResearchDataset.availability_delay?.enabled ? `發布日 + ${Math.max(0, selectedResearchDataset.availability_delay.days || 0)} 天` : "發布日當日"} />
               </div>
               {selectedResearchDataset.search_blocked_reason ? <div className="mt-3 rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 px-3 py-2 text-sm leading-6 text-[#fde68a]">{selectedResearchDataset.search_blocked_reason}</div> : null}
             </div>

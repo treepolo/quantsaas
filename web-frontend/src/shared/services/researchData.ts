@@ -1,6 +1,6 @@
 import { apiFetch } from "./client";
 
-export type MissingPolicy = "empty" | "forward_fill" | "linear";
+export type MissingPolicy = "forward_fill";
 
 export type IndicatorSelectionInput = {
   instrument_id: string;
@@ -17,6 +17,12 @@ export type ResearchDatasetInput = {
   end_time_ms: number;
   missing_policy: MissingPolicy;
   indicator_algorithm?: string;
+  availability_delay: AvailabilityDelay;
+};
+
+export type AvailabilityDelay = {
+  enabled: boolean;
+  days: number;
 };
 
 export type ResearchDatasetPreviewInput = ResearchDatasetInput;
@@ -42,6 +48,7 @@ export type ResearchDatasetPreview = {
   primary: SeriesPreview;
   indicators: SeriesPreview[];
   missing_policy: MissingPolicy;
+  availability_delay: AvailabilityDelay;
   start_time_ms: number;
   end_time_ms: number;
   aligned_rows: number;
@@ -69,6 +76,7 @@ export type ResearchDataset = {
   start_time_ms: number;
   end_time_ms: number;
   missing_policy: MissingPolicy;
+  availability_delay: AvailabilityDelay;
   indicator_algorithm?: string;
   can_search: boolean;
   search_blocked_reason?: string;
