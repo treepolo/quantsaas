@@ -12,7 +12,7 @@ FRED API Key 不得寫入 GitHub、前端程式、資料庫或測試 fixture。
 2. 貼上 FRED API Key。
 3. 重新啟動軟體，或在程式碼更新後執行 `重新建置並啟動.bat`。
 
-Docker Compose 會把 Windows 環境變數 `FRED_API_KEY` 透傳給 SaaS 後端容器。
+`設定FRED_API_KEY.bat` 會同時把 key 寫入 Windows 使用者環境變數與專案根目錄 `.env`。Docker Compose 會讀取 `.env`，再把 `FRED_API_KEY` 傳給 SaaS 後端容器。`.env` 已被 `.gitignore` 排除，不會提交到 GitHub。
 
 ## 目前內建序列
 
@@ -42,4 +42,3 @@ FRED 回傳的是日期觀測值，不是 OHLC K 線。為了讓既有研究資�
 - 不支援秒、分鐘、小時、週、月 K 匯入。
 - 低頻資料，例如月資料，仍以實際公布日期存成日期序列。研究資料集會依照使用者選擇的缺值策略對齊主商品資料。
 - FRED、NY Fed、ICE/BofA 等來源可能有引用或商業使用條款；若未來要商業化，需另外確認各序列授權。
-
