@@ -117,6 +117,40 @@ func TestForceTargetThresholdsOnlyAffectPracticalPath(t *testing.T) {
 	}
 }
 
+func TestPracticalTargetDoesNotAdoptUnexecutableForcedTarget(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Spawn.Policy.InitialUSDT = 10
+	params.Spawn.Policy.MonthlyInjectUSDT = 0
+	params.PositionStructure = sigmoiddca.PositionStructureFloatingOnly
+	params.Chromosome.ForceFullThreshold = 0.60
+	params.Chromosome.ForceEmptyThreshold = 0
+	params.Chromosome.RebalanceThreshold = 0
+	params.Chromosome.DustUSD = 14.5
+
+	bars := flatTestBars(115)
+	path := RunSigmoidDCAPathBacktestWithModeCostsAndStructure(
+		bars,
+		bars[112].OpenTime,
+		"1d",
+		executionModeCloseSameBar,
+		params.Chromosome,
+		&params.Spawn,
+		quant.ExecutionCostConfig{},
+		params.PositionStructure,
+	)
+	if len(path.NAV) == 0 {
+		t.Fatal("expected path points")
+	}
+
+	first := path.NAV[0]
+	if math.Abs(first.ModelTargetWeight-(1/(1+math.Exp(-0.5)))) > 1e-12 {
+		t.Fatalf("model target weight = %.12f, want raw baseline target", first.ModelTargetWeight)
+	}
+	if math.Abs(first.PracticalTargetWeight) > 1e-12 {
+		t.Fatalf("practical target weight = %.12f, want actual cash position when order is below dust", first.PracticalTargetWeight)
+	}
+}
+
 func TestEvaluateRejectsInvalidForceThresholdOrder(t *testing.T) {
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome.ForceFullThreshold = 0.40

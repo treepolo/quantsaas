@@ -528,11 +528,14 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		practicalModelTargetWeight := modelTargetWeight
 		output, practicalModelTargetWeight = applyForceTargetThresholds(output, portfolio, bar.Close, params.Chromosome, modelTargetWeight)
 		rebalanceAllowed := rebalanceThresholdAllows(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
-		if !hasAdoptedPracticalTargetWeight || rebalanceAllowed {
-			adoptedPracticalTargetWeight = practicalModelTargetWeight
+		output = applyRebalanceThreshold(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
+		if !hasAdoptedPracticalTargetWeight {
+			adoptedPracticalTargetWeight = totalAssetWeight(portfolio, bar.Close, portfolio.TotalEquity)
 			hasAdoptedPracticalTargetWeight = true
 		}
-		output = applyRebalanceThreshold(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
+		if rebalanceAllowed && shouldAdoptPracticalTarget(output, portfolio, bar.Close, practicalModelTargetWeight) {
+			adoptedPracticalTargetWeight = practicalModelTargetWeight
+		}
 		emptyReferenceOutput := sigmoiddca.Step(quant.StrategyInput{
 			Symbol:     "BTCUSDT",
 			Interval:   interval,
@@ -791,6 +794,29 @@ func totalTargetWeight(portfolio quant.PortfolioSnapshot, price float64, totalEq
 	}
 	nonFloatingWeight := (portfolio.DeadBTC + portfolio.ColdSealedBTC) * price / totalEquity
 	return quant.ClipFloat64(nonFloatingWeight+quant.ClipFloat64(targetFloatingWeight, 0, 1), 0, 1)
+}
+
+func shouldAdoptPracticalTarget(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, targetWeight float64) bool {
+	if hasExecutablePracticalAdjustment(output) {
+		return true
+	}
+	currentWeight := totalAssetWeight(portfolio, price, portfolio.TotalEquity)
+	return math.Abs(currentWeight-targetWeight) <= 1e-9
+}
+
+func hasExecutablePracticalAdjustment(output quant.StrategyOutput) bool {
+	for _, intent := range output.Intents {
+		if intent.Engine != quant.EngineMicro {
+			continue
+		}
+		if intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 {
+			return true
+		}
+		if intent.Action == quant.ActionSell && intent.QtyAsset > 0 {
+			return true
+		}
+	}
+	return len(output.LotTransfers) > 0
 }
 
 func normalizeBacktestExecutionMode(mode string) string {
