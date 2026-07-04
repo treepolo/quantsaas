@@ -81,6 +81,7 @@ type EpochConfig struct {
 	TraceMode          TraceMode
 	TraceModeFunc      func() TraceMode
 	SpawnPointOverride *quant.SpawnPoint
+	SeedGeneID         uint
 	SeedParamPack      []byte
 	RandomPopulation   bool
 }
@@ -322,23 +323,25 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		spawnMode = "inherit"
 	}
 	raw, err := json.Marshal(map[string]any{
-		"strategy_id":     e.evolvable.StrategyID(),
-		"symbol":          cfg.Pair,
-		"instrument_id":   cfg.InstrumentID,
-		"data_source":     cfg.DataSource,
-		"interval":        cfg.Interval,
-		"execution_mode":  cfg.ExecutionMode,
-		"train_start_ms":  cfg.StartTimeMs,
-		"train_end_ms":    cfg.EndTimeMs,
-		"initial_capital": e.initialCapital(cfg),
-		"monthly_dca":     e.monthlyDCA(cfg),
-		"gene_options":    cfg.GeneOptions,
-		"fee_rate":        quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
-		"spread_rate":     quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
-		"trade_penalty":   cfg.TradePenalty,
-		"spawn_mode":      spawnMode,
-		"population":      e.popSize(cfg),
-		"generations":     e.maxGenerations(cfg),
+		"strategy_id":      e.evolvable.StrategyID(),
+		"symbol":           cfg.Pair,
+		"instrument_id":    cfg.InstrumentID,
+		"data_source":      cfg.DataSource,
+		"interval":         cfg.Interval,
+		"execution_mode":   cfg.ExecutionMode,
+		"train_start_ms":   cfg.StartTimeMs,
+		"train_end_ms":     cfg.EndTimeMs,
+		"initial_capital":  e.initialCapital(cfg),
+		"monthly_dca":      e.monthlyDCA(cfg),
+		"gene_options":     cfg.GeneOptions,
+		"fee_rate":         quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
+		"spread_rate":      quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
+		"trade_penalty":    cfg.TradePenalty,
+		"spawn_mode":       spawnMode,
+		"population":       e.popSize(cfg),
+		"generations":      e.maxGenerations(cfg),
+		"seed_gene_id":     cfg.SeedGeneID,
+		"fixed_param_keys": cfg.GeneOptions.FixedParamKeys,
 	})
 	if err != nil {
 		return []byte(`{}`)

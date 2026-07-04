@@ -69,6 +69,8 @@ type GeneOptions struct {
 	EnableWMomentum           bool
 	EnableWBreakout           bool
 	PositionStructure         string
+	FixedParamKeys            []string
+	FixedGene                 *quant.Chromosome `json:"-"`
 }
 
 type GeneNormalizer interface {

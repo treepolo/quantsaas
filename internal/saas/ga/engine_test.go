@@ -75,12 +75,14 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 			EnableWMomentum:           true,
 			EnableWBreakout:           true,
 			PositionStructure:         "floating_only",
+			FixedParamKeys:            []string{"beta", "gamma"},
 		},
 		TradePenalty: 0.002,
 		Costs: quant.ExecutionCostConfig{
 			FeeRate:    0.001,
 			SpreadRate: 0.0005,
 		},
+		SeedGeneID: 42,
 	})
 
 	var cfg map[string]any
@@ -111,6 +113,17 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	}
 	if geneOptions["PositionStructure"] != "floating_only" {
 		t.Fatalf("PositionStructure = %v, want floating_only", geneOptions["PositionStructure"])
+	}
+	if cfg["seed_gene_id"] != float64(42) {
+		t.Fatalf("seed_gene_id = %v, want 42", cfg["seed_gene_id"])
+	}
+	fixedKeys, ok := cfg["fixed_param_keys"].([]any)
+	if !ok || len(fixedKeys) != 2 || fixedKeys[0] != "beta" || fixedKeys[1] != "gamma" {
+		t.Fatalf("fixed_param_keys = %#v, want beta/gamma", cfg["fixed_param_keys"])
+	}
+	geneFixedKeys, ok := geneOptions["FixedParamKeys"].([]any)
+	if !ok || len(geneFixedKeys) != 2 || geneFixedKeys[0] != "beta" || geneFixedKeys[1] != "gamma" {
+		t.Fatalf("gene option FixedParamKeys = %#v, want beta/gamma", geneOptions["FixedParamKeys"])
 	}
 	if cfg["trade_penalty"] != 0.002 {
 		t.Fatalf("trade_penalty = %v, want 0.002", cfg["trade_penalty"])

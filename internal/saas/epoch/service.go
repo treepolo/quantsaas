@@ -80,6 +80,10 @@ type CreateTaskRequest struct {
 	ContinuousUnlimited       bool              `json:"continuous_unlimited"`
 	StandardStartMs           int64             `json:"standard_start_ms"`
 	StandardEndMs             int64             `json:"standard_end_ms"`
+	SeedGeneID                uint              `json:"seed_gene_id"`
+	FixedParamKeys            []string          `json:"fixed_param_keys"`
+	seedParamPack             []byte
+	fixedGene                 *quant.Chromosome
 }
 
 type ComputeEstimate struct {
@@ -127,6 +131,12 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 
 	req = s.normalizeRequest(ctx, req)
 	if err := s.validateRequest(ctx, req); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	var err error
+	req, err = s.prepareSeedGene(ctx, req)
+	if err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -194,6 +204,11 @@ func (s *Service) CurrentTask() *saasstore.EvolutionTask {
 func (s *Service) EstimateCompute(ctx context.Context, req CreateTaskRequest) (ComputeEstimate, error) {
 	req = s.normalizeRequest(ctx, req)
 	if err := s.validateRequest(ctx, req); err != nil {
+		return ComputeEstimate{}, err
+	}
+	var err error
+	req, err = s.prepareSeedGene(ctx, req)
+	if err != nil {
 		return ComputeEstimate{}, err
 	}
 	spawn, err := s.resolveSpawnPoint(ctx, req)
@@ -273,6 +288,8 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
+		SeedGeneID:         req.SeedGeneID,
+		SeedParamPack:      req.seedParamPack,
 		OnTrace:            s.traceSink(taskID),
 		OnComputePlan:      s.computePlanSetter(taskID, req),
 		OnComputeStep:      s.computeStepCounter(taskID),
@@ -445,6 +462,8 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
+		SeedGeneID:         req.SeedGeneID,
+		SeedParamPack:      req.seedParamPack,
 		OnTrace:            s.traceSink(taskID),
 		OnComputePlan:      s.computePlanSetter(taskID, req),
 		OnComputeStep:      s.computeStepCounter(taskID),
@@ -576,6 +595,8 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"standard_start_ms":            req.StandardStartMs,
 		"standard_end_ms":              req.StandardEndMs,
 		"continuous_unlimited":         req.ContinuousUnlimited,
+		"seed_gene_id":                 req.SeedGeneID,
+		"fixed_param_keys":             req.FixedParamKeys,
 	}
 	configRaw, _ := json.Marshal(searchConfig)
 	windowScore, _ := json.Marshal(result.WindowScores)
@@ -889,6 +910,36 @@ func (s *Service) loadChampionSpawn(ctx context.Context, req CreateTaskRequest) 
 	return &params.Spawn, nil
 }
 
+func (s *Service) prepareSeedGene(ctx context.Context, req CreateTaskRequest) (CreateTaskRequest, error) {
+	if req.SeedGeneID == 0 {
+		return req, nil
+	}
+	var record saasstore.GeneRecord
+	if err := s.db.WithContext(ctx).First(&record, req.SeedGeneID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return req, fmt.Errorf("seed_gene_id #%d not found", req.SeedGeneID)
+		}
+		return req, err
+	}
+	if record.StrategyID != req.StrategyID ||
+		record.InstrumentID != req.InstrumentID ||
+		record.DataSource != req.DataSource ||
+		record.Interval != req.Interval ||
+		record.ExecutionMode != req.ExecutionMode {
+		return req, fmt.Errorf("seed_gene_id #%d scope does not match this search", req.SeedGeneID)
+	}
+	switch record.Role {
+	case saasstore.GeneRoleChallenger, saasstore.GeneRoleChampion, saasstore.GeneRoleRetired:
+	default:
+		return req, fmt.Errorf("seed_gene_id #%d has unsupported role %s", req.SeedGeneID, record.Role)
+	}
+	req.seedParamPack = []byte(record.ParamPack)
+	params := sigmoiddca.ParseParamsFromParamPack(req.seedParamPack)
+	fixed := params.Chromosome
+	req.fixedGene = &fixed
+	return req, nil
+}
+
 func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) CreateTaskRequest {
 	if req.ResearchDatasetID > 0 {
 		if dataset, err := s.loadResearchDataset(ctx, req.ResearchDatasetID); err == nil {
@@ -946,6 +997,7 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 		req.ContinuousIterations = 2
 	}
 	req.TraceMode = ga.NormalizeTraceMode(req.TraceMode)
+	req.FixedParamKeys = ga.NormalizeFixedParamKeys(req.FixedParamKeys)
 	if req.TestMode {
 		req.PopSize = 10
 		req.MaxGenerations = 3
@@ -1008,6 +1060,9 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 	}
 	if req.TradePenalty > 1 {
 		return errors.New("trade_penalty is too large")
+	}
+	if len(req.FixedParamKeys) > 0 && req.SeedGeneID == 0 {
+		return errors.New("seed_gene_id is required when fixed_param_keys is not empty")
 	}
 	switch req.ContinuousMode {
 	case "", "standardized_best", "random":
@@ -1125,6 +1180,8 @@ func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
 		EnableWMomentum:           boolValue(req.EnableWMomentum),
 		EnableWBreakout:           boolValue(req.EnableWBreakout),
 		PositionStructure:         normalizedPositionStructure(req.PositionStructure),
+		FixedParamKeys:            req.FixedParamKeys,
+		FixedGene:                 req.fixedGene,
 	}
 }
 

@@ -189,6 +189,34 @@ func TestNormalizeGeneKeepsGammaWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestNormalizeGeneAppliesFixedFields(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Chromosome.Beta = 7.5
+	params.Chromosome.Gamma = 4.2
+	base := quant.DefaultSeedChromosome
+	base.Beta = 1.25
+	base.Gamma = 3.5
+
+	normalized := NewSigmoidDCAEvolvable().NormalizeGene(params.Chromosome, GeneOptions{
+		PositionStructure: sigmoiddca.PositionStructureFloatingOnly,
+		FixedParamKeys:    []string{"beta", "gamma"},
+		FixedGene:         &base,
+	}).(quant.Chromosome)
+	if math.Abs(normalized.Beta-1.25) > 1e-12 {
+		t.Fatalf("beta = %.4f, want fixed 1.25", normalized.Beta)
+	}
+	if math.Abs(normalized.Gamma-3.5) > 1e-12 {
+		t.Fatalf("gamma = %.4f, want fixed 3.5", normalized.Gamma)
+	}
+}
+
+func TestNormalizeFixedParamKeysFiltersUnknownAndDuplicates(t *testing.T) {
+	keys := NormalizeFixedParamKeys([]string{"beta", "unknown", "gamma", "beta"})
+	if len(keys) != 2 || keys[0] != "beta" || keys[1] != "gamma" {
+		t.Fatalf("keys = %#v, want beta/gamma", keys)
+	}
+}
+
 func flatTestBars(n int) []quant.Bar {
 	start := time.Date(2026, 1, 2, 14, 30, 0, 0, time.UTC)
 	bars := make([]quant.Bar, 0, n)

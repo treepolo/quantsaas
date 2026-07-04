@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"hash/fnv"
 	"math"
+	"strings"
 	"time"
 
 	"quantsaas/internal/quant"
@@ -51,7 +52,34 @@ func NormalizeGeneOptions(options GeneOptions) GeneOptions {
 		options.EnableWMomentum = true
 		options.EnableWBreakout = true
 	}
+	options.FixedParamKeys = NormalizeFixedParamKeys(options.FixedParamKeys)
 	return options
+}
+
+func NormalizeFixedParamKeys(keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if !isFixedParamKey(key) || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	return out
+}
+
+func IsFixedParamKey(key string) bool {
+	return isFixedParamKey(key)
+}
+
+func isFixedParamKey(key string) bool {
+	_, ok := quant.HardBounds[key]
+	return ok
 }
 
 func (SigmoidDCAEvolvable) StrategyID() string {
@@ -188,7 +216,55 @@ func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
 		c.SoftReleasePct = 0
 		c.HardReleaseMaxPct = 0
 	}
+	if options.FixedGene != nil && len(options.FixedParamKeys) > 0 {
+		c = applyFixedChromosomeFields(c, *options.FixedGene, options.FixedParamKeys)
+	}
 	return quant.ClampChromosome(c)
+}
+
+func applyFixedChromosomeFields(c quant.Chromosome, base quant.Chromosome, keys []string) quant.Chromosome {
+	base = quant.ClampChromosome(base)
+	for _, key := range keys {
+		switch key {
+		case "micro_reserve_pct":
+			c.MicroReservePct = base.MicroReservePct
+		case "beta":
+			c.Beta = base.Beta
+		case "gamma":
+			c.Gamma = base.Gamma
+		case "w_mean":
+			c.WMean = base.WMean
+		case "w_momentum":
+			c.WMomentum = base.WMomentum
+		case "w_breakout":
+			c.WBreakout = base.WBreakout
+		case "dust_usd":
+			c.DustUSD = base.DustUSD
+		case "rebalance_threshold":
+			c.RebalanceThreshold = base.RebalanceThreshold
+		case "force_full_threshold":
+			c.ForceFullThreshold = base.ForceFullThreshold
+		case "force_empty_threshold":
+			c.ForceEmptyThreshold = base.ForceEmptyThreshold
+		case "wedge_delta_threshold":
+			c.WedgeDeltaThreshold = base.WedgeDeltaThreshold
+		case "wedge_vol_ratio_threshold":
+			c.WedgeVolRatioThreshold = base.WedgeVolRatioThreshold
+		case "macro_bear_multiplier":
+			c.MacroBearMultiplier = base.MacroBearMultiplier
+		case "macro_bull_multiplier":
+			c.MacroBullMultiplier = base.MacroBullMultiplier
+		case "extra_deploy_pct":
+			c.ExtraDeployPct = base.ExtraDeployPct
+		case "soft_release_months":
+			c.SoftReleaseMonths = base.SoftReleaseMonths
+		case "soft_release_pct":
+			c.SoftReleasePct = base.SoftReleasePct
+		case "hard_release_max_pct":
+			c.HardReleaseMaxPct = base.HardReleaseMaxPct
+		}
+	}
+	return c
 }
 
 func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan EvaluablePlan) (FitnessResult, error) {

@@ -25,6 +25,27 @@ const traceModeOptions: Array<[TraceMode, string, string]> = [
 ];
 
 const SEARCH_INITIAL_CAPITAL = 1_000_000;
+const coreParamOptions = [
+  ["micro_reserve_pct", "微觀保留比例"],
+  ["beta", "Beta"],
+  ["gamma", "Gamma"],
+  ["w_mean", "均值權重"],
+  ["w_momentum", "動能權重"],
+  ["w_breakout", "突破權重"],
+  ["dust_usd", "最小交易金額"],
+  ["rebalance_threshold", "再平衡門檻"],
+  ["force_full_threshold", "滿倉觸發門檻"],
+  ["force_empty_threshold", "空倉觸發門檻"],
+  ["wedge_delta_threshold", "楔形差值門檻"],
+  ["wedge_vol_ratio_threshold", "楔形波動比門檻"],
+  ["macro_bear_multiplier", "熊市倍率"],
+  ["macro_bull_multiplier", "牛市倍率"],
+  ["extra_deploy_pct", "額外部署比例"],
+  ["soft_release_months", "軟釋放月數"],
+  ["soft_release_pct", "軟釋放比例"],
+  ["hard_release_max_pct", "硬釋放上限"]
+] as const;
+const coreParamLabelMap = Object.fromEntries(coreParamOptions) as Record<string, string>;
 
 function dateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -100,6 +121,27 @@ function formatTraceValue(value: unknown): string {
   if (typeof value === "number") return Number.isInteger(value) ? value.toLocaleString("zh-TW") : value.toFixed(6);
   if (typeof value === "string" || typeof value === "boolean") return String(value);
   return JSON.stringify(value);
+}
+
+function labelForCoreParam(key: string) {
+  return coreParamLabelMap[key] ?? key;
+}
+
+function fixedParamSummary(keys?: string[]) {
+  if (!keys || keys.length === 0) return "未固定";
+  return keys.map(labelForCoreParam).join(", ");
+}
+
+function chromosomeValuesFromParamPack(value?: Record<string, unknown> | null): Record<string, unknown> {
+  const chromosome = value?.sigmoid_dca_config;
+  if (!chromosome || typeof chromosome !== "object") return {};
+  return chromosome as Record<string, unknown>;
+}
+
+function formatCoreParamValue(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  if (Number.isInteger(value)) return value.toLocaleString("zh-TW");
+  return value.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function labelForInstrument(id?: string, names?: Record<string, string>) {
@@ -408,8 +450,10 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const queryClient = useQueryClient();
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
   const researchDatasetsQuery = useQuery({ queryKey: ["research-datasets"], queryFn: () => researchDataApi.list() });
+  const genomesQuery = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
   const researchDatasets = researchDatasetsQuery.data?.datasets ?? [];
+  const genomes = genomesQuery.data ?? [];
   const [expanded, setExpanded] = useState(false);
   const [researchDatasetId, setResearchDatasetId] = useState("");
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
@@ -441,10 +485,26 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [continuousUnlimited, setContinuousUnlimited] = useState(false);
   const [standardStartDate, setStandardStartDate] = useState(startDate);
   const [standardEndDate, setStandardEndDate] = useState(endDate);
+  const [seedGenomeId, setSeedGenomeId] = useState("");
+  const [fixedParamKeys, setFixedParamKeys] = useState<string[]>([]);
   const selectedResearchDataset = useMemo(
     () => researchDatasets.find((item) => String(item.id) === researchDatasetId),
     [researchDatasetId, researchDatasets]
   );
+  const selectedDataSource = selectedResearchDataset?.primary.data_source ?? selected?.data_source;
+  const compatibleSeedGenomes = useMemo(
+    () => genomes.filter((genome) =>
+      genome.strategy_id === "sigmoid-dca-btc" &&
+      genome.instrument_id === instrumentId &&
+      genome.data_source === selectedDataSource &&
+      genome.interval === interval &&
+      genome.execution_mode === executionMode &&
+      ["challenger", "champion", "retired"].includes(genome.role)
+    ),
+    [executionMode, genomes, instrumentId, interval, selectedDataSource]
+  );
+  const selectedSeedGenome = compatibleSeedGenomes.find((genome) => String(genome.id) === seedGenomeId);
+  const selectedSeedValues = chromosomeValuesFromParamPack(selectedSeedGenome?.param_pack);
   const marketDatasetQuery = useQuery({
     queryKey: ["market-data", selected?.id ?? instrumentId],
     queryFn: () => marketDataApi.status(selected?.id ?? instrumentId),
@@ -478,6 +538,12 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     if (nextStart) setStandardStartDate(nextStart);
     if (nextEnd) setStandardEndDate(nextEnd);
   }, [selectedResearchDataset]);
+  useEffect(() => {
+    if (!seedGenomeId) return;
+    if (compatibleSeedGenomes.some((genome) => String(genome.id) === seedGenomeId)) return;
+    setSeedGenomeId("");
+    setFixedParamKeys([]);
+  }, [compatibleSeedGenomes, seedGenomeId]);
   const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 1_000 });
   const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
   const animatedComputedUnits = useAnimatedNumber(running?.computed_units ?? 0);
@@ -513,8 +579,10 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     continuous_iterations: continuousIterations,
     continuous_unlimited: continuousUnlimited,
     standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
-    standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined
-  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+    standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined,
+    seed_gene_id: selectedSeedGenome?.id,
+    fixed_param_keys: selectedSeedGenome ? fixedParamKeys : undefined
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, fixedParamKeys, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, selectedSeedGenome, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
   const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
   const computeEstimateQuery = useQuery({
     queryKey: ["evolution-compute-estimate", taskInput],
@@ -569,6 +637,15 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
 
   function changeResearchDataset(nextId: string) {
     setResearchDatasetId(nextId);
+  }
+
+  function changeSeedGenome(nextId: string) {
+    setSeedGenomeId(nextId);
+    setFixedParamKeys([]);
+  }
+
+  function toggleFixedParam(key: string) {
+    setFixedParamKeys((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
   }
 
   if (running) {
@@ -698,6 +775,45 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <label><span className="mb-2 block text-sm text-slate-300">結束日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
           <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes.map(([value, label]) => [value, label])} />
           <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-300">固定核心參數</div>
+                <div className="mt-1 text-xs text-slate-500">選擇相同標的與執行設定的基準參數，再勾選要固定的核心參數。</div>
+              </div>
+              <span className="text-xs text-slate-500">{compatibleSeedGenomes.length.toLocaleString("zh-TW")} 組可選</span>
+            </div>
+            <Select
+              label="基準參數"
+              value={seedGenomeId}
+              onChange={changeSeedGenome}
+              options={[
+                ["", "不指定基準參數"],
+                ...compatibleSeedGenomes.map((genome) => [String(genome.id), `#${genome.id} / ${genome.name?.trim() || roleTitle(genome.role)} / ${genome.score_total.toFixed(3)}`])
+              ]}
+            />
+            {selectedSeedGenome ? (
+              <div className="mt-4 space-y-3">
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" onClick={() => setFixedParamKeys(coreParamOptions.map(([key]) => String(key)))}>全選固定</Button>
+                  <Button type="button" variant="secondary" onClick={() => setFixedParamKeys([])}>清除固定</Button>
+                </div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  {coreParamOptions.map(([key, label]) => (
+                    <label key={key} className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-white/[0.04] bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                      <span className="flex items-center gap-3">
+                        <input type="checkbox" checked={fixedParamKeys.includes(key)} onChange={() => toggleFixedParam(key)} />
+                        {label}
+                      </span>
+                      <span className="font-mono text-xs text-slate-500">{formatCoreParamValue(selectedSeedValues[key])}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 text-xs text-slate-500">未選基準參數時，搜尋會沿用既有流程演化所有已啟用的核心參數。</div>
+            )}
+          </div>
           {selectedResearchDataset ? (
             <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
               <div className="text-sm font-semibold text-slate-300">已套用研究資料集</div>

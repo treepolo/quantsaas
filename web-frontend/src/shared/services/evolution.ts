@@ -66,6 +66,8 @@ export type EvolutionTask = {
   standard_end_ms?: number;
   standard_champion_gene_id?: number;
   standard_champion_score?: number;
+  seed_gene_id?: number;
+  fixed_param_keys?: string[];
   best_score?: number;
   max_drawdown?: number;
   window_score?: Record<string, number>;
@@ -122,6 +124,7 @@ export type GenomeRecord = {
       EnableWMomentum?: boolean;
       EnableWBreakout?: boolean;
       PositionStructure?: "dual_layer" | "floating_only";
+      FixedParamKeys?: string[];
       evolve_rebalance_threshold?: boolean;
     };
     fee_rate?: number;
@@ -129,6 +132,8 @@ export type GenomeRecord = {
     spawn_mode?: string;
     population?: number;
     generations?: number;
+    seed_gene_id?: number;
+    fixed_param_keys?: string[];
   } | null;
   created_at: string;
   activated_at?: string | null;
@@ -172,6 +177,8 @@ export type CreateTaskInput = {
   continuous_unlimited?: boolean;
   standard_start_ms?: number;
   standard_end_ms?: number;
+  seed_gene_id?: number;
+  fixed_param_keys?: string[];
 };
 
 export type ComputeEstimate = {
