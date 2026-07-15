@@ -46,6 +46,11 @@ export type ResearchModelPoint = {
   model_target_weight_change: number;
   empty_reference_target_weight: number;
   empty_reference_target_weight_change: number;
+  cash: number;
+  asset_quantity: number;
+  actual_exposure_weight: number;
+  intraday_exposure_weight?: number;
+  daily_return: number;
 };
 
 export type ResearchModelSimulation = {

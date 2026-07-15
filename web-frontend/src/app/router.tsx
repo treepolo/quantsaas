@@ -13,6 +13,7 @@ import { MarketDataPage } from "../features/marketdata/MarketDataPage";
 import { MarketDataGeneratorPage } from "../features/marketdata/MarketDataGeneratorPage";
 import { ResearchDatasetPage } from "../features/researchdata/ResearchDatasetPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import { ComputeTasksPage } from "../features/computetasks/ComputeTasksPage";
 
 function AuthGate() {
   const { user, loading } = useAuth();
@@ -63,6 +64,7 @@ export function AppRouter() {
                 <Route path="datasets" element={<ResearchDatasetPage />} />
                 <Route path="status" element={<MarketStatusPage />} />
                 <Route path="backtesting" element={<BacktestingPage />} />
+                <Route path="tasks" element={<ComputeTasksPage />} />
               </Route>
               <Route path="templates" element={<Navigate to="/" replace />} />
               <Route path="instances" element={<Navigate to="/" replace />} />

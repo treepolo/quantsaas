@@ -7,8 +7,8 @@ import (
 	"hash/fnv"
 	"math"
 	"strings"
-	"time"
 
+	"quantsaas/internal/backtestcore"
 	"quantsaas/internal/quant"
 	"quantsaas/internal/strategies/sigmoiddca"
 )
@@ -21,17 +21,7 @@ const (
 
 type SigmoidDCAEvolvable struct{}
 
-type BacktestPoint struct {
-	TimeMs                           int64
-	Price                            float64
-	TotalEquity                      float64
-	PracticalTargetWeight            float64
-	PracticalTargetWeightChange      float64
-	ModelTargetWeight                float64
-	ModelTargetWeightChange          float64
-	EmptyReferenceTargetWeight       float64
-	EmptyReferenceTargetWeightChange float64
-}
+type BacktestPoint = backtestcore.NAVPoint
 
 type SigmoidDCAPathResult struct {
 	Metrics BacktestMetrics
@@ -299,7 +289,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			Individual:    plan.Individual,
 			Worker:        plan.Worker,
 			Window:        window.Label,
-		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure).Metrics
+		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair).Metrics
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown) - plan.TradePenalty*float64(metrics.TradeCount)
@@ -426,11 +416,15 @@ func RunSigmoidDCAPathBacktestWithMode(bars []quant.Bar, evalStartMs int64, inte
 }
 
 func RunSigmoidDCAPathBacktestWithModeAndCosts(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, sigmoiddca.PositionStructureDualLayer)
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, sigmoiddca.PositionStructureDualLayer, "BTCUSDT")
 }
 
 func RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, positionStructure)
+	return RunSigmoidDCAPathBacktestForInstrument(bars, evalStartMs, "BTCUSDT", interval, executionMode, chromosome, spawn, costs, positionStructure)
+}
+
+func RunSigmoidDCAPathBacktestForInstrument(bars []quant.Bar, evalStartMs int64, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, positionStructure, symbol)
 }
 
 func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
@@ -438,385 +432,87 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 }
 
 func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{}, sigmoiddca.PositionStructureDualLayer)
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{}, sigmoiddca.PositionStructureDualLayer, "BTCUSDT")
 }
 
-func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
-	costs = quant.NormalizeExecutionCosts(costs)
+func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string, symbol string) SigmoidDCAPathResult {
 	executionMode = normalizeBacktestExecutionMode(executionMode)
 	if len(bars) == 0 || bars[0].Close <= 0 || executionMode == executionModePreclose10m {
 		return SigmoidDCAPathResult{}
 	}
-	if interval == "" {
-		interval = "1d"
-	}
-
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome = quant.ClampChromosome(chromosome)
 	params.PositionStructure = sigmoiddca.NormalizePositionStructure(positionStructure)
 	if spawn != nil {
 		params.Spawn = *spawn
 	}
-
-	portfolio := quant.PortfolioSnapshot{USDTBalance: params.Spawn.Policy.InitialUSDT}
-	if portfolio.USDTBalance <= 0 {
-		portfolio.USDTBalance = 1000
-	}
-	portfolio.ColdSealedBTC = params.Spawn.Policy.ColdSealedBTC
-	evalInjected := 0.0
-	evalFlows := make([]quant.TimedCashFlow, 0)
-	state := map[string]any{}
-	nav := make([]float64, 0, len(bars))
-	points := make([]BacktestPoint, 0, len(bars))
-	closes := make([]float64, 0, len(bars))
-	timestamps := make([]int64, 0, len(bars))
-	lastYear, lastMonth := barYearMonth(bars[0])
-	evalInitial := 0.0
-	actualEvalStart := int64(0)
-	pendingOutput := quant.StrategyOutput{}
-	hasPendingOutput := false
-	prevModelTargetWeight := 0.0
-	prevPracticalTargetWeight := 0.0
-	prevEmptyReferenceTargetWeight := 0.0
-	adoptedPracticalTargetWeight := 0.0
-	hasAdoptedPracticalTargetWeight := false
-	hasPrevTargetWeight := false
-	tradeCount := 0
-
-	for i, bar := range bars {
-		if bar.Close <= 0 {
-			continue
-		}
-		if traceCfg.ComputeStep != nil {
-			traceCfg.ComputeStep(1)
-		}
-		year, month := barYearMonth(bar)
-		if i > 0 && (year != lastYear || month != lastMonth) && params.Spawn.Policy.MonthlyInjectUSDT > 0 {
-			portfolio.USDTBalance += params.Spawn.Policy.MonthlyInjectUSDT
-			if bar.OpenTime > evalStartMs {
-				evalInjected += params.Spawn.Policy.MonthlyInjectUSDT
-				evalFlows = append(evalFlows, quant.TimedCashFlow{TimeMs: bar.OpenTime, Amount: params.Spawn.Policy.MonthlyInjectUSDT})
+	hooks := backtestcore.Hooks{ComputeStep: traceCfg.ComputeStep}
+	if traceCfg.Trace != nil {
+		hooks.OnStep = func(event backtestcore.StepEvent) {
+			if !TraceEnabled(activePathTraceMode(traceCfg), TraceModeFull) {
+				return
 			}
-			lastYear, lastMonth = year, month
-		}
-		if usesNextOpenExecution(executionMode) && hasPendingOutput {
-			if bar.Open <= 0 {
-				return SigmoidDCAPathResult{}
-			}
-			if bar.OpenTime >= evalStartMs {
-				tradeCount += countTradeIntents(pendingOutput)
-			}
-			portfolio = applyBacktestOutputWithCosts(portfolio, pendingOutput, bar.Open, costs)
-			hasPendingOutput = false
-		}
-
-		closes = append(closes, bar.Close)
-		timestamps = append(timestamps, bar.OpenTime)
-		portfolio.TotalEquity = portfolio.USDTBalance +
-			(portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
-		output := sigmoiddca.Step(quant.StrategyInput{
-			Symbol:       "BTCUSDT",
-			Interval:     interval,
-			Closes:       closes,
-			Timestamps:   timestamps,
-			Portfolio:    portfolio,
-			RuntimeState: state,
-			Spawn:        params.Spawn,
-		}, params)
-		rawModelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
-		modelTargetWeight := totalTargetWeight(portfolio, bar.Close, portfolio.TotalEquity, rawModelTargetWeight)
-		practicalModelTargetWeight := modelTargetWeight
-		output, practicalModelTargetWeight = applyForceTargetThresholds(output, portfolio, bar.Close, params.Chromosome, modelTargetWeight)
-		rebalanceAllowed := rebalanceThresholdAllows(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
-		output = applyRebalanceThreshold(output, portfolio, bar.Close, params.Chromosome.RebalanceThreshold)
-		if !hasAdoptedPracticalTargetWeight {
-			adoptedPracticalTargetWeight = totalAssetWeight(portfolio, bar.Close, portfolio.TotalEquity)
-			hasAdoptedPracticalTargetWeight = true
-		}
-		if rebalanceAllowed && shouldAdoptPracticalTarget(output, portfolio, bar.Close, practicalModelTargetWeight) {
-			adoptedPracticalTargetWeight = practicalModelTargetWeight
-		}
-		emptyReferenceOutput := sigmoiddca.Step(quant.StrategyInput{
-			Symbol:     "BTCUSDT",
-			Interval:   interval,
-			Closes:     closes,
-			Timestamps: timestamps,
-			Portfolio: quant.PortfolioSnapshot{
-				USDTBalance: portfolio.TotalEquity,
-				TotalEquity: portfolio.TotalEquity,
-			},
-			RuntimeState: map[string]any{},
-			Spawn:        params.Spawn,
-		}, params)
-		rawEmptyReferenceTargetWeight := diagnosticValue(emptyReferenceOutput.Diagnostics, "target_weight")
-		emptyReferenceTargetWeight := totalTargetWeight(quant.PortfolioSnapshot{
-			USDTBalance: portfolio.TotalEquity,
-			TotalEquity: portfolio.TotalEquity,
-		}, bar.Close, portfolio.TotalEquity, rawEmptyReferenceTargetWeight)
-		_ = emptyReferenceOutput
-		state = output.RuntimeState
-		if usesNextOpenExecution(executionMode) {
-			pendingOutput = output
-			hasPendingOutput = true
-		} else {
-			if bar.OpenTime >= evalStartMs {
-				tradeCount += countTradeIntents(output)
-			}
-			portfolio = applyBacktestOutputWithCosts(portfolio, output, bar.Close, costs)
-		}
-
-		equity := portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*bar.Close
-		practicalTargetWeight := adoptedPracticalTargetWeight
-		if TraceEnabled(activePathTraceMode(traceCfg), TraceModeFull) {
 			tracePath(traceCfg, TraceModeFull, "strategy", "step.computed", "strategy step computed", map[string]any{
 				"generation":      traceCfg.Generation,
 				"individual":      traceCfg.Individual,
 				"worker":          traceCfg.Worker,
 				"window":          traceCfg.Window,
-				"bar_index":       i,
-				"open_time":       bar.OpenTime,
-				"close":           bar.Close,
-				"execution_mode":  executionMode,
-				"total_equity":    equity,
-				"usdt_balance":    portfolio.USDTBalance,
-				"dead_btc":        portfolio.DeadBTC,
-				"float_btc":       portfolio.FloatBTC,
-				"cold_sealed_btc": portfolio.ColdSealedBTC,
-				"intents":         len(output.Intents),
-				"lot_transfers":   len(output.LotTransfers),
-				"diagnostics":     output.Diagnostics,
+				"bar_index":       event.Index,
+				"open_time":       event.Bar.OpenTime,
+				"close":           event.Bar.Close,
+				"execution_mode":  event.ExecutionMode,
+				"total_equity":    event.TotalEquity,
+				"usdt_balance":    event.Portfolio.USDTBalance,
+				"dead_btc":        event.Portfolio.DeadBTC,
+				"float_btc":       event.Portfolio.FloatBTC,
+				"cold_sealed_btc": event.Portfolio.ColdSealedBTC,
+				"intents":         len(event.Output.Intents),
+				"lot_transfers":   len(event.Output.LotTransfers),
+				"diagnostics":     event.Output.Diagnostics,
 			})
-		}
-		if bar.OpenTime >= evalStartMs {
-			if len(nav) == 0 {
-				evalInitial = equity
-				actualEvalStart = bar.OpenTime
-			}
-			practicalTargetWeightChange := 0.0
-			modelTargetWeightChange := 0.0
-			emptyReferenceTargetWeightChange := 0.0
-			if hasPrevTargetWeight {
-				practicalTargetWeightChange = practicalTargetWeight - prevPracticalTargetWeight
-				modelTargetWeightChange = modelTargetWeight - prevModelTargetWeight
-				emptyReferenceTargetWeightChange = emptyReferenceTargetWeight - prevEmptyReferenceTargetWeight
-			}
-			nav = append(nav, equity)
-			points = append(points, BacktestPoint{
-				TimeMs:                           bar.OpenTime,
-				Price:                            bar.Close,
-				TotalEquity:                      equity,
-				PracticalTargetWeight:            practicalTargetWeight,
-				PracticalTargetWeightChange:      practicalTargetWeightChange,
-				ModelTargetWeight:                modelTargetWeight,
-				ModelTargetWeightChange:          modelTargetWeightChange,
-				EmptyReferenceTargetWeight:       emptyReferenceTargetWeight,
-				EmptyReferenceTargetWeightChange: emptyReferenceTargetWeightChange,
-			})
-			prevPracticalTargetWeight = practicalTargetWeight
-			prevModelTargetWeight = modelTargetWeight
-			prevEmptyReferenceTargetWeight = emptyReferenceTargetWeight
-			hasPrevTargetWeight = true
 		}
 	}
-
-	final := 0.0
-	if len(nav) > 0 {
-		final = nav[len(nav)-1]
+	result, err := backtestcore.RunSigmoidDCA(backtestcore.SigmoidDCARequest{
+		Spec: backtestcore.Spec{
+			Symbol:               symbol,
+			Interval:             interval,
+			ExecutionMode:        executionMode,
+			PositionStructure:    params.PositionStructure,
+			StartTimeMs:          bars[0].OpenTime,
+			EndTimeMs:            bars[len(bars)-1].OpenTime,
+			EvaluationStartMs:    evalStartMs,
+			EvaluationEndMs:      bars[len(bars)-1].OpenTime,
+			InitialCapital:       params.Spawn.Policy.InitialUSDT,
+			MonthlyContribution:  params.Spawn.Policy.MonthlyInjectUSDT,
+			InitialAssetQuantity: params.Spawn.Policy.ColdSealedBTC,
+			Costs:                costs,
+		},
+		Bars:   bars,
+		Params: params,
+		Hooks:  hooks,
+	})
+	if err != nil {
+		return SigmoidDCAPathResult{}
+	}
+	nav := make([]float64, 0, len(result.Path))
+	for _, point := range result.Path {
+		nav = append(nav, point.TotalEquity)
 	}
 	metrics := BacktestMetrics{
-		ROI:           quant.ModifiedDietzROI(evalInitial, final, evalFlows, actualEvalStart, lastBacktestPointTime(points)),
+		ROI:           result.TotalReturn,
 		MaxDrawdown:   quant.MaxDrawdown(nav),
-		FinalEquity:   final,
-		TotalInjected: evalInitial + evalInjected,
-		TradeCount:    tradeCount,
+		FinalEquity:   result.FinalAssets,
+		TotalInjected: result.TotalInjected,
+		TradeCount:    result.TradeCount,
 	}
 	return SigmoidDCAPathResult{
 		Metrics: metrics,
-		NAV:     points,
+		NAV:     result.Path,
 	}
-}
-
-func diagnosticValue(values map[string]float64, key string) float64 {
-	if values == nil {
-		return 0
-	}
-	value := values[key]
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0
-	}
-	return value
 }
 
 func applyForceTargetThresholds(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, chromosome quant.Chromosome, modelTargetWeight float64) (quant.StrategyOutput, float64) {
-	forcedTarget := modelTargetWeight
-	switch {
-	case chromosome.ForceFullThreshold < 1 && modelTargetWeight >= chromosome.ForceFullThreshold:
-		forcedTarget = 1
-	case chromosome.ForceEmptyThreshold > 0 && modelTargetWeight <= chromosome.ForceEmptyThreshold:
-		forcedTarget = 0
-	default:
-		return output, modelTargetWeight
-	}
-	return forceTotalTargetOutput(output, portfolio, price, forcedTarget, chromosome.DustUSD), forcedTarget
-}
-
-func forceTotalTargetOutput(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, targetTotalWeight float64, dustUSD float64) quant.StrategyOutput {
-	if price <= 0 {
-		return output
-	}
-	totalEquity := portfolio.TotalEquity
-	if totalEquity <= 0 {
-		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
-	}
-	if totalEquity <= 0 {
-		return output
-	}
-	targetTotalWeight = quant.ClipFloat64(targetTotalWeight, 0, 1)
-	currentAssetValue := (portfolio.DeadBTC + portfolio.FloatBTC + portfolio.ColdSealedBTC) * price
-	targetAssetValue := totalEquity * targetTotalWeight
-	deltaValue := targetAssetValue - currentAssetValue
-	dust := dustUSD
-	if dust <= 0 {
-		dust = 10.1
-	}
-
-	forced := output
-	forced.Intents = make([]quant.TradeIntent, 0, 1)
-	forced.LotTransfers = nil
-	if forced.Diagnostics == nil {
-		forced.Diagnostics = map[string]float64{}
-	}
-	targetFloatingWeight := targetFloatingWeightForTotal(portfolio, price, totalEquity, targetTotalWeight)
-	forced.Diagnostics["target_weight"] = targetFloatingWeight
-	forced.Diagnostics["delta_weight"] = targetFloatingWeight - floatingWeight(portfolio, price, totalEquity)
-
-	switch {
-	case deltaValue > dust:
-		amount := math.Min(deltaValue, portfolio.USDTBalance)
-		if amount > dust {
-			forced.Intents = append(forced.Intents, quant.TradeIntent{
-				Action:     quant.ActionBuy,
-				Engine:     quant.EngineMicro,
-				AmountUSDT: amount,
-				LotType:    quant.LotTypeFloating,
-				Reason:     "forced practical target",
-			})
-		}
-	case deltaValue < -dust:
-		sellQty := math.Min(-deltaValue/price, portfolio.DeadBTC+portfolio.FloatBTC)
-		if sellQty > portfolio.FloatBTC && portfolio.DeadBTC > 0 {
-			forced.LotTransfers = append(forced.LotTransfers, quant.LotTransfer{
-				FromLotType: quant.LotTypeDeadStack,
-				ToLotType:   quant.LotTypeFloating,
-				Amount:      math.Min(portfolio.DeadBTC, sellQty-portfolio.FloatBTC),
-				Reason:      "forced practical target release",
-			})
-		}
-		if sellQty*price > dust {
-			forced.Intents = append(forced.Intents, quant.TradeIntent{
-				Action:   quant.ActionSell,
-				Engine:   quant.EngineMicro,
-				QtyAsset: sellQty,
-				LotType:  quant.LotTypeFloating,
-				Reason:   "forced practical target",
-			})
-		}
-	}
-	return forced
-}
-
-func targetFloatingWeightForTotal(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64, targetTotalWeight float64) float64 {
-	if price <= 0 || totalEquity <= 0 {
-		return 0
-	}
-	nonFloatingWeight := (portfolio.DeadBTC + portfolio.ColdSealedBTC) * price / totalEquity
-	return quant.ClipFloat64(targetTotalWeight-nonFloatingWeight, 0, 1)
-}
-
-func countTradeIntents(output quant.StrategyOutput) int {
-	count := 0
-	for _, intent := range output.Intents {
-		if intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 {
-			count++
-		}
-		if intent.Action == quant.ActionSell && intent.QtyAsset > 0 {
-			count++
-		}
-	}
-	return count
-}
-
-func floatingWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64) float64 {
-	if price <= 0 {
-		return 0
-	}
-	if totalEquity <= 0 {
-		totalEquity = portfolio.TotalEquity
-	}
-	if totalEquity <= 0 {
-		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
-	}
-	if totalEquity <= 0 {
-		return 0
-	}
-	return quant.ClipFloat64(portfolio.FloatBTC*price/totalEquity, 0, 1)
-}
-
-func totalAssetWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64) float64 {
-	if price <= 0 {
-		return 0
-	}
-	if totalEquity <= 0 {
-		totalEquity = portfolio.TotalEquity
-	}
-	if totalEquity <= 0 {
-		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
-	}
-	if totalEquity <= 0 {
-		return 0
-	}
-	totalAsset := portfolio.DeadBTC + portfolio.FloatBTC + portfolio.ColdSealedBTC
-	return quant.ClipFloat64(totalAsset*price/totalEquity, 0, 1)
-}
-
-func totalTargetWeight(portfolio quant.PortfolioSnapshot, price float64, totalEquity float64, targetFloatingWeight float64) float64 {
-	if price <= 0 {
-		return 0
-	}
-	if totalEquity <= 0 {
-		totalEquity = portfolio.TotalEquity
-	}
-	if totalEquity <= 0 {
-		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
-	}
-	if totalEquity <= 0 {
-		return 0
-	}
-	nonFloatingWeight := (portfolio.DeadBTC + portfolio.ColdSealedBTC) * price / totalEquity
-	return quant.ClipFloat64(nonFloatingWeight+quant.ClipFloat64(targetFloatingWeight, 0, 1), 0, 1)
-}
-
-func shouldAdoptPracticalTarget(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, targetWeight float64) bool {
-	if hasExecutablePracticalAdjustment(output) {
-		return true
-	}
-	currentWeight := totalAssetWeight(portfolio, price, portfolio.TotalEquity)
-	return math.Abs(currentWeight-targetWeight) <= 1e-9
-}
-
-func hasExecutablePracticalAdjustment(output quant.StrategyOutput) bool {
-	for _, intent := range output.Intents {
-		if intent.Engine != quant.EngineMicro {
-			continue
-		}
-		if intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 {
-			return true
-		}
-		if intent.Action == quant.ActionSell && intent.QtyAsset > 0 {
-			return true
-		}
-	}
-	return len(output.LotTransfers) > 0
+	return backtestcore.ApplyForceTargetThresholds(output, portfolio, price, chromosome, modelTargetWeight)
 }
 
 func normalizeBacktestExecutionMode(mode string) string {
@@ -874,44 +570,12 @@ func activePathTraceMode(traceCfg PathTraceConfig) TraceMode {
 	return NormalizeTraceMode(traceCfg.Mode)
 }
 
-func lastBacktestPointTime(points []BacktestPoint) int64 {
-	if len(points) == 0 {
-		return 0
-	}
-	return points[len(points)-1].TimeMs
-}
-
 func applyRebalanceThreshold(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, threshold float64) quant.StrategyOutput {
-	if rebalanceThresholdAllows(output, portfolio, price, threshold) {
-		return output
-	}
-
-	filtered := output
-	filtered.Intents = make([]quant.TradeIntent, 0, len(output.Intents))
-	for _, intent := range output.Intents {
-		if intent.Engine == quant.EngineMicro {
-			continue
-		}
-		filtered.Intents = append(filtered.Intents, intent)
-	}
-	filtered.LotTransfers = nil
-	return filtered
+	return backtestcore.ApplyRebalanceThreshold(output, portfolio, price, threshold)
 }
 
 func rebalanceThresholdAllows(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, threshold float64) bool {
-	if threshold <= 0 || price <= 0 {
-		return true
-	}
-	targetWeight := diagnosticValue(output.Diagnostics, "target_weight")
-	totalEquity := portfolio.TotalEquity
-	if totalEquity <= 0 {
-		totalEquity = portfolio.USDTBalance + (portfolio.DeadBTC+portfolio.FloatBTC+portfolio.ColdSealedBTC)*price
-	}
-	if totalEquity <= 0 {
-		return true
-	}
-	currentWeight := floatingWeight(portfolio, price, totalEquity)
-	return math.Abs(targetWeight-currentWeight) >= threshold
+	return backtestcore.RebalanceThresholdAllows(output, portfolio, price, threshold)
 }
 
 func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.StrategyOutput, price float64) quant.PortfolioSnapshot {
@@ -919,38 +583,8 @@ func applyBacktestOutput(portfolio quant.PortfolioSnapshot, output quant.Strateg
 }
 
 func applyBacktestOutputWithCosts(portfolio quant.PortfolioSnapshot, output quant.StrategyOutput, price float64, costs quant.ExecutionCostConfig) quant.PortfolioSnapshot {
-	for _, transfer := range output.LotTransfers {
-		if transfer.FromLotType == quant.LotTypeDeadStack && transfer.ToLotType == quant.LotTypeFloating {
-			amount := math.Min(transfer.Amount, portfolio.DeadBTC)
-			portfolio.DeadBTC -= amount
-			portfolio.FloatBTC += amount
-		}
-	}
-	for _, intent := range output.Intents {
-		switch {
-		case intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 && price > 0:
-			amount := math.Min(intent.AmountUSDT, portfolio.USDTBalance)
-			qty, spent := quant.BuyQuantityForCash(amount, price, costs)
-			if qty <= 0 || spent <= 0 {
-				continue
-			}
-			portfolio.USDTBalance -= spent
-			if intent.LotType == quant.LotTypeDeadStack {
-				portfolio.DeadBTC += qty
-			} else {
-				portfolio.FloatBTC += qty
-			}
-		case intent.Action == quant.ActionSell && intent.QtyAsset > 0:
-			qty := math.Min(intent.QtyAsset, portfolio.FloatBTC)
-			proceeds := quant.SellProceedsForQuantity(qty, price, costs)
-			if qty <= 0 || proceeds <= 0 {
-				continue
-			}
-			portfolio.FloatBTC -= qty
-			portfolio.USDTBalance += proceeds
-		}
-	}
-	return portfolio
+	updated, _ := backtestcore.ApplyStrategyOutput(portfolio, output, price, backtestcore.SimulatorConfig{Costs: costs})
+	return updated
 }
 
 func asChromosome(g Gene) quant.Chromosome {
@@ -994,9 +628,4 @@ func firstEvalStart(bars []quant.Bar) int64 {
 		return 0
 	}
 	return bars[0].OpenTime
-}
-
-func barYearMonth(bar quant.Bar) (int, time.Month) {
-	t := time.UnixMilli(bar.OpenTime).UTC()
-	return t.Year(), t.Month()
 }

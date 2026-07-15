@@ -304,7 +304,7 @@ func Calculate(bundle Bundle, manualPrices []ManualPrice) (Result, error) {
 	}
 	executionMode := marketdata.NormalizeExecutionMode(bundle.ExecutionMode)
 	positionStructure := sigmoiddca.NormalizePositionStructure(params.PositionStructure)
-	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(quantBars, quantBars[0].OpenTime, bundle.Interval, executionMode, params.Chromosome, &spawn, quant.ExecutionCostConfig{}, positionStructure)
+	path := ga.RunSigmoidDCAPathBacktestForInstrument(quantBars, quantBars[0].OpenTime, bundle.Symbol, bundle.Interval, executionMode, params.Chromosome, &spawn, quant.ExecutionCostConfig{}, positionStructure)
 	if len(path.NAV) == 0 {
 		return Result{}, errors.New("model simulation produced no points")
 	}

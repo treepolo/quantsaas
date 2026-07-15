@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"quantsaas/internal/marketversion"
 	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 
@@ -33,23 +34,27 @@ type Service struct {
 }
 
 type DatasetRequest struct {
-	Name                string               `json:"name"`
-	Notes               string               `json:"notes"`
-	PrimaryInstrumentID string               `json:"primary_instrument_id"`
-	PrimaryInterval     string               `json:"primary_interval"`
-	Indicators          []IndicatorSelection `json:"indicators"`
-	StartTimeMs         int64                `json:"start_time_ms"`
-	EndTimeMs           int64                `json:"end_time_ms"`
-	MissingPolicy       string               `json:"missing_policy"`
-	IndicatorAlgorithm  string               `json:"indicator_algorithm"`
-	AvailabilityDelay   AvailabilityDelay    `json:"availability_delay"`
+	Name                         string               `json:"name"`
+	Notes                        string               `json:"notes"`
+	PrimaryInstrumentID          string               `json:"primary_instrument_id"`
+	PrimaryInterval              string               `json:"primary_interval"`
+	PrimaryMarketDataVersionID   uint                 `json:"primary_market_data_version_id,omitempty"`
+	PrimaryMarketDataContentHash string               `json:"primary_market_data_content_hash,omitempty"`
+	Indicators                   []IndicatorSelection `json:"indicators"`
+	StartTimeMs                  int64                `json:"start_time_ms"`
+	EndTimeMs                    int64                `json:"end_time_ms"`
+	MissingPolicy                string               `json:"missing_policy"`
+	IndicatorAlgorithm           string               `json:"indicator_algorithm"`
+	AvailabilityDelay            AvailabilityDelay    `json:"availability_delay"`
 }
 
 type PreviewRequest = DatasetRequest
 
 type IndicatorSelection struct {
-	InstrumentID string `json:"instrument_id"`
-	Interval     string `json:"interval"`
+	InstrumentID          string `json:"instrument_id"`
+	Interval              string `json:"interval"`
+	MarketDataVersionID   uint   `json:"market_data_version_id,omitempty"`
+	MarketDataContentHash string `json:"market_data_content_hash,omitempty"`
 }
 
 type DatasetResponse struct {
@@ -72,12 +77,14 @@ type DatasetResponse struct {
 }
 
 type DatasetSeries struct {
-	InstrumentID string `json:"instrument_id"`
-	Symbol       string `json:"symbol"`
-	DisplayName  string `json:"display_name"`
-	DataSource   string `json:"data_source"`
-	Interval     string `json:"interval"`
-	SortOrder    int    `json:"sort_order"`
+	InstrumentID          string `json:"instrument_id"`
+	Symbol                string `json:"symbol"`
+	DisplayName           string `json:"display_name"`
+	DataSource            string `json:"data_source"`
+	Interval              string `json:"interval"`
+	SortOrder             int    `json:"sort_order"`
+	MarketDataVersionID   uint   `json:"market_data_version_id,omitempty"`
+	MarketDataContentHash string `json:"market_data_content_hash,omitempty"`
 }
 
 type PreviewResult struct {
@@ -129,6 +136,14 @@ type seriesPoint struct {
 type resolvedIndicator struct {
 	Instrument marketdata.ResearchInstrument
 	Interval   string
+	Version    *marketVersionReference
+}
+
+type marketVersionReference struct {
+	ID           uint
+	ContentHash  string
+	InstrumentID string
+	Interval     string
 }
 
 func NewService(db *gorm.DB) *Service {
@@ -179,22 +194,24 @@ func (s *Service) Create(ctx context.Context, req DatasetRequest) (DatasetRespon
 	var created saasstore.ResearchDataset
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		created = saasstore.ResearchDataset{
-			Name:                normalized.Name,
-			Notes:               normalized.Notes,
-			PrimaryInstrumentID: primary.ID,
-			PrimaryDataSource:   primary.DataSource,
-			PrimarySymbol:       primary.Symbol,
-			PrimaryInterval:     normalized.PrimaryInterval,
-			StartTimeMs:         normalized.StartTimeMs,
-			EndTimeMs:           normalized.EndTimeMs,
-			MissingPolicy:       normalized.MissingPolicy,
-			IndicatorAlgorithm:  normalized.IndicatorAlgorithm,
-			Config:              configRaw,
+			Name:                         normalized.Name,
+			Notes:                        normalized.Notes,
+			PrimaryInstrumentID:          primary.ID,
+			PrimaryDataSource:            primary.DataSource,
+			PrimarySymbol:                primary.Symbol,
+			PrimaryInterval:              normalized.PrimaryInterval,
+			PrimaryMarketDataVersionID:   optionalVersionID(normalized.PrimaryMarketDataVersionID),
+			PrimaryMarketDataContentHash: normalized.PrimaryMarketDataContentHash,
+			StartTimeMs:                  normalized.StartTimeMs,
+			EndTimeMs:                    normalized.EndTimeMs,
+			MissingPolicy:                normalized.MissingPolicy,
+			IndicatorAlgorithm:           normalized.IndicatorAlgorithm,
+			Config:                       configRaw,
 		}
 		if err := tx.Create(&created).Error; err != nil {
 			return err
 		}
-		return replaceSeries(ctx, tx, created.ID, primary, normalized.PrimaryInterval, indicators)
+		return replaceSeries(ctx, tx, created.ID, primary, normalized.PrimaryInterval, normalized.PrimaryMarketDataVersionID, normalized.PrimaryMarketDataContentHash, indicators)
 	})
 	if err != nil {
 		return DatasetResponse{}, err
@@ -222,22 +239,24 @@ func (s *Service) Update(ctx context.Context, id uint, req DatasetRequest) (Data
 			return err
 		}
 		updates := map[string]any{
-			"name":                  normalized.Name,
-			"notes":                 normalized.Notes,
-			"primary_instrument_id": primary.ID,
-			"primary_data_source":   primary.DataSource,
-			"primary_symbol":        primary.Symbol,
-			"primary_interval":      normalized.PrimaryInterval,
-			"start_time_ms":         normalized.StartTimeMs,
-			"end_time_ms":           normalized.EndTimeMs,
-			"missing_policy":        normalized.MissingPolicy,
-			"indicator_algorithm":   normalized.IndicatorAlgorithm,
-			"config":                configRaw,
+			"name":                             normalized.Name,
+			"notes":                            normalized.Notes,
+			"primary_instrument_id":            primary.ID,
+			"primary_data_source":              primary.DataSource,
+			"primary_symbol":                   primary.Symbol,
+			"primary_interval":                 normalized.PrimaryInterval,
+			"primary_market_data_version_id":   optionalVersionID(normalized.PrimaryMarketDataVersionID),
+			"primary_market_data_content_hash": normalized.PrimaryMarketDataContentHash,
+			"start_time_ms":                    normalized.StartTimeMs,
+			"end_time_ms":                      normalized.EndTimeMs,
+			"missing_policy":                   normalized.MissingPolicy,
+			"indicator_algorithm":              normalized.IndicatorAlgorithm,
+			"config":                           configRaw,
 		}
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 			return err
 		}
-		return replaceSeries(ctx, tx, id, primary, normalized.PrimaryInterval, indicators)
+		return replaceSeries(ctx, tx, id, primary, normalized.PrimaryInterval, normalized.PrimaryMarketDataVersionID, normalized.PrimaryMarketDataContentHash, indicators)
 	})
 	if err != nil {
 		return DatasetResponse{}, err
@@ -270,7 +289,11 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	primaryRows, err := s.loadSeries(ctx, primaryInstrument, req.PrimaryInterval, req.StartTimeMs, req.EndTimeMs, AvailabilityDelay{})
+	primaryVersion, err := s.resolvePublishedVersion(ctx, req.PrimaryMarketDataVersionID, req.PrimaryMarketDataContentHash, primaryInstrument.ID, req.PrimaryInterval)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	primaryRows, err := s.loadSeries(ctx, primaryInstrument, req.PrimaryInterval, req.StartTimeMs, req.EndTimeMs, AvailabilityDelay{}, primaryVersion)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -315,7 +338,12 @@ func (s *Service) Preview(ctx context.Context, req PreviewRequest) (PreviewResul
 			})
 			continue
 		}
-		rows, err := s.loadSeries(ctx, instrument, selection.Interval, req.StartTimeMs, req.EndTimeMs, req.AvailabilityDelay)
+		version, versionErr := s.resolvePublishedVersion(ctx, selection.MarketDataVersionID, selection.MarketDataContentHash, instrument.ID, selection.Interval)
+		if versionErr != nil {
+			indicators = append(indicators, SeriesPreview{InstrumentID: instrument.ID, Symbol: instrument.Symbol, DisplayName: instrument.DisplayName, DataSource: instrument.DataSource, Interval: selection.Interval, Error: versionErr.Error()})
+			continue
+		}
+		rows, err := s.loadSeries(ctx, instrument, selection.Interval, req.StartTimeMs, req.EndTimeMs, req.AvailabilityDelay, version)
 		if err != nil {
 			indicators = append(indicators, SeriesPreview{
 				InstrumentID: instrument.ID,
@@ -376,6 +404,14 @@ func (s *Service) normalizeRequest(ctx context.Context, req DatasetRequest) (Dat
 	if err != nil {
 		return req, marketdata.ResearchInstrument{}, nil, err
 	}
+	primaryVersion, err := s.resolvePublishedVersion(ctx, req.PrimaryMarketDataVersionID, req.PrimaryMarketDataContentHash, primary.ID, req.PrimaryInterval)
+	if err != nil {
+		return req, marketdata.ResearchInstrument{}, nil, err
+	}
+	if primaryVersion != nil {
+		req.PrimaryMarketDataVersionID = primaryVersion.ID
+		req.PrimaryMarketDataContentHash = primaryVersion.ContentHash
+	}
 	indicators := make([]resolvedIndicator, 0, len(req.Indicators))
 	seen := map[string]bool{}
 	for index, selection := range req.Indicators {
@@ -397,9 +433,42 @@ func (s *Service) normalizeRequest(ctx context.Context, req DatasetRequest) (Dat
 			return req, marketdata.ResearchInstrument{}, nil, err
 		}
 		req.Indicators[index] = selection
-		indicators = append(indicators, resolvedIndicator{Instrument: instrument, Interval: selection.Interval})
+		version, err := s.resolvePublishedVersion(ctx, selection.MarketDataVersionID, selection.MarketDataContentHash, instrument.ID, selection.Interval)
+		if err != nil {
+			return req, marketdata.ResearchInstrument{}, nil, err
+		}
+		if version != nil {
+			selection.MarketDataVersionID = version.ID
+			selection.MarketDataContentHash = version.ContentHash
+			req.Indicators[index] = selection
+		}
+		indicators = append(indicators, resolvedIndicator{Instrument: instrument, Interval: selection.Interval, Version: version})
 	}
 	return req, primary, indicators, nil
+}
+
+func (s *Service) resolvePublishedVersion(ctx context.Context, versionID uint, contentHash, instrumentID, interval string) (*marketVersionReference, error) {
+	query := s.db.WithContext(ctx).Model(&saasstore.MarketDataVersion{}).
+		Where("status = ? AND integrity_status = ? AND published = true AND output_instrument_id = ? AND interval = ?",
+			marketversion.VersionStatusCompleted, marketversion.IntegrityValid, instrumentID, interval)
+	if versionID != 0 {
+		query = query.Where("id = ?", versionID)
+	}
+	var version saasstore.MarketDataVersion
+	err := query.Order("id DESC").First(&version).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		if versionID != 0 || strings.TrimSpace(contentHash) != "" {
+			return nil, fmt.Errorf("%w: 行情版本不存在或未通過完整性稽核", ErrInvalidDatasetRequest)
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(contentHash) != "" && version.ContentHash != strings.TrimSpace(contentHash) {
+		return nil, fmt.Errorf("%w: 行情版本內容雜湊不符", ErrInvalidDatasetRequest)
+	}
+	return &marketVersionReference{ID: version.ID, ContentHash: version.ContentHash, InstrumentID: instrumentID, Interval: interval}, nil
 }
 
 func (s *Service) responseForRecord(ctx context.Context, row saasstore.ResearchDataset, includePreview bool) (DatasetResponse, error) {
@@ -425,12 +494,16 @@ func (s *Service) responseForRecord(ctx context.Context, row saasstore.ResearchD
 	}
 	for _, item := range seriesRows {
 		series := DatasetSeries{
-			InstrumentID: item.InstrumentID,
-			Symbol:       item.Symbol,
-			DisplayName:  item.Symbol,
-			DataSource:   item.DataSource,
-			Interval:     item.Interval,
-			SortOrder:    item.SortOrder,
+			InstrumentID:          item.InstrumentID,
+			Symbol:                item.Symbol,
+			DisplayName:           item.Symbol,
+			DataSource:            item.DataSource,
+			Interval:              item.Interval,
+			SortOrder:             item.SortOrder,
+			MarketDataContentHash: item.MarketDataContentHash,
+		}
+		if item.MarketDataVersionID != nil {
+			series.MarketDataVersionID = *item.MarketDataVersionID
 		}
 		if instrument, err := s.marketData.ResolveInstrument(ctx, item.InstrumentID, "", ""); err == nil {
 			series.DisplayName = instrument.DisplayName
@@ -443,11 +516,15 @@ func (s *Service) responseForRecord(ctx context.Context, row saasstore.ResearchD
 	}
 	if response.Primary.InstrumentID == "" {
 		response.Primary = DatasetSeries{
-			InstrumentID: row.PrimaryInstrumentID,
-			Symbol:       row.PrimarySymbol,
-			DisplayName:  row.PrimarySymbol,
-			DataSource:   row.PrimaryDataSource,
-			Interval:     row.PrimaryInterval,
+			InstrumentID:          row.PrimaryInstrumentID,
+			Symbol:                row.PrimarySymbol,
+			DisplayName:           row.PrimarySymbol,
+			DataSource:            row.PrimaryDataSource,
+			Interval:              row.PrimaryInterval,
+			MarketDataContentHash: row.PrimaryMarketDataContentHash,
+		}
+		if row.PrimaryMarketDataVersionID != nil {
+			response.Primary.MarketDataVersionID = *row.PrimaryMarketDataVersionID
 		}
 	}
 	response.CanSearch, response.SearchBlockedReason = searchReadiness(len(response.Indicators), response.IndicatorAlgorithm, nil)
@@ -467,37 +544,41 @@ func (s *Service) responseForRecord(ctx context.Context, row saasstore.ResearchD
 func (d DatasetResponse) toRequest() DatasetRequest {
 	indicators := make([]IndicatorSelection, 0, len(d.Indicators))
 	for _, item := range d.Indicators {
-		indicators = append(indicators, IndicatorSelection{InstrumentID: item.InstrumentID, Interval: item.Interval})
+		indicators = append(indicators, IndicatorSelection{InstrumentID: item.InstrumentID, Interval: item.Interval, MarketDataVersionID: item.MarketDataVersionID, MarketDataContentHash: item.MarketDataContentHash})
 	}
 	return DatasetRequest{
-		Name:                d.Name,
-		Notes:               d.Notes,
-		PrimaryInstrumentID: d.Primary.InstrumentID,
-		PrimaryInterval:     d.Primary.Interval,
-		Indicators:          indicators,
-		StartTimeMs:         d.StartTimeMs,
-		EndTimeMs:           d.EndTimeMs,
-		MissingPolicy:       d.MissingPolicy,
-		IndicatorAlgorithm:  d.IndicatorAlgorithm,
-		AvailabilityDelay:   d.AvailabilityDelay,
+		Name:                         d.Name,
+		Notes:                        d.Notes,
+		PrimaryInstrumentID:          d.Primary.InstrumentID,
+		PrimaryInterval:              d.Primary.Interval,
+		PrimaryMarketDataVersionID:   d.Primary.MarketDataVersionID,
+		PrimaryMarketDataContentHash: d.Primary.MarketDataContentHash,
+		Indicators:                   indicators,
+		StartTimeMs:                  d.StartTimeMs,
+		EndTimeMs:                    d.EndTimeMs,
+		MissingPolicy:                d.MissingPolicy,
+		IndicatorAlgorithm:           d.IndicatorAlgorithm,
+		AvailabilityDelay:            d.AvailabilityDelay,
 	}
 }
 
-func replaceSeries(ctx context.Context, tx *gorm.DB, datasetID uint, primary marketdata.ResearchInstrument, primaryInterval string, indicators []resolvedIndicator) error {
+func replaceSeries(ctx context.Context, tx *gorm.DB, datasetID uint, primary marketdata.ResearchInstrument, primaryInterval string, primaryVersionID uint, primaryContentHash string, indicators []resolvedIndicator) error {
 	if err := tx.WithContext(ctx).Where("dataset_id = ?", datasetID).Delete(&saasstore.ResearchDatasetSeries{}).Error; err != nil {
 		return err
 	}
 	rows := []saasstore.ResearchDatasetSeries{{
-		DatasetID:    datasetID,
-		Role:         SeriesRolePrimary,
-		SortOrder:    0,
-		InstrumentID: primary.ID,
-		DataSource:   primary.DataSource,
-		Symbol:       primary.Symbol,
-		Interval:     primaryInterval,
+		DatasetID:             datasetID,
+		Role:                  SeriesRolePrimary,
+		SortOrder:             0,
+		InstrumentID:          primary.ID,
+		DataSource:            primary.DataSource,
+		Symbol:                primary.Symbol,
+		Interval:              primaryInterval,
+		MarketDataVersionID:   optionalVersionID(primaryVersionID),
+		MarketDataContentHash: primaryContentHash,
 	}}
 	for index, indicator := range indicators {
-		rows = append(rows, saasstore.ResearchDatasetSeries{
+		row := saasstore.ResearchDatasetSeries{
 			DatasetID:    datasetID,
 			Role:         SeriesRoleIndicator,
 			SortOrder:    index + 1,
@@ -505,14 +586,38 @@ func replaceSeries(ctx context.Context, tx *gorm.DB, datasetID uint, primary mar
 			DataSource:   indicator.Instrument.DataSource,
 			Symbol:       indicator.Instrument.Symbol,
 			Interval:     indicator.Interval,
-		})
+		}
+		if indicator.Version != nil {
+			row.MarketDataVersionID = &indicator.Version.ID
+			row.MarketDataContentHash = indicator.Version.ContentHash
+		}
+		rows = append(rows, row)
 	}
 	return tx.WithContext(ctx).Create(&rows).Error
 }
 
-func (s *Service) loadSeries(ctx context.Context, instrument marketdata.ResearchInstrument, interval string, startMs int64, endMs int64, delay AvailabilityDelay) ([]seriesPoint, error) {
+func optionalVersionID(value uint) *uint {
+	if value == 0 {
+		return nil
+	}
+	result := value
+	return &result
+}
+
+func (s *Service) loadSeries(ctx context.Context, instrument marketdata.ResearchInstrument, interval string, startMs int64, endMs int64, delay AvailabilityDelay, version *marketVersionReference) ([]seriesPoint, error) {
 	if s.db == nil {
 		return nil, nil
+	}
+	if version != nil {
+		var rows []saasstore.MarketDataVersionBar
+		if err := s.db.WithContext(ctx).Where("version_id = ? AND open_time BETWEEN ? AND ?", version.ID, startMs, endMs).Order("ordinal ASC").Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		points := make([]seriesPoint, 0, len(rows))
+		for _, row := range rows {
+			points = append(points, seriesPoint{Time: row.OpenTime, AvailableTime: row.OpenTime, Close: row.Close})
+		}
+		return points, nil
 	}
 	var rows []saasstore.KLine
 	if err := s.db.WithContext(ctx).

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"quantsaas/internal/saas/computetask"
 	saasstore "quantsaas/internal/saas/store"
 
 	"gorm.io/gorm"
@@ -31,6 +32,7 @@ const (
 	PriceAdjustmentYahooIntraday          = "yahoo_raw_intraday_v1"
 	PriceAdjustmentFredValue              = "fred_observation_value_v1"
 	PriceAdjustmentGeneratedDailyLeverage = "generated_daily_leverage_v1"
+	PriceAdjustmentSegmentRecomposition   = "segment_recomposition_v1"
 
 	FredAvailabilityRuleReleaseDate = "fred_release_date_v2"
 
@@ -85,12 +87,19 @@ type BinanceKLine struct {
 }
 
 type Service struct {
-	db          *gorm.DB
-	client      *Client
-	yahooClient *YahooClient
-	fredClient  *FredClient
-	instruments *InstrumentStore
-	now         func() time.Time
+	db           *gorm.DB
+	client       *Client
+	yahooClient  *YahooClient
+	fredClient   *FredClient
+	instruments  *InstrumentStore
+	computeTasks *computetask.Service
+	now          func() time.Time
+}
+
+func (s *Service) SetComputeTasks(service *computetask.Service) {
+	if s != nil {
+		s.computeTasks = service
+	}
 }
 
 type ImportRequest struct {
@@ -1335,6 +1344,8 @@ func priceAdjustmentText(value string) (string, string) {
 		return "FRED 觀測值", "使用 FRED 單一日期觀測值；open/high/low/close 皆存為同一數值，供研究資料集對齊。"
 	}
 	switch value {
+	case PriceAdjustmentSegmentRecomposition:
+		return "K 線片段重組", "來源片段依順序接合，價格以乘法縮放保留原片段缺口，時間改映射至版本交易日曆。"
 	case PriceAdjustmentGeneratedDailyLeverage:
 		return "產生器每日倍數做多", "由已匯入母行情依每日倍數做多規則產生；成交量為 0，最高與最低價由開收價補齊。"
 	case PriceAdjustmentYahooAdjusted:

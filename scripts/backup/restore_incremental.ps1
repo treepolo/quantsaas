@@ -37,7 +37,9 @@ Invoke-BackupTool -Root $root -DatabaseDSN $dsn -Arguments @(
     "import-incremental",
     "--in", $relative
 )
+Invoke-BackupTool -Root $root -DatabaseDSN $dsn -Arguments @("verify-backtests")
+Invoke-BackupTool -Root $root -DatabaseDSN $dsn -Arguments @("verify-compute-tasks")
 
 Write-Host ""
-Write-Host "增量還原完成：$Archive"
+Write-Host "增量還原完成，標準化回測、報酬分析與計算任務內容 hash／引用已驗證：$Archive"
 

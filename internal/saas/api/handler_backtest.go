@@ -60,6 +60,69 @@ func (h *BacktestHandler) Get(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
+func (h *BacktestHandler) GetStandardResult(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	response, err := h.service.GetStandardResult(c.Request.Context(), currentUserID(c), uint(id))
+	if err != nil {
+		if errors.Is(err, backtest.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "backtest result not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *BacktestHandler) GetStandardPathBlock(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	blockIndex := 0
+	if raw := c.Query("block_index"); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid block_index"})
+			return
+		}
+		blockIndex = parsed
+	}
+	response, err := h.service.GetStandardPathBlock(c.Request.Context(), currentUserID(c), uint(id), blockIndex)
+	if err != nil {
+		if errors.Is(err, backtest.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "backtest path block not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (h *BacktestHandler) VerifyStandardResult(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	response, err := h.service.VerifyStandardResult(c.Request.Context(), currentUserID(c), uint(id))
+	if err != nil {
+		if errors.Is(err, backtest.ErrNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "backtest result not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
 func (h *BacktestHandler) canUseLab() bool {
 	return h.appRole == config.AppRoleLab || h.appRole == config.AppRoleDev
 }

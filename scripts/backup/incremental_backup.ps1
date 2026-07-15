@@ -41,7 +41,7 @@ Invoke-BackupTool -Root $root -DatabaseDSN $dsn -Arguments @(
 )
 
 $manifest = @{
-    version = 1
+    version = 4
     kind = "daily-incremental"
     created_at = (Get-Date).ToUniversalTime().ToString("o")
     since = $Since
@@ -53,7 +53,18 @@ $manifest = @{
         "gene_records",
         "gene_observations",
         "evolution_tasks",
-        "backtest_runs"
+        "backtest_specs",
+        "backtest_results",
+        "backtest_result_summaries",
+        "backtest_path_blocks",
+        "backtest_runs",
+        "performance_reports",
+        "performance_report_summaries",
+        "performance_report_chart_blocks",
+        "compute_tasks",
+        "compute_cache_entries",
+        "compute_task_items",
+        "compute_task_dependencies"
     )
     excluded = @(
         "Docker images",

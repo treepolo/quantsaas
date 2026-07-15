@@ -66,6 +66,11 @@ Invoke-DockerCompose -Root $root -Arguments @(
 )
 Invoke-DockerCompose -Root $root -Arguments @("exec", "-T", "postgres", "rm", "-f", "/tmp/quantsaas-restore.sql")
 
+Write-Host "驗證標準化回測結果與報酬分析報告的引用及內容 hash..."
+$dsn = Get-ContainerDSN
+Invoke-BackupTool -Root $root -DatabaseDSN $dsn -Arguments @("verify-backtests")
+Invoke-BackupTool -Root $root -DatabaseDSN $dsn -Arguments @("verify-compute-tasks")
+
 Write-Host ""
 Write-Host "全量還原完成。接著可以依時間順序套用全量之後的每日增量備份。"
 

@@ -210,7 +210,7 @@ func (h *ResearchStatusHandler) instrumentIntervalStatus(ctx context.Context, in
 	base["parameter_values"] = paramValues
 	base["_rows"] = rows
 	base["_params"] = params
-	if model, ok := simulateResearchModel(rows, params, interval, champion.ExecutionMode, simulation); ok {
+	if model, ok := simulateResearchModel(rows, params, instrument.Symbol, interval, champion.ExecutionMode, simulation); ok {
 		base["model_simulation"] = model
 		if latestTarget, ok := model["latest_practical_target_weight"]; ok {
 			base["target_weight"] = latestTarget
@@ -266,7 +266,7 @@ func instrumentSupportsInterval(instrument marketdata.ResearchInstrument, interv
 	return false
 }
 
-func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, interval string, executionMode string, settings positionSimulationQuery) (gin.H, bool) {
+func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, symbol string, interval string, executionMode string, settings positionSimulationQuery) (gin.H, bool) {
 	if len(rows) == 0 {
 		return nil, false
 	}
@@ -280,7 +280,7 @@ func simulateResearchModel(rows []saasstore.KLine, params sigmoiddca.Params, int
 	bars := barsFromRows(rows)
 	executionMode = marketdata.NormalizeExecutionMode(executionMode)
 	costs := researchCosts(settings)
-	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars, rows[0].OpenTime, interval, executionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
+	path := ga.RunSigmoidDCAPathBacktestForInstrument(bars, rows[0].OpenTime, symbol, interval, executionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
 	baseline := quant.SimulateGhostDCAFrom(bars, rows[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
@@ -509,6 +509,11 @@ func mergeResearchModelPoints(strategy []ga.BacktestPoint, baseline quant.GhostD
 			"model_target_weight_change":           item.ModelTargetWeightChange,
 			"empty_reference_target_weight":        item.EmptyReferenceTargetWeight,
 			"empty_reference_target_weight_change": item.EmptyReferenceTargetWeightChange,
+			"cash":                                 item.Cash,
+			"asset_quantity":                       item.AssetQuantity,
+			"actual_exposure_weight":               item.ActualExposureWeight,
+			"intraday_exposure_weight":             item.IntradayExposureWeight,
+			"daily_return":                         item.DailyReturn,
 		})
 		previousModelNAV = item.TotalEquity
 		previousBenchmark = benchmark
@@ -524,10 +529,7 @@ func pctChange(current float64, previous float64) float64 {
 }
 
 func currentWeight(assetQty float64, price float64, equity float64) float64 {
-	if equity <= 0 || price <= 0 {
-		return 0
-	}
-	return clamp01(assetQty * price / equity)
+	return quant.ActualExposureWeight(assetQty, price, equity)
 }
 
 func clamp01(value float64) float64 {

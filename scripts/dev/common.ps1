@@ -60,7 +60,10 @@ function Wait-DockerEngine {
         $previousErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            docker info *> $null
+            # `docker info` may emit capability warnings even while the engine is
+            # healthy. Querying the server version is a smaller, stable readiness
+            # probe and still fails when only the client is available.
+            docker version --format "{{.Server.Version}}" *> $null
             $exitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -110,8 +113,15 @@ function Invoke-ProjectGoDocker {
     New-Item -ItemType Directory -Force -Path $goModCache, $goBuildCache | Out-Null
     $previousErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+    $environmentArgs = @()
+    if (![string]::IsNullOrWhiteSpace($env:TEST_DATABASE_DSN)) {
+        # Let Docker inherit the value without copying the DSN into the command
+        # line, where process inspection could expose it.
+        $environmentArgs = @("-e", "TEST_DATABASE_DSN")
+    }
     try {
         docker run --rm `
+            @environmentArgs `
             -v "${Root}:/src" `
             -v "${goModCache}:/go/pkg/mod" `
             -v "${goBuildCache}:/root/.cache/go-build" `

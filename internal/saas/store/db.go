@@ -31,7 +31,17 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 	}
 	applyPoolConfig(sqlDB, cfg)
 
-	if err := gdb.AutoMigrate(
+	if err := AutoMigrate(gdb); err != nil {
+		return nil, fmt.Errorf("auto migrate: %w", err)
+	}
+
+	return &DB{DB: gdb}, nil
+}
+
+// AutoMigrate keeps the GORM model list as the only schema source for the
+// service and maintenance tools.
+func AutoMigrate(gdb *gorm.DB) error {
+	return gdb.AutoMigrate(
 		&User{},
 		&StrategyTemplate{},
 		&StrategyInstance{},
@@ -44,19 +54,36 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		&GeneRecord{},
 		&GeneObservation{},
 		&EvolutionTask{},
+		&BacktestSpec{},
+		&BacktestResult{},
+		&BacktestResultSummary{},
+		&BacktestPathBlock{},
+		&PerformanceReport{},
+		&PerformanceReportSummary{},
+		&PerformanceReportChartBlock{},
+		&ComputeTask{},
+		&ComputeTaskDependency{},
+		&ComputeCacheEntry{},
+		&ComputeTaskItem{},
 		&BacktestRun{},
 		&ResearchInstrument{},
 		&KLine{},
 		&KLineObservationMetadata{},
 		&DatasetMetadata{},
+		&MarketSeries{},
+		&MarketDataVersion{},
+		&MarketDataVersionBar{},
+		&MarketDataVersionSource{},
+		&RecompositionPlan{},
+		&RecompositionPlanSegment{},
+		&RecompositionPreviewBar{},
+		&RecompositionGeneration{},
+		&RecompositionSegmentInstance{},
+		&RecompositionBarLineage{},
 		&ResearchDataset{},
 		&ResearchDatasetSeries{},
 		&DailyExecutionSnapshot{},
-	); err != nil {
-		return nil, fmt.Errorf("auto migrate: %w", err)
-	}
-
-	return &DB{DB: gdb}, nil
+	)
 }
 
 func applyPoolConfig(db *sql.DB, cfg config.DatabaseConfig) {

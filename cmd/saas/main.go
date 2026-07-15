@@ -10,6 +10,7 @@ import (
 
 	"quantsaas/internal/saas/api"
 	"quantsaas/internal/saas/auth"
+	"quantsaas/internal/saas/computetask"
 	"quantsaas/internal/saas/config"
 	saascron "quantsaas/internal/saas/cron"
 	"quantsaas/internal/saas/epoch"
@@ -60,6 +61,31 @@ func main() {
 	evolutionEngine := ga.NewEvolutionEngine(ga.NewSigmoidDCAEvolvable(), genomeStore)
 	epochService := epoch.NewService(db.DB, evolutionEngine, logger)
 	evolutionHandler := api.NewEvolutionHandler(cfg.AppRole, db.DB, redisClient, epochService)
+	computeRegistry := computetask.NewRegistry()
+	for _, executor := range []computetask.Executor{
+		marketdata.NewRecompositionPreviewExecutor(marketDataService),
+		marketdata.NewRecompositionExpandExecutor(marketDataService),
+		marketdata.NewRecompositionAuditExecutor(marketDataService),
+		marketdata.NewRecompositionPublishExecutor(marketDataService),
+	} {
+		if err := computeRegistry.Register(executor); err != nil {
+			logger.Fatal("register market-data compute executor failed", zap.Error(err))
+		}
+	}
+	computeOptions := computetask.Options{
+		Workers: cfg.Compute.Workers, SoftItemLimit: cfg.Compute.SoftItemLimit,
+		HardItemLimit: cfg.Compute.HardItemLimit,
+		LeaseDuration: time.Duration(cfg.Compute.LeaseSeconds) * time.Second,
+		PollInterval:  time.Duration(cfg.Compute.PollMilliseconds) * time.Millisecond,
+	}
+	computeTasks, err := computetask.NewService(db.DB, computeRegistry, computeOptions, logger)
+	if err != nil {
+		logger.Fatal("init compute task service failed", zap.Error(err))
+	}
+	marketDataService.SetComputeTasks(computeTasks)
+	if err := computeTasks.Start(); err != nil {
+		logger.Fatal("start compute task service failed", zap.Error(err))
+	}
 
 	router := api.NewRouter(api.RouterDeps{
 		Config:           cfg,
@@ -69,6 +95,8 @@ func main() {
 		InstanceManager:  instanceManager,
 		EpochService:     epochService,
 		EvolutionHandler: evolutionHandler,
+		ComputeTasks:     computeTasks,
+		MarketData:       marketDataService,
 		AgentStatus:      hub,
 		WSHandler:        hub.HandleConnection,
 	})
@@ -92,10 +120,10 @@ func main() {
 		}
 	}()
 
-	waitForShutdown(logger, server, scheduler, hub)
+	waitForShutdown(logger, server, scheduler, computeTasks, hub)
 }
 
-func waitForShutdown(logger *zap.Logger, server *http.Server, scheduler *saascron.Scheduler, hub *ws.Hub) {
+func waitForShutdown(logger *zap.Logger, server *http.Server, scheduler *saascron.Scheduler, computeTasks *computetask.Service, hub *ws.Hub) {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	<-sigCh
@@ -104,6 +132,9 @@ func waitForShutdown(logger *zap.Logger, server *http.Server, scheduler *saascro
 	defer cancel()
 
 	scheduler.Stop(ctx)
+	if err := computeTasks.Shutdown(ctx); err != nil {
+		logger.Warn("compute task shutdown failed", zap.Error(err))
+	}
 	hub.CloseAll()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Warn("http shutdown failed", zap.Error(err))

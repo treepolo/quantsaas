@@ -11,6 +11,7 @@ import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { ChartRangeSlider } from "../../shared/ui/ChartRangeSlider";
 import { cn } from "../../shared/lib/cn";
+import { PerformanceAnalysisPanel } from "../performance/PerformanceAnalysisPanel";
 
 type ScaleMode = "absolute" | "log";
 type ValueMode = "nav" | "relative";
@@ -273,6 +274,7 @@ function dateEndMs(value: string) {
 export function BacktestingPage() {
   const [params] = useSearchParams();
   const initialGenome = Number(params.get("genome")) || 0;
+  const initialRun = Number(params.get("run")) || 0;
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
   const instrumentNames = useMemo(() => Object.fromEntries(instruments.map((item) => [item.id, item.display_name])), [instruments]);
@@ -297,6 +299,7 @@ export function BacktestingPage() {
   const [monthlyDCA, setMonthlyDCA] = useState(1000);
   const [feeRate, setFeeRate] = useState(0);
   const [spreadRate, setSpreadRate] = useState(0);
+  const linkedRunQuery = useQuery({ queryKey: ["backtest-run", initialRun], queryFn: () => backtestsApi.get(initialRun), enabled: initialRun > 0 });
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
   const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];
@@ -391,6 +394,12 @@ export function BacktestingPage() {
   useEffect(() => {
     setRange(chartData.length ? { start: 0, end: chartData.length - 1 } : null);
   }, [chartData.length]);
+
+  useEffect(() => {
+    if (!linkedRunQuery.data) return;
+    setResult(linkedRunQuery.data);
+    setComparisonResults([]);
+  }, [linkedRunQuery.data]);
 
   const visibleRawChartData = useMemo(() => {
     if (!range) return chartData;
@@ -549,6 +558,9 @@ export function BacktestingPage() {
         </form>
       </Card>
 
+      {linkedRunQuery.isLoading ? <Card className="p-4 text-sm text-slate-500">讀取原始回測 #{initialRun} 中…</Card> : null}
+      {linkedRunQuery.error ? <Card className="p-4 text-sm text-[#fecaca]">{String(linkedRunQuery.error.message)}</Card> : null}
+
       {result ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -586,6 +598,8 @@ export function BacktestingPage() {
               </Card>
             ))}
           </div>
+
+          {result.backtest_result_id ? <PerformanceAnalysisPanel backtestResultId={result.backtest_result_id} betaBenchmarks={instruments} /> : <Card className="p-4 text-sm text-slate-500">這筆舊回測沒有可引用的標準化結果，無法建立版本化報酬分析。</Card>}
 
           {comparisonResults.length > 1 ? (
             <Card className="p-4">

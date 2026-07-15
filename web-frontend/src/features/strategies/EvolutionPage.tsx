@@ -10,6 +10,7 @@ import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { StatusBadge } from "../../shared/ui/StatusBadge";
 import { cn } from "../../shared/lib/cn";
+import { GenomePerformanceSummaryPanel } from "../performance/PerformanceAnalysisPanel";
 
 const intervalLabels: Record<string, string> = { "1d": "日 K", "1h": "1 小時", "15m": "15 分鐘", "5m": "5 分鐘", "1m": "1 分鐘", "1s": "1 秒", "1w": "週 K", "1M": "月 K" };
 const executionModes = [
@@ -1009,6 +1010,7 @@ function ChampionCard({ champion, instrumentNames }: { champion?: GenomeRecord; 
       {champion ? (
         <div className="space-y-4">
           <div className="grid gap-3 md:grid-cols-2"><Metric label="評分" value={champion.score_total.toFixed(3)} /><Metric label="最大回撤" value={formatPercent(champion.max_drawdown)} danger /></div>
+          <GenomePerformanceSummaryPanel genomeId={champion.id} />
           <JsonPreview value={champion.param_pack} />
         </div>
       ) : <div className="text-sm text-slate-500">候選參數晉升後會出現在這裡。</div>}
@@ -1226,6 +1228,7 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                   </div>
                 </div>
 
+                <GenomePerformanceSummaryPanel genomeId={genome.id} />
                 <details className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-semibold text-slate-300">參數 JSON</summary><div className="mt-3"><JsonPreview value={genome.param_pack} /></div></details>
                 <div className="flex flex-wrap gap-2">
                   {canPromote && !isChampion ? (confirmPromote === genome.id ? <Button loading={promoteMutation.isPending} onClick={() => promoteMutation.mutate(genome.id)}>確認採用</Button> : <Button onClick={() => setConfirmPromote(genome.id)}>設為採用</Button>) : null}

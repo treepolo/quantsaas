@@ -9,7 +9,10 @@ import (
 	"strings"
 	"time"
 
+	"quantsaas/internal/backtestcore"
+	"quantsaas/internal/marketversion"
 	"quantsaas/internal/quant"
+	"quantsaas/internal/saas/backtestresult"
 	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
@@ -24,33 +27,40 @@ const (
 	SourceCustom    = "custom"
 )
 
-var ErrNotFound = errors.New("找不到回測紀錄")
+var (
+	ErrNotFound         = errors.New("找不到回測紀錄")
+	ErrResultInProgress = errors.New("標準化回測結果仍在計算")
+)
 
 type Service struct {
-	db          *gorm.DB
-	instruments *marketdata.InstrumentStore
+	db            *gorm.DB
+	instruments   *marketdata.InstrumentStore
+	results       *backtestresult.Store
+	runSigmoidDCA func(backtestcore.SigmoidDCARequest) (backtestcore.Result, error)
 }
 
 type CreateRequest struct {
-	StrategyID     string            `json:"strategy_id"`
-	InstanceID     uint              `json:"instance_id"`
-	InstrumentID   string            `json:"instrument_id"`
-	DataSource     string            `json:"data_source"`
-	ExecutionMode  string            `json:"execution_mode"`
-	StartTimeMs    int64             `json:"start_time_ms"`
-	EndTimeMs      int64             `json:"end_time_ms"`
-	Pair           string            `json:"pair"`
-	Symbol         string            `json:"symbol"`
-	Interval       string            `json:"interval"`
-	Source         string            `json:"source"`
-	CandidateID    uint              `json:"candidate_id"`
-	GenomeID       uint              `json:"genome_id"`
-	CustomParams   json.RawMessage   `json:"custom_params"`
-	SpawnPoint     *quant.SpawnPoint `json:"spawn_point"`
-	InitialCapital *float64          `json:"initial_capital"`
-	MonthlyDCA     *float64          `json:"monthly_dca"`
-	FeeRate        *float64          `json:"fee_rate"`
-	SpreadRate     *float64          `json:"spread_rate"`
+	StrategyID            string            `json:"strategy_id"`
+	InstanceID            uint              `json:"instance_id"`
+	InstrumentID          string            `json:"instrument_id"`
+	DataSource            string            `json:"data_source"`
+	MarketDataVersionID   uint              `json:"market_data_version_id,omitempty"`
+	MarketDataContentHash string            `json:"market_data_content_hash,omitempty"`
+	ExecutionMode         string            `json:"execution_mode"`
+	StartTimeMs           int64             `json:"start_time_ms"`
+	EndTimeMs             int64             `json:"end_time_ms"`
+	Pair                  string            `json:"pair"`
+	Symbol                string            `json:"symbol"`
+	Interval              string            `json:"interval"`
+	Source                string            `json:"source"`
+	CandidateID           uint              `json:"candidate_id"`
+	GenomeID              uint              `json:"genome_id"`
+	CustomParams          json.RawMessage   `json:"custom_params"`
+	SpawnPoint            *quant.SpawnPoint `json:"spawn_point"`
+	InitialCapital        *float64          `json:"initial_capital"`
+	MonthlyDCA            *float64          `json:"monthly_dca"`
+	FeeRate               *float64          `json:"fee_rate"`
+	SpreadRate            *float64          `json:"spread_rate"`
 }
 
 type EquitySnapshot struct {
@@ -66,6 +76,11 @@ type EquitySnapshot struct {
 	ModelTargetWeightChange          float64 `json:"model_target_weight_change"`
 	EmptyReferenceTargetWeight       float64 `json:"empty_reference_target_weight"`
 	EmptyReferenceTargetWeightChange float64 `json:"empty_reference_target_weight_change"`
+	Cash                             float64 `json:"cash"`
+	AssetQuantity                    float64 `json:"asset_quantity"`
+	ActualExposureWeight             float64 `json:"actual_exposure_weight"`
+	IntradayExposureWeight           float64 `json:"intraday_exposure_weight,omitempty"`
+	DailyReturn                      float64 `json:"daily_return"`
 }
 
 type WindowResult struct {
@@ -81,6 +96,12 @@ type WindowResult struct {
 type Response struct {
 	ID                   uint               `json:"id"`
 	Status               string             `json:"status"`
+	BacktestResultID     uint               `json:"backtest_result_id,omitempty"`
+	BacktestKey          string             `json:"backtest_key,omitempty"`
+	ResultVersion        string             `json:"result_version,omitempty"`
+	ResultContentHash    string             `json:"result_content_hash,omitempty"`
+	ResultStatus         string             `json:"result_status,omitempty"`
+	ReusedResult         bool               `json:"reused_result"`
 	StrategyID           string             `json:"strategy_id"`
 	Symbol               string             `json:"symbol"`
 	InstrumentID         string             `json:"instrument_id"`
@@ -98,6 +119,9 @@ type Response struct {
 	BenchmarkFinalEquity float64            `json:"benchmark_final_equity"`
 	FeeRate              float64            `json:"fee_rate"`
 	SpreadRate           float64            `json:"spread_rate"`
+	FeeCost              float64            `json:"fee_cost"`
+	SlippageCost         float64            `json:"slippage_cost"`
+	TotalExecutionCost   float64            `json:"total_execution_cost"`
 	RebalanceThreshold   float64            `json:"rebalance_threshold"`
 	ForceFullThreshold   float64            `json:"force_full_threshold"`
 	ForceEmptyThreshold  float64            `json:"force_empty_threshold"`
@@ -114,6 +138,70 @@ type Response struct {
 	FinishedAt           string             `json:"finished_at,omitempty"`
 }
 
+type StandardResultDescriptor struct {
+	ID                 uint                         `json:"id"`
+	Status             string                       `json:"status"`
+	BacktestKey        string                       `json:"backtest_key"`
+	ResultVersion      string                       `json:"result_version"`
+	ResultContentHash  string                       `json:"result_content_hash,omitempty"`
+	Spec               backtestresult.SpecSnapshot  `json:"spec"`
+	Summary            *backtestresult.SummaryData  `json:"summary,omitempty"`
+	Manifest           *backtestresult.PathManifest `json:"path_manifest,omitempty"`
+	BacktestRunIDs     []uint                       `json:"backtest_run_ids"`
+	PerformanceReports []PerformanceReportReference `json:"performance_reports"`
+	CreatedAt          string                       `json:"created_at"`
+	CompletedAt        string                       `json:"completed_at,omitempty"`
+}
+
+type PerformanceReportReference struct {
+	ID              uint            `json:"id"`
+	Status          string          `json:"status"`
+	AnalysisVersion string          `json:"analysis_version"`
+	SchemaVersion   string          `json:"schema_version"`
+	SettingsHash    string          `json:"settings_hash"`
+	Settings        json.RawMessage `json:"settings"`
+	ContentHash     string          `json:"content_hash,omitempty"`
+	CreatedAt       string          `json:"created_at"`
+}
+
+type StandardPathBlockResponse struct {
+	ResultID    uint                         `json:"result_id"`
+	BlockIndex  int                          `json:"block_index"`
+	ContentHash string                       `json:"content_hash"`
+	Block       backtestresult.PathBlockData `json:"block"`
+}
+
+type storedResponseMetrics struct {
+	Alpha                float64            `json:"alpha"`
+	Benchmark            float64            `json:"benchmark"`
+	BenchmarkReturn      float64            `json:"benchmark_return"`
+	BenchmarkMaxDrawdown float64            `json:"benchmark_max_drawdown"`
+	BenchmarkFinalEquity float64            `json:"benchmark_final_equity"`
+	FeeRate              float64            `json:"fee_rate"`
+	SpreadRate           float64            `json:"spread_rate"`
+	FeeCost              float64            `json:"fee_cost"`
+	SlippageCost         float64            `json:"slippage_cost"`
+	TotalExecutionCost   float64            `json:"total_execution_cost"`
+	RebalanceThreshold   float64            `json:"rebalance_threshold"`
+	ForceFullThreshold   float64            `json:"force_full_threshold"`
+	ForceEmptyThreshold  float64            `json:"force_empty_threshold"`
+	PositionStructure    string             `json:"position_structure"`
+	WMean                float64            `json:"w_mean"`
+	WMomentum            float64            `json:"w_momentum"`
+	WBreakout            float64            `json:"w_breakout"`
+	Windows              map[string]float64 `json:"windows"`
+	WindowDetails        []WindowResult     `json:"window_details"`
+}
+
+type preparedBacktest struct {
+	req      CreateRequest
+	params   sigmoiddca.Params
+	bars     []quant.Bar
+	costs    quant.ExecutionCostConfig
+	coreSpec backtestcore.Spec
+	identity backtestresult.Identity
+}
+
 type instanceConfig struct {
 	InitialUSDT       float64 `json:"initial_usdt"`
 	MonthlyInjectUSDT float64 `json:"monthly_inject_usdt"`
@@ -121,7 +209,12 @@ type instanceConfig struct {
 }
 
 func NewService(db *gorm.DB) *Service {
-	return &Service{db: db, instruments: marketdata.NewInstrumentStore(db)}
+	return &Service{
+		db:            db,
+		instruments:   marketdata.NewInstrumentStore(db),
+		results:       backtestresult.NewStore(db),
+		runSigmoidDCA: backtestcore.RunSigmoidDCA,
+	}
 }
 
 func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*Response, error) {
@@ -160,30 +253,86 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*
 		return nil, err
 	}
 
-	response, err := s.execute(ctx, userID, run.ID, req)
-	finished := time.Now().UTC()
-	updates := map[string]any{"finished_at": &finished}
+	prepared, err := s.prepare(ctx, userID, req)
 	if err != nil {
-		updates["status"] = saasstore.BacktestStatusFailed
-		updates["error_message"] = err.Error()
-		_ = s.db.WithContext(ctx).Model(&saasstore.BacktestRun{}).Where("id = ?", run.ID).Updates(updates).Error
+		s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
 		return nil, err
+	}
+	reservation, err := s.results.Reserve(ctx, prepared.identity)
+	if err != nil {
+		s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
+		return nil, err
+	}
+	resultID := reservation.Result.ID
+	reused := !reservation.Created
+	if err := s.db.WithContext(ctx).Model(&saasstore.BacktestRun{}).Where("id = ?", run.ID).Updates(map[string]any{
+		"backtest_result_id": resultID,
+		"reused_result":      reused,
+	}).Error; err != nil {
+		if reservation.Created {
+			_ = s.results.Fail(ctx, resultID, err)
+		}
+		s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
+		return nil, err
+	}
+	run.BacktestResultID = &resultID
+	run.ReusedResult = reused
+
+	if reservation.Reusable {
+		if _, err := s.results.VerifyResult(ctx, resultID); err != nil {
+			s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
+			return nil, err
+		}
+		finished := time.Now().UTC()
+		if err := s.finishLinkedRunsCompleted(ctx, resultID, finished); err != nil {
+			return nil, err
+		}
+		run.Status = saasstore.BacktestStatusCompleted
+		run.FinishedAt = &finished
+		loaded, err := s.results.Load(ctx, resultID, true)
+		if err != nil {
+			return nil, err
+		}
+		return responseFromStored(run, loaded)
+	}
+	if !reservation.Created {
+		return pendingResponse(run, reservation.Result), nil
 	}
 
-	response.ID = run.ID
-	response.Status = saasstore.BacktestStatusCompleted
-	response.CreatedAt = run.CreatedAt.Format(time.RFC3339)
-	response.FinishedAt = finished.Format(time.RFC3339)
-	resultRaw, err := json.Marshal(response)
+	if err := s.results.MarkRunning(ctx, resultID); err != nil {
+		s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
+		return nil, err
+	}
+	artifacts, err := s.executePrepared(prepared)
+	if err != nil {
+		s.finishOwnedResultFailure(ctx, resultID, err)
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = s.results.Cancel(context.Background(), resultID, err.Error())
+		s.finishLinkedRunsFailure(context.Background(), resultID, saasstore.BacktestStatusCancelled, err.Error())
+		return nil, err
+	}
+	if err := s.results.Complete(ctx, resultID, artifacts); err != nil {
+		s.finishOwnedResultFailure(ctx, resultID, err)
+		return nil, err
+	}
+	if _, err := s.results.VerifyResult(ctx, resultID); err != nil {
+		_ = s.results.Invalidate(ctx, resultID, err.Error())
+		s.finishLinkedRunsFailure(ctx, resultID, saasstore.BacktestStatusFailed, err.Error())
+		return nil, err
+	}
+	finished := time.Now().UTC()
+	if err := s.finishLinkedRunsCompleted(ctx, resultID, finished); err != nil {
+		return nil, err
+	}
+	run.Status = saasstore.BacktestStatusCompleted
+	run.FinishedAt = &finished
+	loaded, err := s.results.Load(ctx, resultID, true)
 	if err != nil {
 		return nil, err
 	}
-	updates["status"] = saasstore.BacktestStatusCompleted
-	updates["result"] = saasstore.JSONB(resultRaw)
-	if err := s.db.WithContext(ctx).Model(&saasstore.BacktestRun{}).Where("id = ?", run.ID).Updates(updates).Error; err != nil {
-		return nil, err
-	}
-	return response, nil
+	return responseFromStored(run, loaded)
 }
 
 func (s *Service) Get(ctx context.Context, userID uint, id uint) (*Response, error) {
@@ -193,6 +342,41 @@ func (s *Service) Get(ctx context.Context, userID uint, id uint) (*Response, err
 			return nil, ErrNotFound
 		}
 		return nil, err
+	}
+	if run.BacktestResultID != nil {
+		loaded, err := s.results.Load(ctx, *run.BacktestResultID, true)
+		if err != nil {
+			return nil, err
+		}
+		switch loaded.Result.Status {
+		case saasstore.BacktestResultStatusCompleted, saasstore.BacktestResultStatusInvalidated, saasstore.BacktestResultStatusArchived:
+			if _, err := backtestresult.VerifyRecords(loaded.Spec, loaded.Result, loaded.SummaryModel, loaded.BlockModels); err != nil {
+				return nil, err
+			}
+			if run.Status == saasstore.BacktestStatusRunning {
+				finished := time.Now().UTC()
+				if loaded.Result.CompletedAt != nil {
+					finished = *loaded.Result.CompletedAt
+				}
+				if err := s.finishLinkedRunsCompleted(ctx, loaded.Result.ID, finished); err != nil {
+					return nil, err
+				}
+				run.Status = saasstore.BacktestStatusCompleted
+				run.FinishedAt = &finished
+			}
+			return responseFromStored(run, loaded)
+		case saasstore.BacktestResultStatusFailed, saasstore.BacktestResultStatusCancelled:
+			status := saasstore.BacktestStatusFailed
+			if loaded.Result.Status == saasstore.BacktestResultStatusCancelled {
+				status = saasstore.BacktestStatusCancelled
+			}
+			response := pendingResponse(run, loaded.Result)
+			response.Status = status
+			response.Error = loaded.Result.ErrorMessage
+			return response, nil
+		default:
+			return pendingResponse(run, loaded.Result), nil
+		}
 	}
 	if run.Status != saasstore.BacktestStatusCompleted {
 		return &Response{
@@ -223,67 +407,553 @@ func (s *Service) Get(ctx context.Context, userID uint, id uint) (*Response, err
 	return &response, nil
 }
 
-func (s *Service) execute(ctx context.Context, userID uint, runID uint, req CreateRequest) (*Response, error) {
+func (s *Service) prepare(ctx context.Context, userID uint, req CreateRequest) (preparedBacktest, error) {
 	params, err := s.resolveParams(ctx, userID, req)
 	if err != nil {
-		return nil, err
+		return preparedBacktest{}, err
 	}
 	spawn := params.Spawn
 	if err := normalizeSpawnPoint(&spawn); err != nil {
-		return nil, err
+		return preparedBacktest{}, err
 	}
 
 	bars, err := s.loadBars(ctx, req)
 	if err != nil {
-		return nil, err
+		return preparedBacktest{}, err
 	}
 	if len(bars) == 0 {
-		return nil, fmt.Errorf("尚未匯入 %s %s 的 K 線資料", req.Symbol, req.Interval)
+		return preparedBacktest{}, fmt.Errorf("尚未匯入 %s %s 的 K 線資料", req.Symbol, req.Interval)
 	}
 
 	costs := backtestCosts(req)
-	path := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars, bars[0].OpenTime, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
-	baseline := quant.SimulateGhostDCAFrom(bars, bars[0].OpenTime, quant.GhostDCAConfig{
+	params.Spawn = spawn
+	params.PositionStructure = sigmoiddca.NormalizePositionStructure(params.PositionStructure)
+	coreSpec := backtestcore.Spec{
+		Runner:               backtestcore.RunnerSigmoidDCA,
+		InstrumentID:         req.InstrumentID,
+		Symbol:               req.Symbol,
+		DataSource:           req.DataSource,
+		Interval:             req.Interval,
+		ExecutionMode:        req.ExecutionMode,
+		PositionStructure:    params.PositionStructure,
+		StartTimeMs:          bars[0].OpenTime,
+		EndTimeMs:            bars[len(bars)-1].OpenTime,
+		EvaluationStartMs:    bars[0].OpenTime,
+		EvaluationEndMs:      bars[len(bars)-1].OpenTime,
+		PrefixMode:           backtestcore.PrefixModeExecute,
+		InitialCapital:       spawn.Policy.InitialUSDT,
+		MonthlyContribution:  spawn.Policy.MonthlyInjectUSDT,
+		InitialAssetQuantity: spawn.Policy.ColdSealedBTC,
+		Costs:                costs,
+		CoreVersion:          backtestcore.CoreVersion,
+	}
+	identity, err := backtestresult.BuildIdentity(backtestresult.SpecInput{
+		StrategyID:             req.StrategyID,
+		StrategyVersion:        sigmoiddca.StrategyVersion,
+		ParameterSchemaVersion: backtestresult.ParameterSchemaV1,
+		Parameters:             params,
+		CoreSpec:               coreSpec,
+		DatasetVersion:         backtestresult.DatasetSchemaVersion,
+	}, bars)
+	if err != nil {
+		return preparedBacktest{}, err
+	}
+	coreSpec.DatasetHash = identity.Snapshot.DatasetHash
+	return preparedBacktest{req: req, params: params, bars: bars, costs: costs, coreSpec: coreSpec, identity: identity}, nil
+}
+
+func (s *Service) executePrepared(prepared preparedBacktest) (backtestresult.Artifacts, error) {
+	path, err := s.runSigmoidDCA(backtestcore.SigmoidDCARequest{
+		Spec:   prepared.coreSpec,
+		Bars:   prepared.bars,
+		Params: prepared.params,
+	})
+	if err != nil {
+		return backtestresult.Artifacts{}, err
+	}
+	pathMaxDrawdown := maxDrawdown(path.Path)
+	spawn := prepared.params.Spawn
+	baseline := quant.SimulateGhostDCAFrom(prepared.bars, prepared.bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
-		UseOpenExecution:  req.ExecutionMode == marketdata.ExecutionModeCloseNextOpen,
-		Costs:             costs,
+		UseOpenExecution:  prepared.req.ExecutionMode == marketdata.ExecutionModeCloseNextOpen,
+		Costs:             prepared.costs,
 	})
-	alpha := path.Metrics.ROI - baseline.ROI
-	windows, windowDetails := scoreWindows(bars, req.Interval, req.ExecutionMode, params.Chromosome, &spawn, costs, params.PositionStructure)
-
-	return &Response{
-		ID:                   runID,
-		Status:               saasstore.BacktestStatusCompleted,
-		StrategyID:           req.StrategyID,
-		Symbol:               req.Symbol,
-		InstrumentID:         req.InstrumentID,
-		DataSource:           req.DataSource,
-		ExecutionMode:        req.ExecutionMode,
-		Interval:             req.Interval,
-		Source:               req.Source,
-		TotalReturn:          path.Metrics.ROI,
+	alpha := path.TotalReturn - baseline.ROI
+	windows, windowDetails, err := scoreWindows(prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure)
+	if err != nil {
+		return backtestresult.Artifacts{}, err
+	}
+	metrics := storedResponseMetrics{
 		Alpha:                alpha,
-		MaxDrawdown:          path.Metrics.MaxDrawdown,
-		FinalEquity:          path.Metrics.FinalEquity,
 		Benchmark:            baseline.FinalEquity,
 		BenchmarkReturn:      baseline.ROI,
 		BenchmarkMaxDrawdown: baseline.MaxDrawdown,
 		BenchmarkFinalEquity: baseline.FinalEquity,
-		FeeRate:              costs.FeeRate,
-		SpreadRate:           costs.SpreadRate,
-		RebalanceThreshold:   params.Chromosome.RebalanceThreshold,
-		ForceFullThreshold:   params.Chromosome.ForceFullThreshold,
-		ForceEmptyThreshold:  params.Chromosome.ForceEmptyThreshold,
-		PositionStructure:    params.PositionStructure,
-		TradeCount:           path.Metrics.TradeCount,
-		WMean:                params.Chromosome.WMean,
-		WMomentum:            params.Chromosome.WMomentum,
-		WBreakout:            params.Chromosome.WBreakout,
-		NAV:                  mergeNAV(path.NAV, baseline),
+		FeeRate:              prepared.costs.FeeRate,
+		SpreadRate:           prepared.costs.SpreadRate,
+		FeeCost:              path.Costs.FeeCost,
+		SlippageCost:         path.Costs.SlippageCost,
+		TotalExecutionCost:   path.Costs.TotalCost,
+		RebalanceThreshold:   prepared.params.Chromosome.RebalanceThreshold,
+		ForceFullThreshold:   prepared.params.Chromosome.ForceFullThreshold,
+		ForceEmptyThreshold:  prepared.params.Chromosome.ForceEmptyThreshold,
+		PositionStructure:    prepared.params.PositionStructure,
+		WMean:                prepared.params.Chromosome.WMean,
+		WMomentum:            prepared.params.Chromosome.WMomentum,
+		WBreakout:            prepared.params.Chromosome.WBreakout,
 		Windows:              windows,
 		WindowDetails:        windowDetails,
+	}
+	summary, err := backtestresult.BuildSummary(path, pathMaxDrawdown, backtestresult.SummaryOptions{Extra: metrics})
+	if err != nil {
+		return backtestresult.Artifacts{}, err
+	}
+	standardPath := standardizedPath(path.Path, baseline)
+	return backtestresult.BuildArtifacts(prepared.identity.SpecContentHash, summary, standardPath, backtestresult.DefaultPathBlockSize)
+}
+
+func (s *Service) GetStandardResult(ctx context.Context, userID uint, resultID uint) (*StandardResultDescriptor, error) {
+	runIDs, err := s.authorizedRunIDs(ctx, userID, resultID)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.results.VerifyMetadata(ctx, resultID); err != nil {
+		return nil, err
+	}
+	loaded, err := s.results.Load(ctx, resultID, false)
+	if err != nil {
+		return nil, err
+	}
+	identity, err := backtestresult.DecodeIdentity([]byte(loaded.Spec.Snapshot))
+	if err != nil {
+		return nil, err
+	}
+	var reportModels []saasstore.PerformanceReport
+	if err := s.db.WithContext(ctx).Where("backtest_result_id = ?", resultID).Order("created_at DESC, id DESC").Find(&reportModels).Error; err != nil {
+		return nil, err
+	}
+	reportReferences := make([]PerformanceReportReference, 0, len(reportModels))
+	for _, report := range reportModels {
+		reportReferences = append(reportReferences, PerformanceReportReference{
+			ID: report.ID, Status: report.Status, AnalysisVersion: report.AnalysisVersion,
+			SchemaVersion: report.SchemaVersion, SettingsHash: report.SettingsHash,
+			Settings: append(json.RawMessage(nil), report.Settings...), ContentHash: report.ContentHash,
+			CreatedAt: report.CreatedAt.Format(time.RFC3339),
+		})
+	}
+	descriptor := &StandardResultDescriptor{
+		ID:                 loaded.Result.ID,
+		Status:             loaded.Result.Status,
+		BacktestKey:        loaded.Result.BacktestKey,
+		ResultVersion:      loaded.Result.ResultVersion,
+		ResultContentHash:  loaded.Result.ContentHash,
+		Spec:               identity.Snapshot,
+		Summary:            loaded.Summary,
+		Manifest:           loaded.Manifest,
+		BacktestRunIDs:     runIDs,
+		PerformanceReports: reportReferences,
+		CreatedAt:          loaded.Result.CreatedAt.Format(time.RFC3339),
+	}
+	if loaded.Result.CompletedAt != nil {
+		descriptor.CompletedAt = loaded.Result.CompletedAt.Format(time.RFC3339)
+	}
+	return descriptor, nil
+}
+
+func (s *Service) GetStandardPathBlock(ctx context.Context, userID uint, resultID uint, blockIndex int) (*StandardPathBlockResponse, error) {
+	if blockIndex < 0 {
+		return nil, fmt.Errorf("block index cannot be negative")
+	}
+	if _, err := s.authorizedRunIDs(ctx, userID, resultID); err != nil {
+		return nil, err
+	}
+	block, model, err := s.results.LoadBlock(ctx, resultID, blockIndex)
+	if err != nil {
+		if errors.Is(err, backtestresult.ErrNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &StandardPathBlockResponse{
+		ResultID:    resultID,
+		BlockIndex:  blockIndex,
+		ContentHash: model.ContentHash,
+		Block:       block,
 	}, nil
+}
+
+func (s *Service) VerifyStandardResult(ctx context.Context, userID uint, resultID uint) (backtestresult.IntegrityReport, error) {
+	if _, err := s.authorizedRunIDs(ctx, userID, resultID); err != nil {
+		return backtestresult.IntegrityReport{}, err
+	}
+	return s.results.VerifyResult(ctx, resultID)
+}
+
+// EnsureNoCashFlowResult returns the same immutable backtest input with only
+// monthly cash contributions set to zero. It reuses the regular P02 runner and
+// P03 persistence path; analysis code never simulates NAV itself.
+func (s *Service) EnsureNoCashFlowResult(ctx context.Context, userID uint, sourceResultID uint) (backtestresult.LoadedResult, error) {
+	if _, err := s.authorizedRunIDs(ctx, userID, sourceResultID); err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	if _, err := s.results.VerifyResult(ctx, sourceResultID); err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	source, err := s.results.Load(ctx, sourceResultID, true)
+	if err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	identity, err := backtestresult.DecodeIdentity([]byte(source.Spec.Snapshot))
+	if err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	if identity.Snapshot.MonthlyContribution == 0 {
+		return source, nil
+	}
+	if identity.Snapshot.Runner != backtestcore.RunnerSigmoidDCA || identity.Snapshot.StrategyID != sigmoiddca.StrategyID {
+		return backtestresult.LoadedResult{}, fmt.Errorf("目前無法重建此 runner 的無現金流版本: %s", identity.Snapshot.Runner)
+	}
+	if identity.Snapshot.StrategyVersion != sigmoiddca.StrategyVersion || identity.Snapshot.CoreVersion != backtestcore.CoreVersion {
+		return backtestresult.LoadedResult{}, fmt.Errorf("無現金流重跑需要相容的策略與回測核心版本")
+	}
+	if identity.Snapshot.ModelArtifactHash != "" || identity.Snapshot.MaterializedPredictionHash != "" || identity.Snapshot.DynamicPolicyHash != "" {
+		return backtestresult.LoadedResult{}, fmt.Errorf("動態參數結果需要由原研究模組提供可重放的無現金流參數序列")
+	}
+
+	var params sigmoiddca.Params
+	if err := json.Unmarshal(identity.Snapshot.Parameters, &params); err != nil {
+		return backtestresult.LoadedResult{}, fmt.Errorf("解碼凍結參數失敗: %w", err)
+	}
+	params.Spawn.Policy.MonthlyInjectUSDT = 0
+	params.PositionStructure = sigmoiddca.NormalizePositionStructure(params.PositionStructure)
+	if err := normalizeSpawnPoint(&params.Spawn); err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+
+	bars, err := s.loadBarsForSnapshot(ctx, identity.Snapshot)
+	if err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	datasetHash, err := backtestresult.HashDataset(identity.Snapshot.DatasetVersion, bars)
+	if err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	if datasetHash != identity.Snapshot.DatasetHash {
+		return backtestresult.LoadedResult{}, fmt.Errorf("無現金流重跑資料集內容與原結果不一致")
+	}
+	coreSpec := coreSpecFromSnapshot(identity.Snapshot)
+	coreSpec.MonthlyContribution = 0
+	noCashFlowIdentity, err := backtestresult.BuildIdentity(backtestresult.SpecInput{
+		StrategyID:                 identity.Snapshot.StrategyID,
+		StrategyVersion:            identity.Snapshot.StrategyVersion,
+		ParameterSchemaVersion:     identity.Snapshot.ParameterSchemaVersion,
+		Parameters:                 params,
+		CoreSpec:                   coreSpec,
+		DatasetVersion:             identity.Snapshot.DatasetVersion,
+		DatasetHash:                identity.Snapshot.DatasetHash,
+		LongTermFilterVersion:      identity.Snapshot.LongTermFilterVersion,
+		LongTermFilterSettings:     identity.Snapshot.LongTermFilterSettings,
+		ModelArtifactHash:          identity.Snapshot.ModelArtifactHash,
+		PredictionSchemaHash:       identity.Snapshot.PredictionSchemaHash,
+		MaterializedPredictionHash: identity.Snapshot.MaterializedPredictionHash,
+		DynamicPolicyHash:          identity.Snapshot.DynamicPolicyHash,
+		DynamicControlMode:         identity.Snapshot.DynamicControlMode,
+		EffectiveParametersHash:    identity.Snapshot.EffectiveParametersHash,
+	}, bars)
+	if err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	reservation, err := s.results.Reserve(ctx, noCashFlowIdentity)
+	if err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	if reservation.Reusable {
+		return s.results.Load(ctx, reservation.Result.ID, true)
+	}
+	if !reservation.Created {
+		return backtestresult.LoadedResult{}, ErrResultInProgress
+	}
+	if err := s.results.MarkRunning(ctx, reservation.Result.ID); err != nil {
+		return backtestresult.LoadedResult{}, err
+	}
+	prepared := preparedBacktest{
+		req: CreateRequest{
+			StrategyID: identity.Snapshot.StrategyID, InstrumentID: identity.Snapshot.InstrumentID,
+			DataSource: identity.Snapshot.DataSource, ExecutionMode: identity.Snapshot.ExecutionMode,
+			Symbol: identity.Snapshot.Symbol, Interval: identity.Snapshot.Interval,
+		},
+		params: params, bars: bars,
+		costs: coreSpec.Costs, coreSpec: coreSpec, identity: noCashFlowIdentity,
+	}
+	artifacts, err := s.executePrepared(prepared)
+	if err != nil {
+		_ = s.results.Fail(ctx, reservation.Result.ID, err)
+		return backtestresult.LoadedResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = s.results.Cancel(context.Background(), reservation.Result.ID, err.Error())
+		return backtestresult.LoadedResult{}, err
+	}
+	if err := s.results.Complete(ctx, reservation.Result.ID, artifacts); err != nil {
+		_ = s.results.Fail(ctx, reservation.Result.ID, err)
+		return backtestresult.LoadedResult{}, err
+	}
+	if _, err := s.results.VerifyResult(ctx, reservation.Result.ID); err != nil {
+		_ = s.results.Invalidate(ctx, reservation.Result.ID, err.Error())
+		return backtestresult.LoadedResult{}, err
+	}
+	return s.results.Load(ctx, reservation.Result.ID, true)
+}
+
+func (s *Service) loadBarsForSnapshot(ctx context.Context, snapshot backtestresult.SpecSnapshot) ([]quant.Bar, error) {
+	var rows []saasstore.KLine
+	err := s.db.WithContext(ctx).
+		Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ? AND open_time >= ? AND open_time <= ?",
+			snapshot.InstrumentID, snapshot.DataSource, snapshot.Symbol, snapshot.Interval, snapshot.StartTimeMs, snapshot.EndTimeMs).
+		Order("open_time ASC").Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("找不到原回測資料集，無法建立無現金流版本")
+	}
+	bars := make([]quant.Bar, 0, len(rows))
+	for _, row := range rows {
+		bars = append(bars, quant.Bar{OpenTime: row.OpenTime, Open: row.Open, High: row.High, Low: row.Low, Close: row.Close, Volume: row.Volume})
+	}
+	return bars, nil
+}
+
+func coreSpecFromSnapshot(snapshot backtestresult.SpecSnapshot) backtestcore.Spec {
+	return backtestcore.Spec{
+		Runner: snapshot.Runner, InstrumentID: snapshot.InstrumentID, Symbol: snapshot.Symbol,
+		DataSource: snapshot.DataSource, Interval: snapshot.Interval, ExecutionMode: snapshot.ExecutionMode,
+		PositionStructure: snapshot.PositionStructure, StartTimeMs: snapshot.StartTimeMs, EndTimeMs: snapshot.EndTimeMs,
+		EvaluationStartMs: snapshot.EvaluationStartMs, EvaluationEndMs: snapshot.EvaluationEndMs,
+		PrefixMode: snapshot.PrefixMode, InitialCapital: snapshot.InitialCapital,
+		MonthlyContribution: snapshot.MonthlyContribution, InitialAssetQuantity: snapshot.InitialAssetQuantity,
+		MinimumTradeUSD: snapshot.MinimumTradeUSD, MinimumAssetQuantity: snapshot.MinimumAssetQuantity,
+		Costs:       quant.ExecutionCostConfig{FeeRate: snapshot.FeeRate, SpreadRate: snapshot.SlippageRate},
+		DatasetHash: snapshot.DatasetHash, CoreVersion: snapshot.CoreVersion,
+	}
+}
+
+func responseFromStored(run saasstore.BacktestRun, loaded backtestresult.LoadedResult) (*Response, error) {
+	if loaded.Summary == nil {
+		return nil, fmt.Errorf("standardized result %d has no summary", loaded.Result.ID)
+	}
+	identity, err := backtestresult.DecodeIdentity([]byte(loaded.Spec.Snapshot))
+	if err != nil {
+		return nil, err
+	}
+	metrics := storedResponseMetrics{}
+	if len(loaded.Summary.Extra) > 0 {
+		if err := json.Unmarshal(loaded.Summary.Extra, &metrics); err != nil {
+			return nil, fmt.Errorf("decode stored response metrics: %w", err)
+		}
+	}
+	if metrics.Windows == nil {
+		metrics.Windows = map[string]float64{}
+	}
+	status := run.Status
+	if status == saasstore.BacktestStatusRunning {
+		status = saasstore.BacktestStatusCompleted
+	}
+	response := &Response{
+		ID:                   run.ID,
+		Status:               status,
+		BacktestResultID:     loaded.Result.ID,
+		BacktestKey:          loaded.Result.BacktestKey,
+		ResultVersion:        loaded.Result.ResultVersion,
+		ResultContentHash:    loaded.Result.ContentHash,
+		ResultStatus:         loaded.Result.Status,
+		ReusedResult:         run.ReusedResult,
+		StrategyID:           identity.Snapshot.StrategyID,
+		Symbol:               identity.Snapshot.Symbol,
+		InstrumentID:         identity.Snapshot.InstrumentID,
+		DataSource:           identity.Snapshot.DataSource,
+		ExecutionMode:        identity.Snapshot.ExecutionMode,
+		Interval:             identity.Snapshot.Interval,
+		Source:               run.Source,
+		TotalReturn:          loaded.Summary.ROI,
+		Alpha:                metrics.Alpha,
+		MaxDrawdown:          loaded.Summary.MaxDrawdown,
+		FinalEquity:          loaded.Summary.FinalEquity,
+		Benchmark:            metrics.Benchmark,
+		BenchmarkReturn:      metrics.BenchmarkReturn,
+		BenchmarkMaxDrawdown: metrics.BenchmarkMaxDrawdown,
+		BenchmarkFinalEquity: metrics.BenchmarkFinalEquity,
+		FeeRate:              metrics.FeeRate,
+		SpreadRate:           metrics.SpreadRate,
+		FeeCost:              metrics.FeeCost,
+		SlippageCost:         metrics.SlippageCost,
+		TotalExecutionCost:   metrics.TotalExecutionCost,
+		RebalanceThreshold:   metrics.RebalanceThreshold,
+		ForceFullThreshold:   metrics.ForceFullThreshold,
+		ForceEmptyThreshold:  metrics.ForceEmptyThreshold,
+		PositionStructure:    metrics.PositionStructure,
+		TradeCount:           loaded.Summary.TradeCount,
+		WMean:                metrics.WMean,
+		WMomentum:            metrics.WMomentum,
+		WBreakout:            metrics.WBreakout,
+		NAV:                  equitySnapshotsFromStandardPath(loaded.Path()),
+		Windows:              metrics.Windows,
+		WindowDetails:        metrics.WindowDetails,
+		Error:                run.ErrorMessage,
+		CreatedAt:            run.CreatedAt.Format(time.RFC3339),
+	}
+	if run.FinishedAt != nil {
+		response.FinishedAt = run.FinishedAt.Format(time.RFC3339)
+	}
+	return response, nil
+}
+
+func pendingResponse(run saasstore.BacktestRun, result saasstore.BacktestResult) *Response {
+	return &Response{
+		ID:                run.ID,
+		Status:            saasstore.BacktestStatusRunning,
+		BacktestResultID:  result.ID,
+		BacktestKey:       result.BacktestKey,
+		ResultVersion:     result.ResultVersion,
+		ResultContentHash: result.ContentHash,
+		ResultStatus:      result.Status,
+		ReusedResult:      run.ReusedResult,
+		StrategyID:        run.StrategyID,
+		Symbol:            run.Symbol,
+		InstrumentID:      run.InstrumentID,
+		DataSource:        run.DataSource,
+		ExecutionMode:     run.ExecutionMode,
+		Interval:          run.Interval,
+		Source:            run.Source,
+		NAV:               []EquitySnapshot{},
+		Windows:           map[string]float64{},
+		CreatedAt:         run.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func standardizedPath(strategy []backtestcore.NAVPoint, baseline quant.GhostDCAResult) []backtestresult.PathPoint {
+	type benchmarkPoint struct {
+		equity      float64
+		dailyReturn float64
+	}
+	byTime := make(map[int64]benchmarkPoint, len(baseline.Times))
+	previous := 0.0
+	for index, timestamp := range baseline.Times {
+		if index >= len(baseline.NAV) {
+			continue
+		}
+		equity := baseline.NAV[index]
+		byTime[timestamp] = benchmarkPoint{equity: equity, dailyReturn: pctChange(equity, previous)}
+		previous = equity
+	}
+	points := make([]backtestresult.PathPoint, 0, len(strategy))
+	for _, point := range strategy {
+		stored := backtestresult.PathPoint{NAVPoint: point}
+		if benchmark, ok := byTime[point.TimeMs]; ok {
+			equity := benchmark.equity
+			dailyReturn := benchmark.dailyReturn
+			stored.BenchmarkEquity = &equity
+			stored.BenchmarkDailyReturn = &dailyReturn
+		}
+		points = append(points, stored)
+	}
+	return points
+}
+
+func equitySnapshotsFromStandardPath(path []backtestresult.PathPoint) []EquitySnapshot {
+	points := make([]EquitySnapshot, 0, len(path))
+	previousStrategy := 0.0
+	previousBenchmark := 0.0
+	for _, item := range path {
+		benchmark := 0.0
+		if item.BenchmarkEquity != nil {
+			benchmark = *item.BenchmarkEquity
+		}
+		points = append(points, EquitySnapshot{
+			Time:                             time.UnixMilli(item.TimeMs).UTC().Format(time.RFC3339),
+			Price:                            item.Price,
+			TotalAssets:                      item.TotalEquity,
+			Benchmark:                        benchmark,
+			StrategyChangePct:                pctChange(item.TotalEquity, previousStrategy),
+			BenchmarkChangePct:               pctChange(benchmark, previousBenchmark),
+			PracticalTargetWeight:            item.PracticalTargetWeight,
+			PracticalTargetWeightChange:      item.PracticalTargetWeightChange,
+			ModelTargetWeight:                item.ModelTargetWeight,
+			ModelTargetWeightChange:          item.ModelTargetWeightChange,
+			EmptyReferenceTargetWeight:       item.EmptyReferenceTargetWeight,
+			EmptyReferenceTargetWeightChange: item.EmptyReferenceTargetWeightChange,
+			Cash:                             item.Cash,
+			AssetQuantity:                    item.AssetQuantity,
+			ActualExposureWeight:             item.ActualExposureWeight,
+			IntradayExposureWeight:           item.IntradayExposureWeight,
+			DailyReturn:                      item.DailyReturn,
+		})
+		previousStrategy = item.TotalEquity
+		if item.BenchmarkEquity != nil {
+			previousBenchmark = benchmark
+		}
+	}
+	return points
+}
+
+func (s *Service) finishRunFailure(ctx context.Context, runID uint, status string, message string) {
+	finished := time.Now().UTC()
+	_ = s.db.WithContext(ctx).Model(&saasstore.BacktestRun{}).Where("id = ?", runID).Updates(map[string]any{
+		"status":        status,
+		"error_message": message,
+		"finished_at":   &finished,
+	}).Error
+}
+
+func (s *Service) finishOwnedResultFailure(ctx context.Context, resultID uint, cause error) {
+	operationContext := ctx
+	if ctx.Err() != nil {
+		operationContext = context.Background()
+	}
+	status := saasstore.BacktestStatusFailed
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		status = saasstore.BacktestStatusCancelled
+		_ = s.results.Cancel(operationContext, resultID, cause.Error())
+	} else {
+		_ = s.results.Fail(operationContext, resultID, cause)
+	}
+	s.finishLinkedRunsFailure(operationContext, resultID, status, cause.Error())
+}
+
+func (s *Service) finishLinkedRunsFailure(ctx context.Context, resultID uint, status string, message string) {
+	finished := time.Now().UTC()
+	_ = s.db.WithContext(ctx).Model(&saasstore.BacktestRun{}).
+		Where("backtest_result_id = ? AND status = ?", resultID, saasstore.BacktestStatusRunning).
+		Updates(map[string]any{
+			"status":        status,
+			"error_message": message,
+			"finished_at":   &finished,
+		}).Error
+}
+
+func (s *Service) finishLinkedRunsCompleted(ctx context.Context, resultID uint, finished time.Time) error {
+	return s.db.WithContext(ctx).Model(&saasstore.BacktestRun{}).
+		Where("backtest_result_id = ? AND status = ?", resultID, saasstore.BacktestStatusRunning).
+		Updates(map[string]any{
+			"status":        saasstore.BacktestStatusCompleted,
+			"result":        saasstore.JSONB("{}"),
+			"error_message": "",
+			"finished_at":   &finished,
+		}).Error
+}
+
+func (s *Service) authorizedRunIDs(ctx context.Context, userID uint, resultID uint) ([]uint, error) {
+	var ids []uint
+	if err := s.db.WithContext(ctx).Model(&saasstore.BacktestRun{}).
+		Where("user_id = ? AND backtest_result_id = ?", userID, resultID).
+		Order("id ASC").Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, ErrNotFound
+	}
+	return ids, nil
 }
 
 func (s *Service) resolveParams(ctx context.Context, userID uint, req CreateRequest) (sigmoiddca.Params, error) {
@@ -375,6 +1045,24 @@ func (s *Service) loadInstance(ctx context.Context, userID uint, id uint) (saass
 }
 
 func (s *Service) loadBars(ctx context.Context, req CreateRequest) ([]quant.Bar, error) {
+	if req.MarketDataVersionID != 0 {
+		var rows []saasstore.MarketDataVersionBar
+		query := s.db.WithContext(ctx).Where("version_id = ?", req.MarketDataVersionID)
+		if req.StartTimeMs > 0 {
+			query = query.Where("open_time >= ?", req.StartTimeMs)
+		}
+		if req.EndTimeMs > 0 {
+			query = query.Where("open_time <= ?", req.EndTimeMs)
+		}
+		if err := query.Order("ordinal ASC").Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		bars := make([]quant.Bar, 0, len(rows))
+		for _, row := range rows {
+			bars = append(bars, quant.Bar{OpenTime: row.OpenTime, Open: row.Open, High: row.High, Low: row.Low, Close: row.Close, Volume: row.Volume})
+		}
+		return bars, nil
+	}
 	var rows []saasstore.KLine
 	query := s.db.WithContext(ctx).
 		Where("symbol = ? AND interval = ? AND instrument_id = ? AND source = ?", req.Symbol, req.Interval, req.InstrumentID, req.DataSource)
@@ -445,6 +1133,20 @@ func (s *Service) validateBasicRequest(ctx context.Context, req CreateRequest) e
 	}
 	if !supportsInterval(instrument.SupportedIntervals, req.Interval) {
 		return fmt.Errorf("unsupported interval for %s: %s", instrument.ID, req.Interval)
+	}
+	if req.MarketDataVersionID != 0 {
+		var count int64
+		err := s.db.WithContext(ctx).Model(&saasstore.MarketDataVersion{}).Where(
+			"id = ? AND output_instrument_id = ? AND interval = ? AND content_hash = ? AND status = ? AND integrity_status = ? AND published = true",
+			req.MarketDataVersionID, instrument.ID, req.Interval, strings.TrimSpace(req.MarketDataContentHash),
+			marketversion.VersionStatusCompleted, marketversion.IntegrityValid,
+		).Count(&count).Error
+		if err != nil {
+			return err
+		}
+		if count != 1 || strings.TrimSpace(req.MarketDataContentHash) == "" {
+			return errors.New("行情版本不存在、未發布或內容雜湊不符")
+		}
 	}
 	if !marketdata.IsSupportedExecutionMode(req.ExecutionMode) {
 		return fmt.Errorf("unsupported execution mode: %s", req.ExecutionMode)
@@ -576,35 +1278,60 @@ func backtestCosts(req CreateRequest) quant.ExecutionCostConfig {
 	return quant.NormalizeExecutionCosts(costs)
 }
 
-func scoreWindows(bars []quant.Bar, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) (map[string]float64, []WindowResult) {
+func scoreWindows(bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) (map[string]float64, []WindowResult, error) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
 	for _, window := range windows {
-		metrics := ga.RunSigmoidDCAPathBacktestWithModeCostsAndStructure(window.Bars, window.EvalStartMs, interval, executionMode, chromosome, spawn, costs, positionStructure).Metrics
+		params := sigmoiddca.DefaultParams()
+		params.Chromosome = chromosome
+		params.Spawn = *spawn
+		params.PositionStructure = positionStructure
+		path, err := backtestcore.RunSigmoidDCA(backtestcore.SigmoidDCARequest{
+			Spec: backtestcore.Spec{
+				Symbol:               symbol,
+				Interval:             interval,
+				ExecutionMode:        executionMode,
+				PositionStructure:    positionStructure,
+				StartTimeMs:          window.Bars[0].OpenTime,
+				EndTimeMs:            window.Bars[len(window.Bars)-1].OpenTime,
+				EvaluationStartMs:    window.EvalStartMs,
+				EvaluationEndMs:      window.Bars[len(window.Bars)-1].OpenTime,
+				InitialCapital:       spawn.Policy.InitialUSDT,
+				MonthlyContribution:  spawn.Policy.MonthlyInjectUSDT,
+				InitialAssetQuantity: spawn.Policy.ColdSealedBTC,
+				Costs:                costs,
+			},
+			Bars:   window.Bars,
+			Params: params,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		pathMaxDrawdown := maxDrawdown(path.Path)
 		baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
 			InitialUSDT:       spawn.Policy.InitialUSDT,
 			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 			UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
 			Costs:             costs,
 		})
-		alpha := metrics.ROI - baseline.ROI
-		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown)
-		if metrics.MaxDrawdown >= 0.88 {
+		alpha := path.TotalReturn - baseline.ROI
+		score := alpha - 1.5*math.Max(0, pathMaxDrawdown-baseline.MaxDrawdown)
+		if pathMaxDrawdown >= 0.88 {
 			score = ga.FatalFitnessScore
 		}
 		scores[window.Label] = score
 		details = append(details, WindowResult{
 			Window:            window.Label,
 			Score:             score,
-			TotalReturn:       metrics.ROI,
+			TotalReturn:       path.TotalReturn,
 			BenchmarkReturn:   baseline.ROI,
 			Alpha:             alpha,
-			MaxDrawdown:       metrics.MaxDrawdown,
+			MaxDrawdown:       pathMaxDrawdown,
 			BenchmarkDrawdown: baseline.MaxDrawdown,
 		})
 	}
-	return scores, details
+	return scores, details, nil
 }
 
 func mergeNAV(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []EquitySnapshot {
@@ -637,11 +1364,24 @@ func mergeNAV(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []Equi
 			ModelTargetWeightChange:          item.ModelTargetWeightChange,
 			EmptyReferenceTargetWeight:       item.EmptyReferenceTargetWeight,
 			EmptyReferenceTargetWeightChange: item.EmptyReferenceTargetWeightChange,
+			Cash:                             item.Cash,
+			AssetQuantity:                    item.AssetQuantity,
+			ActualExposureWeight:             item.ActualExposureWeight,
+			IntradayExposureWeight:           item.IntradayExposureWeight,
+			DailyReturn:                      item.DailyReturn,
 		})
 		previousStrategy = item.TotalEquity
 		previousBenchmark = benchmark
 	}
 	return points
+}
+
+func maxDrawdown(points []backtestcore.NAVPoint) float64 {
+	nav := make([]float64, 0, len(points))
+	for _, point := range points {
+		nav = append(nav, point.TotalEquity)
+	}
+	return quant.MaxDrawdown(nav)
 }
 
 func pctChange(current float64, previous float64) float64 {

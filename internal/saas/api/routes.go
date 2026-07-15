@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"quantsaas/internal/saas/auth"
+	"quantsaas/internal/saas/computetask"
 	"quantsaas/internal/saas/config"
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/instance"
+	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -36,6 +38,8 @@ type RouterDeps struct {
 	InstanceManager  *instance.Manager
 	EpochService     *epoch.Service
 	EvolutionHandler *EvolutionHandler
+	ComputeTasks     *computetask.Service
+	MarketData       *marketdata.Service
 	AgentStatus      AgentStatusProvider
 	WSHandler        gin.HandlerFunc
 }
@@ -74,7 +78,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		ev = NewEvolutionHandler(deps.Config.AppRole, deps.DB, deps.Redis, deps.EpochService)
 	}
 	bt := NewBacktestHandler(deps.Config.AppRole, deps.DB)
+	performanceReports := NewPerformanceReportHandler(deps.DB)
 	md := NewMarketDataHandler(deps.Config.AppRole, deps.DB)
+	if deps.MarketData != nil {
+		md = NewMarketDataHandlerWithService(deps.Config.AppRole, deps.MarketData)
+	}
 	research := NewResearchStatusHandler(deps.DB)
 	researchData := NewResearchDataHandler(deps.Config.AppRole, deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
@@ -92,6 +100,15 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.GET("/genome/challengers", listChallengersHandler(deps))
 	lab.POST("/backtests", bt.Create)
 	lab.GET("/backtests/:id", bt.Get)
+	lab.GET("/backtest-results/:id", bt.GetStandardResult)
+	lab.GET("/backtest-results/:id/path", bt.GetStandardPathBlock)
+	lab.GET("/backtest-results/:id/integrity", bt.VerifyStandardResult)
+	lab.POST("/backtest-results/:id/performance-reports", performanceReports.Create)
+	lab.GET("/backtest-results/:id/performance-reports", performanceReports.ListForResult)
+	lab.GET("/performance-reports/:id", performanceReports.Get)
+	lab.GET("/performance-reports/:id/charts/:kind", performanceReports.GetChart)
+	lab.GET("/performance-reports/:id/integrity", performanceReports.Verify)
+	lab.GET("/evolution/genomes/:id/performance-report", performanceReports.LatestForGenome)
 	lab.GET("/market-data/instruments", md.Instruments)
 	lab.POST("/market-data/instruments", md.UpsertInstrument)
 	lab.PATCH("/market-data/instruments/order", md.ReorderInstruments)
@@ -103,6 +120,16 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/market-data/klines/import", md.Import)
 	lab.POST("/market-data/klines/update-latest", md.UpdateLatest)
 	lab.POST("/market-data/generate/leveraged", md.GenerateLeveraged)
+	lab.GET("/market-data/recomposition/sources", md.RecompositionSources)
+	lab.GET("/market-data/recomposition/source-bars", md.RecompositionSourceBars)
+	lab.POST("/market-data/recomposition/preview-tasks", md.CreateRecompositionPreview)
+	lab.GET("/market-data/recomposition/plans/:id", md.GetRecompositionPlan)
+	lab.GET("/market-data/recomposition/plans/:id/bars", md.RecompositionPreviewBars)
+	lab.POST("/market-data/recomposition/generations", md.CreateRecompositionGeneration)
+	lab.GET("/market-data/recomposition/generations/:id", md.GetRecompositionGeneration)
+	lab.GET("/market-data/series", md.MarketSeries)
+	lab.DELETE("/market-data/series/:id", md.ArchiveMarketSeries)
+	lab.DELETE("/market-data/versions/:id", md.ArchiveMarketVersion)
 	lab.POST("/market-data/maintenance/audit", md.AuditMaintenance)
 	lab.POST("/market-data/maintenance/audit/:id", md.AuditMaintenance)
 	lab.POST("/market-data/maintenance/repair", md.RepairMaintenance)
@@ -114,6 +141,19 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.PATCH("/research-datasets/:id", researchData.Update)
 	lab.DELETE("/research-datasets/:id", researchData.Delete)
 	lab.GET("/research/status", research.Status)
+	if deps.ComputeTasks != nil {
+		computeTasks := NewComputeTaskHandler(deps.ComputeTasks)
+		lab.GET("/compute-tasks/limits", computeTasks.Limits)
+		lab.GET("/compute-tasks", computeTasks.List)
+		lab.GET("/compute-tasks/:id", computeTasks.Get)
+		lab.GET("/compute-tasks/:id/snapshot", computeTasks.Snapshot)
+		lab.GET("/compute-tasks/:id/preview", computeTasks.Preview)
+		lab.GET("/compute-tasks/:id/items", computeTasks.Items)
+		lab.POST("/compute-tasks/:id/start", computeTasks.Start)
+		lab.POST("/compute-tasks/:id/cancel", computeTasks.Cancel)
+		lab.POST("/compute-tasks/:id/retry", computeTasks.Retry)
+		lab.POST("/compute-cache/lookup", computeTasks.CacheLookup)
+	}
 
 	if deps.WSHandler != nil {
 		router.GET("/ws/agent", deps.WSHandler)

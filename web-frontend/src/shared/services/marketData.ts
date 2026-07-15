@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { ComputePlanPreview, ComputeTask } from "./computeTasks";
 
 export type DatasetSummary = {
   instrument_id: string;
@@ -162,6 +163,154 @@ export type MaintenanceResult = {
   error?: string;
 };
 
+export type MarketVersionBar = {
+  ordinal: number;
+  open_time: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+};
+
+export type RecompositionSource = {
+  instrument: ResearchInstrument;
+  version_id?: number;
+  content_hash?: string;
+  artifact_kind: string;
+  immutable: boolean;
+  integrity_status?: string;
+  archived: boolean;
+};
+
+export type RecompositionSegmentInput = {
+  item_id: string;
+  source_instrument_id?: string;
+  source_version_id?: number;
+  start_time_ms: number;
+  end_time_ms: number;
+  repeat_count: number;
+};
+
+export type RecompositionPreviewInput = {
+  segments: RecompositionSegmentInput[];
+  interval: string;
+  calendar_instrument_id?: string;
+  calendar_source_version_id?: number;
+  output_start_time_ms: number;
+};
+
+export type RecompositionPreviewTask = {
+  task: ComputeTask;
+  task_preview: ComputePlanPreview;
+  total_read_bars: number;
+  total_output_bars: number;
+  estimated_bytes: number;
+};
+
+export type SegmentInstance = {
+  instance_id: string;
+  segment_item_id: string;
+  order: number;
+  repeat_ordinal: number;
+  source_version_id: number;
+  output_start_time_ms: number;
+  output_end_time_ms: number;
+  scale_multiplier: number;
+  source_gap_ratio?: number;
+  actual_gap_ratio: number;
+  anchor_missing: boolean;
+};
+
+export type RecompositionPlan = {
+  schema_version: string;
+  plan_id: number;
+  plan_hash: string;
+  content_hash: string;
+  interval: string;
+  target_market: string;
+  target_timezone: string;
+  calendar_version_id: number;
+  calendar_hash: string;
+  output_start_time_ms: number;
+  output_end_time_ms: number;
+  segment_count: number;
+  instance_count: number;
+  total_output_bars: number;
+  estimated_read_bars: number;
+  estimated_write_bars: number;
+  estimated_bytes: number;
+  anchor_warning_count: number;
+  instances: SegmentInstance[];
+  segments: Array<{
+    item_id: string;
+    order: number;
+    source_version_id: number;
+    source_instrument_id: string;
+    source_symbol: string;
+    source_display_name: string;
+    source_content_hash: string;
+    start_time_ms: number;
+    end_time_ms: number;
+    bar_count: number;
+    repeat_count: number;
+    previous_close_present: boolean;
+    source_gap_ratio?: number;
+  }>;
+  created_at: string;
+};
+
+export type RecompositionGeneration = {
+  schema_version: string;
+  generation_id: number;
+  plan_id: number;
+  plan_hash: string;
+  series_id: number;
+  series_name: string;
+  version_id: number;
+  version_number: number;
+  output_instrument_id?: string;
+  content_hash?: string;
+  status: string;
+  integrity_status: string;
+  published: boolean;
+  compute_task_id?: number;
+  expanded_at?: string;
+  calendar_checked_at?: string;
+  published_at?: string;
+};
+
+export type RecompositionGenerationTask = {
+  generation: RecompositionGeneration;
+  task: ComputeTask;
+  task_preview: { stages: ComputePlanPreview[]; requires_confirmation: boolean; estimated_units: number };
+};
+
+export type MarketSeries = {
+  id: number;
+  name: string;
+  notes?: string;
+  tags: string[];
+  archived: boolean;
+  created_at: string;
+  versions: Array<{
+    id: number;
+    version_number: number;
+    content_hash: string;
+    plan_hash: string;
+    instrument_id: string;
+    interval: string;
+    bar_count: number;
+    start_time_ms: number;
+    end_time_ms: number;
+    status: string;
+    integrity_status: string;
+    published: boolean;
+    archived: boolean;
+    created_at: string;
+  }>;
+};
+
 export const marketDataApi = {
   instruments() {
     return apiFetch<{ instruments: ResearchInstrument[]; execution_modes: string[] }>("/market-data/instruments");
@@ -215,5 +364,51 @@ export const marketDataApi = {
       method: "POST",
       body: JSON.stringify(input)
     });
+  },
+  recompositionSources() {
+    return apiFetch<{ items: RecompositionSource[] }>("/market-data/recomposition/sources");
+  },
+  recompositionSourceBars(input: { instrumentId?: string; versionId?: number; interval: string; startTimeMs: number; endTimeMs: number; limit?: number }) {
+    const query = new URLSearchParams({
+      interval: input.interval,
+      start_time_ms: String(input.startTimeMs),
+      end_time_ms: String(input.endTimeMs),
+      limit: String(input.limit ?? 2000)
+    });
+    if (input.instrumentId) query.set("instrument_id", input.instrumentId);
+    if (input.versionId) query.set("version_id", String(input.versionId));
+    return apiFetch<{ rows: MarketVersionBar[] }>(`/market-data/recomposition/source-bars?${query.toString()}`);
+  },
+  createRecompositionPreview(request: RecompositionPreviewInput, confirmSoftLimit = false) {
+    return apiFetch<RecompositionPreviewTask>("/market-data/recomposition/preview-tasks", {
+      method: "POST",
+      body: JSON.stringify({ request, confirm_soft_limit: confirmSoftLimit })
+    });
+  },
+  recompositionPlan(id: number) {
+    return apiFetch<RecompositionPlan>(`/market-data/recomposition/plans/${id}`);
+  },
+  recompositionPreviewBars(id: number, limit = 2000, offset = 0) {
+    return apiFetch<{ rows: MarketVersionBar[]; total: number; limit: number; offset: number }>(
+      `/market-data/recomposition/plans/${id}/bars?limit=${limit}&offset=${offset}`
+    );
+  },
+  createRecompositionGeneration(input: { plan_id: number; plan_hash: string; series_name: string; notes?: string; tags?: string[]; idempotency_key?: string }, confirmSoftLimit = false) {
+    return apiFetch<RecompositionGenerationTask>("/market-data/recomposition/generations", {
+      method: "POST",
+      body: JSON.stringify({ request: input, confirm_soft_limit: confirmSoftLimit })
+    });
+  },
+  recompositionGeneration(id: number) {
+    return apiFetch<RecompositionGeneration>(`/market-data/recomposition/generations/${id}`);
+  },
+  marketSeries(includeArchived = false) {
+    return apiFetch<{ items: MarketSeries[] }>(`/market-data/series?include_archived=${includeArchived}`);
+  },
+  archiveMarketSeries(id: number) {
+    return apiFetch<{ status: string }>(`/market-data/series/${id}`, { method: "DELETE" });
+  },
+  archiveMarketVersion(id: number) {
+    return apiFetch<{ status: string }>(`/market-data/versions/${id}`, { method: "DELETE" });
   }
 };

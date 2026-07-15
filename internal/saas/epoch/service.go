@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"quantsaas/internal/marketversion"
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/marketdata"
@@ -1136,10 +1137,26 @@ func (s *Service) loadResearchDataset(ctx context.Context, id uint) (taskResearc
 	}
 	if out.primary.InstrumentID == "" {
 		out.primary = saasstore.ResearchDatasetSeries{
-			InstrumentID: record.PrimaryInstrumentID,
-			DataSource:   record.PrimaryDataSource,
-			Symbol:       record.PrimarySymbol,
-			Interval:     record.PrimaryInterval,
+			InstrumentID:          record.PrimaryInstrumentID,
+			DataSource:            record.PrimaryDataSource,
+			Symbol:                record.PrimarySymbol,
+			Interval:              record.PrimaryInterval,
+			MarketDataVersionID:   record.PrimaryMarketDataVersionID,
+			MarketDataContentHash: record.PrimaryMarketDataContentHash,
+		}
+	}
+	allSeries := append([]saasstore.ResearchDatasetSeries{out.primary}, out.indicators...)
+	for _, series := range allSeries {
+		if series.MarketDataVersionID == nil {
+			continue
+		}
+		var version saasstore.MarketDataVersion
+		if err := s.db.WithContext(ctx).Where(
+			"id = ? AND output_instrument_id = ? AND interval = ? AND content_hash = ? AND status = ? AND integrity_status = ? AND published = true",
+			*series.MarketDataVersionID, series.InstrumentID, series.Interval, series.MarketDataContentHash,
+			marketversion.VersionStatusCompleted, marketversion.IntegrityValid,
+		).First(&version).Error; err != nil {
+			return taskResearchDataset{}, fmt.Errorf("研究資料集引用的行情版本已失效: %s %s", series.InstrumentID, series.Interval)
 		}
 	}
 	return out, nil
