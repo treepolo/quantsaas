@@ -9,6 +9,7 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   icon?: LucideIcon;
   loading?: boolean;
   variant?: ButtonVariant;
+  size?: "sm" | "md";
 };
 
 const variants: Record<ButtonVariant, string> = {
@@ -18,12 +19,13 @@ const variants: Record<ButtonVariant, string> = {
   danger: "border-[#f87171]/30 bg-[#f87171]/10 text-[#fecaca] hover:bg-[#f87171]/20"
 };
 
-export function Button({ className, icon: Icon, loading, variant = "primary", children, disabled, ...props }: ButtonProps) {
+export function Button({ className, icon: Icon, loading, variant = "primary", size = "md", children, disabled, ...props }: ButtonProps) {
   return (
     <button
       className={cn(
         "inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold transition duration-150 disabled:opacity-50",
         variants[variant],
+        size === "sm" && "min-h-8 px-3 py-1 text-xs",
         className
       )}
       disabled={disabled || loading}

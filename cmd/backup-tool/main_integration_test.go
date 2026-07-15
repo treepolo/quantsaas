@@ -355,6 +355,77 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	configurationCanonical := saasstore.JSONB(fmt.Sprintf(`{"schema_version":"p10-research-configuration-v1","genome_id":%d,"parameter_space":{"schema_version":"p08-grid-v1","axes":[],"fixed":{}},"base_coordinates":[],"backtest":{},"dataset_hash":"p10-dataset"}`, gene.ID))
+	configuration := saasstore.ResearchConfiguration{OwnerUserID: user.ID, ConfigHash: compute.HashBytes(configurationCanonical), SchemaVersion: "p10-research-configuration-v1", StrategyID: gene.StrategyID, InstrumentID: outputInstrumentID, DataSource: "generated", Symbol: outputInstrumentID, Interval: "1d", DatasetHash: "p10-dataset", StartTimeMs: versionBars[0].OpenTime, EndTimeMs: versionBars[1].OpenTime, ExecutionMode: "close_same_bar", ParameterSpaceVersion: "p08-grid-v1", ParameterSpaceHash: compute.HashBytes(robustnessSpace), ParameterSpace: robustnessSpace, DynamicMode: true, DynamicStudyID: &dynamicStudy.ID, DynamicPolicyID: &dynamicPolicy.ID, Canonical: configurationCanonical}
+	if err := source.Create(&configuration).Error; err != nil {
+		t.Fatal(err)
+	}
+	metadata := saasstore.ResearchConfigurationMetadata{ConfigurationID: configuration.ID, Name: "P10 backup research", Tags: saasstore.JSONB(`[]`)}
+	if err := source.Create(&metadata).Error; err != nil {
+		t.Fatal(err)
+	}
+	researchRun := saasstore.ResearchRun{OwnerUserID: user.ID, ConfigurationID: configuration.ID, RunKey: "p10-run:backup", SamplerVersion: "p10-sobol-v1", ExplorationStatus: "checkpoint", Status: compute.TaskStatusCompleted, StartedAt: &completedAt, CompletedAt: &completedAt}
+	if err := source.Create(&researchRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	stage := saasstore.ResearchStage{RunID: researchRun.ID, Ordinal: 0, StageKey: "global-0", StageType: "global", ManifestHash: "p10-manifest", Manifest: saasstore.JSONB(`{"points":[]}`), ComputeTaskID: &computeRoot.ID, Status: compute.TaskStatusCompleted, RequestedCount: 1, UniqueCount: 1, CompletedCount: 1, CompletedAt: &completedAt}
+	if err := source.Create(&stage).Error; err != nil {
+		t.Fatal(err)
+	}
+	researchPoint := saasstore.ResearchEvaluationPoint{ConfigurationID: configuration.ID, VectorHash: "p10-vector", CoordinateKey: "0", Coordinates: saasstore.JSONB(`[0]`), Parameters: parameters, Legality: "legal", Status: "completed", BacktestResultID: &resultID, BacktestResultVersion: backtestresult.ResultSchemaVersion, BacktestResultContentHash: artifacts.ResultContentHash, MetricsVersion: "p08-relative-metrics-v1", MetricsHash: compute.HashBytes(metrics), Metrics: metrics, Qualified: true}
+	if err := source.Create(&researchPoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	origin := saasstore.ResearchPointOrigin{PointID: researchPoint.ID, RunID: researchRun.ID, StageID: stage.ID, OriginKey: "sobol:0", OriginType: "sobol", Reason: saasstore.JSONB(`{}`)}
+	if err := source.Create(&origin).Error; err != nil {
+		t.Fatal(err)
+	}
+	researchAnalysis := saasstore.ResearchAnalysisSnapshot{ConfigurationID: configuration.ID, SnapshotKey: "p10-analysis:backup", SchemaVersion: "p10-analysis-v1", PointSetHash: "p10-point-set", MetricsVersion: "p08-relative-metrics-v1", JAnalysisVersion: "p08-analysis-v1", RobustnessStudyID: robustnessStudy.ID, RobustnessSnapshotID: robustnessSnapshot.ID, Completeness: "complete", ContentHash: "p10-analysis-hash", Summary: saasstore.JSONB(`{}`)}
+	if err := source.Create(&researchAnalysis).Error; err != nil {
+		t.Fatal(err)
+	}
+	region := saasstore.RobustRegion{AnalysisSnapshotID: researchAnalysis.ID, ComponentID: "region-a", Completeness: "complete", Boundary: saasstore.JSONB(`{}`), Lineage: saasstore.JSONB(`[]`)}
+	if err := source.Create(&region).Error; err != nil {
+		t.Fatal(err)
+	}
+	regionPoint := saasstore.RobustRegionPoint{RegionID: region.ID, PointID: researchPoint.ID}
+	if err := source.Create(&regionPoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	adoptionUnit := saasstore.JSONB(`{"schema_version":"p10-dynamic-adoption-unit-v1"}`)
+	candidate := saasstore.RobustCandidate{OwnerUserID: user.ID, ConfigurationID: configuration.ID, PointID: researchPoint.ID, AnalysisSnapshotID: &researchAnalysis.ID, RegionID: &region.ID, CandidateKey: "p10-candidate:backup", Version: "p10-candidate-v1", SourceKind: "analysis", Completeness: "complete", Roles: saasstore.JSONB(`["region_center"]`), AdoptionUnitHash: compute.HashBytes(adoptionUnit), AdoptionUnit: adoptionUnit, Name: "P10 backup candidate", Tags: saasstore.JSONB(`[]`), Lineage: saasstore.JSONB(`[]`)}
+	if err := source.Create(&candidate).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidateAnalysis := saasstore.CandidateAnalysisLink{CandidateID: candidate.ID, AnalysisKind: "G", Version: "p10-analysis-link-v1", Status: "not_calculated", PartialSnapshot: saasstore.JSONB(`{}`)}
+	if err := source.Create(&candidateAnalysis).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidateGene := saasstore.CandidateGeneLink{CandidateID: candidate.ID, GeneRecordID: gene.ID, CandidateVersion: candidate.Version, ImportedAt: completedAt, PromotionAudit: saasstore.JSONB(`[]`)}
+	if err := source.Create(&candidateGene).Error; err != nil {
+		t.Fatal(err)
+	}
+	researchSeries := saasstore.ResearchSeries{OwnerUserID: user.ID, SeriesKey: "p10-series:backup", Name: "P10 backup series", SchemaVersion: "p10-series-v1", CommonBackgroundHash: "p10-background", CommonBackground: saasstore.JSONB(`{}`), ChangedFactors: saasstore.JSONB(`[]`), CommonSchemaHash: configuration.ParameterSpaceHash, CommonSchema: configuration.ParameterSpace}
+	if err := source.Create(&researchSeries).Error; err != nil {
+		t.Fatal(err)
+	}
+	seriesMember := saasstore.ResearchSeriesMember{SeriesID: researchSeries.ID, ConfigurationID: configuration.ID, DisplayOrder: 0, FactorValues: saasstore.JSONB(`{}`)}
+	if err := source.Create(&seriesMember).Error; err != nil {
+		t.Fatal(err)
+	}
+	comparison := saasstore.ResearchComparisonSnapshot{SeriesID: researchSeries.ID, SnapshotKey: "p10-comparison:backup", SchemaVersion: "p10-comparison-v1", Eligibility: "descriptive_only", EligibilityReasons: saasstore.JSONB(`[]`), MemberHashes: saasstore.JSONB(`[]`), CommonManifestHash: "p10-common-manifest", CommonManifest: saasstore.JSONB(`[]`), Missing: saasstore.JSONB(`{}`), Differences: saasstore.JSONB(`[]`), ContentHash: "p10-comparison-hash"}
+	if err := source.Create(&comparison).Error; err != nil {
+		t.Fatal(err)
+	}
+	surrogate := saasstore.SurrogateModelSnapshot{OwnerUserID: user.ID, ConfigurationID: configuration.ID, RunID: researchRun.ID, SnapshotKey: "p10-surrogate:backup", SchemaVersion: "p10-surrogate-v1", TrainingPointSetHash: "p10-training", BatchFoldHash: "p10-fold", ModelSettings: saasstore.JSONB(`{}`), OOFMetrics: saasstore.JSONB(`{}`), ArtifactHash: "p10-surrogate-artifact", Artifact: saasstore.JSONB(`{}`), ContentHash: "p10-surrogate-content", Status: compute.TaskStatusCompleted, ComputeTaskID: &computeRoot.ID}
+	if err := source.Create(&surrogate).Error; err != nil {
+		t.Fatal(err)
+	}
+	proposal := saasstore.SurrogateProposal{SurrogateSnapshotID: surrogate.ID, VectorHash: "p10-proposal-vector", ProposalTypes: saasstore.JSONB(`["high_return"]`), Coordinates: saasstore.JSONB(`[1]`), Parameters: parameters, Predictions: saasstore.JSONB(`{}`), Uncertainty: saasstore.JSONB(`{}`), CandidatePoolHash: "p10-pool", ActualPointID: &researchPoint.ID, ActualError: saasstore.JSONB(`{}`)}
+	if err := source.Create(&proposal).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	backup, err := buildIncrementalBackup(source, since)
 	if err != nil {
 		t.Fatal(err)
@@ -373,6 +444,9 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if len(backup.DynamicModelStudies) != 1 || len(backup.DynamicModelArtifacts) != 1 || len(backup.DynamicPredictions) != 1 || len(backup.DynamicPolicies) != 1 || len(backup.DynamicMaterializations) != 1 || len(backup.DynamicReportSnapshots) != 1 || len(backup.DynamicReportBlocks) != 1 {
 		t.Fatalf("incomplete P09 backup closure: studies=%d artifacts=%d predictions=%d policies=%d materializations=%d reports=%d blocks=%d", len(backup.DynamicModelStudies), len(backup.DynamicModelArtifacts), len(backup.DynamicPredictions), len(backup.DynamicPolicies), len(backup.DynamicMaterializations), len(backup.DynamicReportSnapshots), len(backup.DynamicReportBlocks))
+	}
+	if len(backup.ResearchConfigurations) != 1 || len(backup.ResearchRuns) != 1 || len(backup.ResearchPoints) != 1 || len(backup.RobustCandidates) != 1 || len(backup.ResearchComparisons) != 1 || len(backup.SurrogateSnapshots) != 1 || len(backup.SurrogateProposals) != 1 {
+		t.Fatalf("incomplete P10 backup closure: configurations=%d runs=%d points=%d candidates=%d comparisons=%d surrogates=%d proposals=%d", len(backup.ResearchConfigurations), len(backup.ResearchRuns), len(backup.ResearchPoints), len(backup.RobustCandidates), len(backup.ResearchComparisons), len(backup.SurrogateSnapshots), len(backup.SurrogateProposals))
 	}
 	if len(backup.MarketSeries) != 1 || len(backup.MarketDataVersions) != 2 || len(backup.MarketVersionBars) != 2 ||
 		len(backup.MarketVersionSources) != 1 || len(backup.RecompositionPlans) != 1 || len(backup.RecompositionSegments) != 1 ||
@@ -442,6 +516,13 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if restoredDynamicMaterialization.ContentHash != dynamicMaterialization.ContentHash || restoredDynamicMaterialization.BacktestResultID == nil || *restoredDynamicMaterialization.BacktestResultID != resultID {
 		t.Fatalf("restored P09 materialization = %+v", restoredDynamicMaterialization)
+	}
+	var restoredCandidate saasstore.RobustCandidate
+	if err := target.First(&restoredCandidate, candidate.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredCandidate.AdoptionUnitHash != candidate.AdoptionUnitHash || restoredCandidate.PointID != researchPoint.ID {
+		t.Fatalf("restored P10 candidate = %+v", restoredCandidate)
 	}
 }
 

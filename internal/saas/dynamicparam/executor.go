@@ -206,19 +206,32 @@ func (executor *MaterializeExecutor) Execute(ctx context.Context, execution comp
 		return nil, fmt.Errorf("P09 OOF 預測不完整")
 	}
 	var policyRow saasstore.DynamicPolicyArtifact
-	if err := executor.db.WithContext(ctx).Where("study_id = ? AND owner_user_id = ? AND content_hash = ?", study.ID, execution.UserID, input.PolicyHash).First(&policyRow).Error; err != nil {
+	policyQuery := executor.db.WithContext(ctx).Where("study_id = ? AND owner_user_id = ?", study.ID, execution.UserID)
+	if input.PolicyOverride == nil {
+		policyQuery = policyQuery.Where("content_hash = ?", input.PolicyHash)
+	} else if input.BasePolicyArtifactID != 0 {
+		policyQuery = policyQuery.Where("id = ?", input.BasePolicyArtifactID)
+	} else {
+		return nil, ErrInvalidRequest
+	}
+	if err := policyQuery.First(&policyRow).Error; err != nil {
 		return nil, ErrNotFound
 	}
 	var policy PolicyBundle
-	if err := json.Unmarshal(policyRow.Payload, &policy); err != nil {
+	if input.PolicyOverride != nil {
+		policy = *input.PolicyOverride
+	} else if err := json.Unmarshal(policyRow.Payload, &policy); err != nil {
 		return nil, err
 	}
 	canonicalPolicy, err := compute.CanonicalJSON(policy)
 	if err != nil {
 		return nil, err
 	}
-	if compute.HashBytes(canonicalPolicy) != policyRow.ContentHash {
+	if compute.HashBytes(canonicalPolicy) != input.PolicyHash {
 		return nil, fmt.Errorf("P09 動態政策 hash 不符")
+	}
+	if policy.ModelVersion == "" || policyRow.ArtifactSetHash != input.ArtifactSetHash || policyRow.PredictionSnapshotID != snapshot.ID {
+		return nil, fmt.Errorf("P09 動態政策來源版本不相容")
 	}
 	if err := core.ValidatePolicy(policy.Policy); err != nil {
 		return nil, err

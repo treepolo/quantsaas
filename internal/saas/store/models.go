@@ -1186,3 +1186,304 @@ type DynamicReportBlock struct {
 
 	Study DynamicModelStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
 }
+
+// ResearchConfiguration is the immutable P10 research identity. Human-editable
+// metadata is deliberately kept in ResearchConfigurationMetadata.
+type ResearchConfiguration struct {
+	ID                    uint `gorm:"primaryKey"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	OwnerUserID           uint   `gorm:"not null;index;uniqueIndex:idx_research_configuration_owner_hash"`
+	ConfigHash            string `gorm:"size:128;not null;uniqueIndex:idx_research_configuration_owner_hash"`
+	SchemaVersion         string `gorm:"size:48;not null"`
+	StrategyID            string `gorm:"size:80;not null;index"`
+	InstrumentID          string `gorm:"size:64;not null;index"`
+	DataSource            string `gorm:"size:64;not null;index"`
+	Symbol                string `gorm:"size:64;not null"`
+	Interval              string `gorm:"size:16;not null;index"`
+	DatasetHash           string `gorm:"size:128;not null;index"`
+	StartTimeMs           int64  `gorm:"not null;index"`
+	EndTimeMs             int64  `gorm:"not null;index"`
+	ExecutionMode         string `gorm:"size:32;not null;index"`
+	ParameterSpaceVersion string `gorm:"size:48;not null"`
+	ParameterSpaceHash    string `gorm:"size:128;not null;index"`
+	ParameterSpace        JSONB  `gorm:"type:jsonb;not null"`
+	DynamicMode           bool   `gorm:"not null;default:false;index"`
+	DynamicStudyID        *uint  `gorm:"index"`
+	DynamicPolicyID       *uint  `gorm:"index"`
+	Canonical             JSONB  `gorm:"type:jsonb;not null"`
+	ArchivedAt            *time.Time
+
+	Owner    User                           `gorm:"foreignKey:OwnerUserID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	Metadata *ResearchConfigurationMetadata `gorm:"foreignKey:ConfigurationID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type ResearchConfigurationMetadata struct {
+	ID              uint `gorm:"primaryKey"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	ConfigurationID uint   `gorm:"not null;uniqueIndex"`
+	Name            string `gorm:"size:180;not null"`
+	Notes           string `gorm:"type:text"`
+	Tags            JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	ArchivedAt      *time.Time
+
+	Configuration ResearchConfiguration `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type ResearchRun struct {
+	ID                     uint `gorm:"primaryKey"`
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	OwnerUserID            uint   `gorm:"not null;index"`
+	ConfigurationID        uint   `gorm:"not null;index"`
+	RunKey                 string `gorm:"size:128;not null;uniqueIndex:idx_research_run_owner_key"`
+	SamplerVersion         string `gorm:"size:48;not null"`
+	RootSeed               int64  `gorm:"not null;default:0"`
+	NextSobolIndex         int64  `gorm:"not null;default:0"`
+	GlobalUniquePointCount int    `gorm:"not null;default:0"`
+	GlobalBatchCount       int    `gorm:"not null;default:0"`
+	ExplorationStatus      string `gorm:"size:40;not null;index"`
+	Status                 string `gorm:"size:32;not null;index"`
+	StartedAt              *time.Time
+	CompletedAt            *time.Time
+	PausedAt               *time.Time
+	CancelledAt            *time.Time
+
+	Configuration ResearchConfiguration `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type ResearchStage struct {
+	ID              uint `gorm:"primaryKey"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	RunID           uint   `gorm:"not null;index;uniqueIndex:idx_research_stage_run_ordinal"`
+	Ordinal         int    `gorm:"not null;uniqueIndex:idx_research_stage_run_ordinal"`
+	StageKey        string `gorm:"size:128;not null"`
+	StageType       string `gorm:"size:48;not null;index"`
+	ManifestHash    string `gorm:"size:128;not null;index"`
+	Manifest        JSONB  `gorm:"type:jsonb;not null"`
+	ComputeTaskID   *uint  `gorm:"index"`
+	Status          string `gorm:"size:32;not null;index"`
+	RequestedCount  int    `gorm:"not null;default:0"`
+	UniqueCount     int    `gorm:"not null;default:0"`
+	CacheHitCount   int    `gorm:"not null;default:0"`
+	CompletedCount  int    `gorm:"not null;default:0"`
+	FailedCount     int    `gorm:"not null;default:0"`
+	MissingCount    int    `gorm:"not null;default:0"`
+	SobolStartIndex int64  `gorm:"not null;default:0"`
+	SobolEndIndex   int64  `gorm:"not null;default:0"`
+	ErrorMessage    string `gorm:"type:text"`
+	CompletedAt     *time.Time
+
+	Run         ResearchRun  `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	ComputeTask *ComputeTask `gorm:"foreignKey:ComputeTaskID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
+}
+
+type ResearchEvaluationPoint struct {
+	ID                        uint `gorm:"primaryKey"`
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	ConfigurationID           uint   `gorm:"not null;index;uniqueIndex:idx_research_point_configuration_vector"`
+	VectorHash                string `gorm:"size:128;not null;uniqueIndex:idx_research_point_configuration_vector"`
+	CoordinateKey             string `gorm:"size:512;not null"`
+	Coordinates               JSONB  `gorm:"type:jsonb;not null"`
+	Parameters                JSONB  `gorm:"type:jsonb;not null"`
+	Legality                  string `gorm:"size:24;not null;index"`
+	Status                    string `gorm:"size:32;not null;index"`
+	BacktestResultID          *uint  `gorm:"index"`
+	BacktestResultVersion     string `gorm:"size:48"`
+	BacktestResultContentHash string `gorm:"size:128;index"`
+	MetricsVersion            string `gorm:"size:48"`
+	MetricsHash               string `gorm:"size:128;index"`
+	Metrics                   JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	Qualified                 bool   `gorm:"not null;default:false;index"`
+
+	Configuration  ResearchConfiguration `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	BacktestResult *BacktestResult       `gorm:"foreignKey:BacktestResultID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type ResearchPointOrigin struct {
+	ID         uint `gorm:"primaryKey"`
+	CreatedAt  time.Time
+	PointID    uint   `gorm:"not null;index;uniqueIndex:idx_research_point_origin"`
+	RunID      uint   `gorm:"not null;index;uniqueIndex:idx_research_point_origin"`
+	StageID    uint   `gorm:"not null;index;uniqueIndex:idx_research_point_origin"`
+	OriginKey  string `gorm:"size:160;not null;uniqueIndex:idx_research_point_origin"`
+	OriginType string `gorm:"size:48;not null;index"`
+	SobolIndex *int64 `gorm:"index"`
+	Reason     JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+}
+
+type ResearchAnalysisSnapshot struct {
+	ID                   uint `gorm:"primaryKey"`
+	CreatedAt            time.Time
+	ConfigurationID      uint   `gorm:"not null;index"`
+	SnapshotKey          string `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion        string `gorm:"size:48;not null"`
+	PointSetHash         string `gorm:"size:128;not null;index"`
+	MetricsVersion       string `gorm:"size:48;not null"`
+	JAnalysisVersion     string `gorm:"size:48;not null"`
+	RobustnessStudyID    uint   `gorm:"not null;index"`
+	RobustnessSnapshotID uint   `gorm:"not null;index"`
+	Completeness         string `gorm:"size:32;not null;index"`
+	ContentHash          string `gorm:"size:128;not null;index"`
+	Summary              JSONB  `gorm:"type:jsonb;not null"`
+}
+
+type RobustRegion struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	AnalysisSnapshotID uint   `gorm:"not null;index;uniqueIndex:idx_research_region_component"`
+	ComponentID        string `gorm:"size:128;not null;uniqueIndex:idx_research_region_component"`
+	Completeness       string `gorm:"size:32;not null;index"`
+	Boundary           JSONB  `gorm:"type:jsonb;not null"`
+	Lineage            JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+}
+
+type RobustRegionPoint struct {
+	ID        uint `gorm:"primaryKey"`
+	CreatedAt time.Time
+	RegionID  uint `gorm:"not null;index;uniqueIndex:idx_research_region_point"`
+	PointID   uint `gorm:"not null;index;uniqueIndex:idx_research_region_point"`
+}
+
+type RobustCandidate struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	OwnerUserID        uint   `gorm:"not null;index"`
+	ConfigurationID    uint   `gorm:"not null;index"`
+	PointID            uint   `gorm:"not null;index"`
+	AnalysisSnapshotID *uint  `gorm:"index;uniqueIndex:idx_research_candidate_snapshot_point"`
+	RegionID           *uint  `gorm:"index"`
+	CandidateKey       string `gorm:"size:128;not null;uniqueIndex"`
+	Version            string `gorm:"size:48;not null"`
+	SourceKind         string `gorm:"size:32;not null;index"`
+	Completeness       string `gorm:"size:32;not null;index"`
+	Roles              JSONB  `gorm:"type:jsonb;not null"`
+	AdoptionUnitHash   string `gorm:"size:128;not null;index"`
+	AdoptionUnit       JSONB  `gorm:"type:jsonb;not null"`
+	Name               string `gorm:"size:180"`
+	Notes              string `gorm:"type:text"`
+	Tags               JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	Lineage            JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	ArchivedAt         *time.Time
+}
+
+type CandidateAnalysisLink struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	CandidateID       uint   `gorm:"not null;index;uniqueIndex:idx_candidate_analysis_kind_version"`
+	AnalysisKind      string `gorm:"size:16;not null;index;uniqueIndex:idx_candidate_analysis_kind_version"`
+	Version           string `gorm:"size:48;not null;uniqueIndex:idx_candidate_analysis_kind_version"`
+	Status            string `gorm:"size:32;not null;index"`
+	TaskID            *uint  `gorm:"index"`
+	SourceID          string `gorm:"size:128"`
+	SourceVersion     string `gorm:"size:48"`
+	SourceContentHash string `gorm:"size:128"`
+	PartialSnapshot   JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ErrorMessage      string `gorm:"type:text"`
+}
+
+type CandidateGeneLink struct {
+	ID               uint `gorm:"primaryKey"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	CandidateID      uint   `gorm:"not null;uniqueIndex"`
+	GeneRecordID     uint   `gorm:"not null;index"`
+	CandidateVersion string `gorm:"size:48;not null"`
+	ImportedAt       time.Time
+	LastPromotedAt   *time.Time
+	PromotionAudit   JSONB `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+}
+
+type ResearchSeries struct {
+	ID                   uint `gorm:"primaryKey"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	OwnerUserID          uint   `gorm:"not null;index"`
+	SeriesKey            string `gorm:"size:128;not null;uniqueIndex:idx_research_series_owner_key"`
+	Name                 string `gorm:"size:180;not null"`
+	SchemaVersion        string `gorm:"size:48;not null"`
+	CommonBackgroundHash string `gorm:"size:128;not null;index"`
+	CommonBackground     JSONB  `gorm:"type:jsonb;not null"`
+	ChangedFactors       JSONB  `gorm:"type:jsonb;not null"`
+	CommonSchemaHash     string `gorm:"size:128;not null;index"`
+	CommonSchema         JSONB  `gorm:"type:jsonb;not null"`
+	ArchivedAt           *time.Time
+}
+
+// TableName avoids colliding with the pre-existing reference-data
+// research_series table, whose string primary key and semantics are unrelated.
+func (ResearchSeries) TableName() string { return "parameter_research_series" }
+
+type ResearchSeriesMember struct {
+	ID              uint `gorm:"primaryKey"`
+	CreatedAt       time.Time
+	SeriesID        uint  `gorm:"not null;index;uniqueIndex:idx_research_series_member"`
+	ConfigurationID uint  `gorm:"not null;index;uniqueIndex:idx_research_series_member"`
+	DisplayOrder    int   `gorm:"not null"`
+	FactorValues    JSONB `gorm:"type:jsonb;not null"`
+}
+
+func (ResearchSeriesMember) TableName() string { return "parameter_research_series_members" }
+
+type ResearchComparisonSnapshot struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	SeriesID           uint   `gorm:"not null;index"`
+	SnapshotKey        string `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion      string `gorm:"size:48;not null"`
+	Eligibility        string `gorm:"size:40;not null;index"`
+	EligibilityReasons JSONB  `gorm:"type:jsonb;not null"`
+	MemberHashes       JSONB  `gorm:"type:jsonb;not null"`
+	CommonManifestHash string `gorm:"size:128;not null;index"`
+	CommonManifest     JSONB  `gorm:"type:jsonb;not null"`
+	Missing            JSONB  `gorm:"type:jsonb;not null"`
+	Differences        JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash        string `gorm:"size:128;not null;index"`
+}
+
+func (ResearchComparisonSnapshot) TableName() string {
+	return "parameter_research_comparison_snapshots"
+}
+
+type SurrogateModelSnapshot struct {
+	ID                   uint `gorm:"primaryKey"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	OwnerUserID          uint   `gorm:"not null;index"`
+	ConfigurationID      uint   `gorm:"not null;index"`
+	RunID                uint   `gorm:"not null;index"`
+	SnapshotKey          string `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion        string `gorm:"size:48;not null"`
+	TrainingPointSetHash string `gorm:"size:128;not null;index"`
+	BatchFoldHash        string `gorm:"size:128;not null"`
+	ModelSettings        JSONB  `gorm:"type:jsonb;not null"`
+	OOFMetrics           JSONB  `gorm:"type:jsonb;not null"`
+	CanGuideReturn       bool   `gorm:"not null;default:false"`
+	CanGuideDrawdown     bool   `gorm:"not null;default:false"`
+	CanGuideConservative bool   `gorm:"not null;default:false"`
+	ArtifactHash         string `gorm:"size:128;not null;index"`
+	Artifact             JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash          string `gorm:"size:128;not null;index"`
+	Status               string `gorm:"size:32;not null;index"`
+	ComputeTaskID        *uint  `gorm:"index"`
+}
+
+type SurrogateProposal struct {
+	ID                  uint `gorm:"primaryKey"`
+	CreatedAt           time.Time
+	SurrogateSnapshotID uint   `gorm:"not null;index;uniqueIndex:idx_surrogate_proposal_vector"`
+	VectorHash          string `gorm:"size:128;not null;uniqueIndex:idx_surrogate_proposal_vector"`
+	ProposalTypes       JSONB  `gorm:"type:jsonb;not null"`
+	Coordinates         JSONB  `gorm:"type:jsonb;not null"`
+	Parameters          JSONB  `gorm:"type:jsonb;not null"`
+	Predictions         JSONB  `gorm:"type:jsonb;not null"`
+	Uncertainty         JSONB  `gorm:"type:jsonb;not null"`
+	CandidatePoolHash   string `gorm:"size:128;not null"`
+	ActualPointID       *uint  `gorm:"index"`
+	ActualError         JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+}

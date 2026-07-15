@@ -18,6 +18,7 @@ import (
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/instance"
 	"quantsaas/internal/saas/marketdata"
+	parameterresearchsvc "quantsaas/internal/saas/parameterresearch"
 	robustnesssvc "quantsaas/internal/saas/robustness"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
@@ -44,6 +45,7 @@ type RouterDeps struct {
 	MarketData        *marketdata.Service
 	Robustness        *robustnesssvc.Service
 	DynamicParameters *dynamicparamsvc.Service
+	ParameterResearch *parameterresearchsvc.Service
 	AgentStatus       AgentStatusProvider
 	WSHandler         gin.HandlerFunc
 }
@@ -99,6 +101,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		dynamicParameters = dynamicparamsvc.NewService(deps.DB, deps.ComputeTasks)
 	}
 	dynamicParameterHandler := NewDynamicParameterHandler(dynamicParameters)
+	parameterResearch := deps.ParameterResearch
+	if parameterResearch == nil {
+		parameterResearch = parameterresearchsvc.NewService(deps.DB, deps.ComputeTasks, robustnessStudies)
+	}
+	parameterResearchHandler := NewParameterResearchHandler(parameterResearch)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
@@ -168,6 +175,39 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.GET("/dynamic-parameters/studies/:id", dynamicParameterHandler.Get)
 	lab.POST("/dynamic-parameters/studies/:id/materialize", dynamicParameterHandler.Materialize)
 	lab.GET("/dynamic-parameters/studies/:id/report-blocks/:blockID", dynamicParameterHandler.ReportBlock)
+	parameterResearchAPI := lab.Group("/lab/parameter-research")
+	parameterResearchAPI.POST("/configurations", parameterResearchHandler.CreateConfiguration)
+	parameterResearchAPI.GET("/dynamic-policy-spaces/:id", parameterResearchHandler.DynamicSpace)
+	parameterResearchAPI.GET("/configurations", parameterResearchHandler.ListConfigurations)
+	parameterResearchAPI.GET("/configurations/:id", parameterResearchHandler.GetConfiguration)
+	parameterResearchAPI.GET("/configurations/:id/runs", parameterResearchHandler.ListRuns)
+	parameterResearchAPI.POST("/configurations/:id/archive", parameterResearchHandler.ArchiveConfiguration)
+	parameterResearchAPI.POST("/configurations/:id/runs/plan", parameterResearchHandler.PlanRun)
+	parameterResearchAPI.POST("/configurations/:id/runs", parameterResearchHandler.StartRun)
+	parameterResearchAPI.GET("/runs/:id", parameterResearchHandler.GetRun)
+	parameterResearchAPI.GET("/runs/:id/points", parameterResearchHandler.ListPoints)
+	parameterResearchAPI.GET("/runs/:id/landscape", parameterResearchHandler.GetLandscape)
+	parameterResearchAPI.POST("/runs/:id/stages/plan", parameterResearchHandler.PlanStage)
+	parameterResearchAPI.POST("/runs/:id/stages", parameterResearchHandler.StartStage)
+	parameterResearchAPI.POST("/runs/:id/pause", parameterResearchHandler.PauseRun)
+	parameterResearchAPI.POST("/runs/:id/cancel", parameterResearchHandler.CancelRun)
+	parameterResearchAPI.POST("/runs/:id/analyses", parameterResearchHandler.Analyze)
+	parameterResearchAPI.POST("/runs/:id/surrogates/plan", parameterResearchHandler.PlanSurrogate)
+	parameterResearchAPI.GET("/runs/:id/surrogates", parameterResearchHandler.ListSurrogates)
+	parameterResearchAPI.POST("/runs/:id/surrogates", parameterResearchHandler.StartSurrogate)
+	parameterResearchAPI.GET("/surrogates/:id", parameterResearchHandler.GetSurrogate)
+	parameterResearchAPI.POST("/surrogates/:id/proposals", parameterResearchHandler.CreateProposals)
+	parameterResearchAPI.GET("/surrogates/:id/proposals", parameterResearchHandler.ListProposals)
+	parameterResearchAPI.POST("/analysis-snapshots/:id/candidates/derive", parameterResearchHandler.DeriveCandidates)
+	parameterResearchAPI.POST("/points/:id/candidates", parameterResearchHandler.ManualCandidate)
+	parameterResearchAPI.GET("/candidates", parameterResearchHandler.ListCandidates)
+	parameterResearchAPI.GET("/candidates/:id", parameterResearchHandler.GetCandidate)
+	parameterResearchAPI.POST("/candidates/:id/archive", parameterResearchHandler.ArchiveCandidate)
+	parameterResearchAPI.POST("/candidates/:id/export-to-library", parameterResearchHandler.ExportCandidate)
+	parameterResearchAPI.POST("/candidates/:id/promote", parameterResearchHandler.PromoteCandidate)
+	parameterResearchAPI.PATCH("/candidates/:id/analyses/:kind", parameterResearchHandler.UpdateAnalysisLink)
+	parameterResearchAPI.POST("/series", parameterResearchHandler.CreateSeries)
+	parameterResearchAPI.GET("/series/:id", parameterResearchHandler.GetSeries)
 	if deps.ComputeTasks != nil {
 		computeTasks := NewComputeTaskHandler(deps.ComputeTasks)
 		lab.GET("/compute-tasks/limits", computeTasks.Limits)

@@ -19,6 +19,7 @@ import (
 	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/instance"
 	"quantsaas/internal/saas/marketdata"
+	parameterresearchsvc "quantsaas/internal/saas/parameterresearch"
 	robustnesssvc "quantsaas/internal/saas/robustness"
 	"quantsaas/internal/saas/store"
 	"quantsaas/internal/saas/ws"
@@ -70,6 +71,7 @@ func main() {
 		robustnesssvc.NewPointExecutor(db.DB),
 		dynamicparamsvc.NewTrainExecutor(db.DB),
 		dynamicparamsvc.NewMaterializeExecutor(db.DB, backtestService),
+		parameterresearchsvc.NewSurrogateExecutor(),
 		marketdata.NewRecompositionPreviewExecutor(marketDataService),
 		marketdata.NewRecompositionExpandExecutor(marketDataService),
 		marketdata.NewRecompositionAuditExecutor(marketDataService),
@@ -92,6 +94,7 @@ func main() {
 	marketDataService.SetComputeTasks(computeTasks)
 	robustnessStudies := robustnesssvc.NewService(db.DB, computeTasks)
 	dynamicParameterStudies := dynamicparamsvc.NewService(db.DB, computeTasks)
+	parameterResearch := parameterresearchsvc.NewService(db.DB, computeTasks, robustnessStudies)
 	if err := computeTasks.Start(); err != nil {
 		logger.Fatal("start compute task service failed", zap.Error(err))
 	}
@@ -108,6 +111,7 @@ func main() {
 		MarketData:        marketDataService,
 		Robustness:        robustnessStudies,
 		DynamicParameters: dynamicParameterStudies,
+		ParameterResearch: parameterResearch,
 		AgentStatus:       hub,
 		WSHandler:         hub.HandleConnection,
 	})

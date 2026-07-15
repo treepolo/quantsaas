@@ -98,9 +98,11 @@ type TrainExecutionResult struct {
 type MaterializeExecutionInput struct {
 	SchemaVersion          string                 `json:"schema_version"`
 	StudyID                uint                   `json:"study_id"`
+	BasePolicyArtifactID   uint                   `json:"base_policy_artifact_id,omitempty"`
 	ArtifactSetHash        string                 `json:"artifact_set_hash"`
 	PredictionSnapshotHash string                 `json:"prediction_snapshot_hash"`
 	PolicyHash             string                 `json:"policy_hash"`
+	PolicyOverride         *PolicyBundle          `json:"policy_override,omitempty"`
 	Scope                  MarketScope            `json:"scope"`
 	Backtest               backtest.CreateRequest `json:"backtest"`
 }

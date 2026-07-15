@@ -8,6 +8,7 @@ const items = [
   { to: "/backtesting", icon: AreaChart, title: "回測", body: "用歷史資料檢查參數表現，確認結果是否穩定。" },
   { to: "/robustness", icon: Grid3X3, title: "參數穩健性", body: "用一維、二維與多尺度區域檢查參數附近是否穩定。" },
   { to: "/dynamic-parameters", icon: BrainCircuit, title: "預測與動態參數", body: "建立樣本外預測、結構狀態與每日有效參數。" },
+  { to: "/parameter-research", icon: Grid3X3, title: "參數地形研究", body: "完成分批探索、穩健區域、候選驗證與人工採用。" },
   { to: "/data", icon: Database, title: "研究資料", body: "匯入 BTC 與股指日線資料，檢查資料筆數與更新狀態。" },
   { to: "/status", icon: Gauge, title: "市場狀態", body: "套用採用參數，查看目前市場判斷與目標權重。" }
 ];
