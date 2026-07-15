@@ -477,6 +477,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [tradePenalty, setTradePenalty] = useState(0);
   const [feeRate, setFeeRate] = useState(0);
   const [spreadRate, setSpreadRate] = useState(0);
+  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(true);
+  const [longTermFilterMonths, setLongTermFilterMonths] = useState(10);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>("off");
   const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(false);
@@ -571,6 +573,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     trade_penalty: tradePenalty,
     fee_rate: feeRate,
     spread_rate: spreadRate,
+    long_term_filter_enabled: interval === "1d" && longTermFilterEnabled,
+    long_term_filter_months: longTermFilterMonths,
     pop_size: population,
     max_generations: generations,
     spawn_mode: spawnMode,
@@ -583,7 +587,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined,
     seed_gene_id: selectedSeedGenome?.id,
     fixed_param_keys: selectedSeedGenome ? fixedParamKeys : undefined
-  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, fixedParamKeys, generations, instrumentId, interval, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, selectedSeedGenome, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, fixedParamKeys, generations, instrumentId, interval, longTermFilterEnabled, longTermFilterMonths, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, selectedSeedGenome, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
   const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
   const computeEstimateQuery = useQuery({
     queryKey: ["evolution-compute-estimate", taskInput],
@@ -698,6 +702,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
                 <Metric label="調倉門檻" value={running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                 <Metric label="倉位回饋 Gamma" value={running.evolve_gamma ? "參與演化" : "固定為 0"} />
+                <Metric label="長週期風險濾網" value={running.long_term_filter_enabled ? `${running.long_term_filter_months ?? 10} 月線` : "關閉"} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
                 <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
                 <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
@@ -836,6 +841,12 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <NumberInput label="每月投入" min={0} max={1000000000} value={monthlyDCA} onChange={setMonthlyDCA} />
           <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
+          <label className="flex items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
+            <input type="checkbox" checked={interval === "1d" && longTermFilterEnabled} disabled={interval !== "1d"} onChange={(event) => setLongTermFilterEnabled(event.target.checked)} />
+            啟用長週期風險濾網
+          </label>
+          <NumberInput label="N 月線長度" min={1} value={longTermFilterMonths} onChange={setLongTermFilterMonths} />
+          {interval !== "1d" ? <div className="text-xs text-[#fde68a] md:col-span-2">長週期風險濾網以日 K 組成月收盤；非日 K 任務會自動關閉。</div> : null}
           <Select label="倉位結構" value={positionStructure} onChange={(value) => setPositionStructure(value as "dual_layer" | "floating_only")} options={[["floating_only", "純浮動模型"], ["dual_layer", "雙層模型"]]} />
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
             <div className="mb-2 text-sm font-semibold text-slate-300">門檻演化</div>
@@ -955,7 +966,7 @@ function Select({ label, value, onChange, options }: { label: string; value: str
   );
 }
 
-function NumberInput({ label, value, min, max, step = 1, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange: (value: number) => void }) {
+function NumberInput({ label, value, min, max, step = 1, onChange }: { label: string; value: number; min: number; max?: number; step?: number; onChange: (value: number) => void }) {
   return (
     <label>
       <span className="mb-2 block text-sm text-slate-300">{label}</span>
@@ -1219,6 +1230,7 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                     <InfoRow label="倉位結構" value={(searchConfig.position_structure ?? searchConfig.gene_options?.PositionStructure) === "floating_only" ? "純浮動模型" : "雙層模型"} />
                     <InfoRow label="啟用訊號" value={`${searchConfig.enable_w_mean ?? searchConfig.gene_options?.EnableWMean ?? true ? "均值" : "-"} / ${searchConfig.enable_w_momentum ?? searchConfig.gene_options?.EnableWMomentum ?? true ? "動能" : "-"} / ${searchConfig.enable_w_breakout ?? searchConfig.gene_options?.EnableWBreakout ?? true ? "突破" : "-"}`} />
                     <InfoRow label="每次交易懲罰" value={searchConfig.trade_penalty !== undefined ? Number(searchConfig.trade_penalty).toFixed(4) : "0.0000"} />
+                    <InfoRow label="長週期風險濾網" value={searchConfig.long_term_filter_enabled ? `${searchConfig.long_term_filter_months ?? 10} 月線` : "關閉"} />
                     <InfoRow label="手續費率" value={searchConfig.fee_rate !== undefined ? formatPercent(searchConfig.fee_rate) : "未記錄"} />
                     <InfoRow label="價差 / 滑價率" value={searchConfig.spread_rate !== undefined ? formatPercent(searchConfig.spread_rate) : "未記錄"} />
                     <InfoRow label="執行假設" value={searchConfig.execution_mode ?? genome.execution_mode ?? "未記錄"} />

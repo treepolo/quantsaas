@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"quantsaas/internal/backtestcore"
 	"quantsaas/internal/marketversion"
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/ga"
@@ -73,6 +74,8 @@ type CreateTaskRequest struct {
 	TradePenalty              float64           `json:"trade_penalty"`
 	FeeRate                   *float64          `json:"fee_rate"`
 	SpreadRate                *float64          `json:"spread_rate"`
+	LongTermFilterEnabled     *bool             `json:"long_term_filter_enabled"`
+	LongTermFilterMonths      int               `json:"long_term_filter_months"`
 	TestMode                  bool              `json:"test_mode"`
 	TraceMode                 ga.TraceMode      `json:"trace_mode"`
 	ComputeMonitorEnabled     bool              `json:"compute_monitor_enabled"`
@@ -286,6 +289,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		TradePenalty:       searchTradePenalty(req),
+		LongTermFilter:     searchLongTermFilter(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
@@ -460,6 +464,7 @@ func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, ta
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		TradePenalty:       searchTradePenalty(req),
+		LongTermFilter:     searchLongTermFilter(req),
 		SpawnPointOverride: spawn,
 		TraceMode:          req.TraceMode,
 		TraceModeFunc:      s.traceModeGetter(taskID),
@@ -585,6 +590,9 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"enable_w_breakout":            boolValue(req.EnableWBreakout),
 		"position_structure":           normalizedPositionStructure(req.PositionStructure),
 		"trade_penalty":                searchTradePenalty(req),
+		"long_term_filter_enabled":     boolValue(req.LongTermFilterEnabled),
+		"long_term_filter_months":      req.LongTermFilterMonths,
+		"long_term_filter_version":     backtestcore.LongTermFilterVersion,
 		"fee_rate":                     searchCosts(req).FeeRate,
 		"spread_rate":                  searchCosts(req).SpreadRate,
 		"spawn_mode":                   req.SpawnMode,
@@ -694,6 +702,7 @@ func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTask
 		GeneOptions:        searchGeneOptions(req),
 		Costs:              searchCosts(req),
 		TradePenalty:       searchTradePenalty(req),
+		LongTermFilter:     searchLongTermFilter(req),
 		SpawnPointOverride: &spawn,
 		TraceMode:          ga.TraceModeSummary,
 	}, []byte(record.ParamPack))
@@ -984,6 +993,13 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 		value := true
 		req.EnableWMean = &value
 	}
+	if req.LongTermFilterEnabled == nil {
+		value := true
+		req.LongTermFilterEnabled = &value
+	}
+	if req.LongTermFilterMonths == 0 {
+		req.LongTermFilterMonths = backtestcore.DefaultLongTermFilterMonths
+	}
 	if req.EnableWMomentum == nil {
 		value := true
 		req.EnableWMomentum = &value
@@ -1037,6 +1053,14 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 	}
 	if req.ExecutionMode == marketdata.ExecutionModePreclose10m {
 		return errors.New("收盤前 10 分鐘模式需要歷史快照搜尋路徑，目前尚未開放，不能用日 K 假裝參數搜尋")
+	}
+	if boolValue(req.LongTermFilterEnabled) {
+		if req.Interval != "1d" {
+			return errors.New("長週期風險濾網只支援日 K，請改用日 K 或關閉濾網")
+		}
+		if req.LongTermFilterMonths <= 0 {
+			return errors.New("N 月線長度必須大於 0")
+		}
 	}
 	if req.TrainStartMs > 0 && req.TrainEndMs > 0 && req.TrainStartMs > req.TrainEndMs {
 		return errors.New("train_start_ms must be earlier than train_end_ms")
@@ -1171,6 +1195,14 @@ func searchCosts(req CreateTaskRequest) quant.ExecutionCostConfig {
 		costs.SpreadRate = *req.SpreadRate
 	}
 	return quant.NormalizeExecutionCosts(costs)
+}
+
+func searchLongTermFilter(req CreateTaskRequest) backtestcore.LongTermFilterConfig {
+	return backtestcore.LongTermFilterConfig{
+		Enabled: boolValue(req.LongTermFilterEnabled),
+		Months:  req.LongTermFilterMonths,
+		Version: backtestcore.LongTermFilterVersion,
+	}
 }
 
 func searchInitialCapital(req CreateTaskRequest) float64 {

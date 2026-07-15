@@ -258,19 +258,25 @@ func runTargets(rawSpec Spec, bars []quant.Bar, runner string, provider targetPr
 			dailyReturn = portfolio.TotalEquity/points[len(points)-1].TotalEquity - 1
 		}
 		points = append(points, NAVPoint{
-			TimeMs:                      bar.OpenTime,
-			Price:                       bar.Close,
-			TotalEquity:                 portfolio.TotalEquity,
-			Cash:                        portfolio.USDTBalance,
-			AssetQuantity:               totalAssetQuantity(portfolio),
-			ActualExposureWeight:        actualExposure(portfolio, bar.Close),
-			IntradayExposureWeight:      intradayExposure,
-			DailyReturn:                 dailyReturn,
-			PracticalTargetWeight:       target,
-			PracticalTargetWeightChange: targetChange,
-			ModelTargetWeight:           target,
-			ModelTargetWeightChange:     targetChange,
-			Trades:                      pointTrades,
+			TimeMs:                        bar.OpenTime,
+			Price:                         bar.Close,
+			TotalEquity:                   portfolio.TotalEquity,
+			Cash:                          portfolio.USDTBalance,
+			AssetQuantity:                 totalAssetQuantity(portfolio),
+			ActualExposureWeight:          actualExposure(portfolio, bar.Close),
+			IntradayExposureWeight:        intradayExposure,
+			DailyReturn:                   dailyReturn,
+			PracticalTotalEquity:          portfolio.TotalEquity,
+			PracticalCash:                 portfolio.USDTBalance,
+			PracticalAssetQuantity:        totalAssetQuantity(portfolio),
+			PracticalActualExposureWeight: actualExposure(portfolio, bar.Close),
+			PracticalDailyReturn:          dailyReturn,
+			PracticalTargetWeight:         target,
+			PracticalTargetWeightChange:   targetChange,
+			ModelTargetWeight:             target,
+			ModelTargetWeightChange:       targetChange,
+			Trades:                        pointTrades,
+			PracticalTrades:               pointTrades,
 		})
 		previousTarget = target
 		hasPreviousTarget = true
@@ -279,5 +285,5 @@ func runTargets(rawSpec Spec, bars []quant.Bar, runner string, provider targetPr
 	if len(points) == 0 {
 		return Result{}, fmt.Errorf("正式評估區間沒有有效 K 線")
 	}
-	return finishResult(spec, points, evalInitial, evalInjected, actualEvalStart, evalFlows, tradeCount, costSummary), nil
+	return finishResult(spec, points, evalInitial, evalInjected, actualEvalStart, evalFlows, tradeCount, costSummary, tradeCount, costSummary), nil
 }

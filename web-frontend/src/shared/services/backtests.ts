@@ -35,6 +35,13 @@ export type BacktestResult = {
   force_empty_threshold?: number;
   position_structure?: "dual_layer" | "floating_only";
   trade_count?: number;
+  long_term_filter_enabled?: boolean;
+  long_term_filter_months?: number;
+  long_term_filter_version?: string;
+  practical_total_return?: number;
+  practical_max_drawdown?: number;
+  practical_final_equity?: number;
+  practical_trade_count?: number;
   w_mean?: number;
   w_momentum?: number;
   w_breakout?: number;

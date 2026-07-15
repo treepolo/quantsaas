@@ -46,6 +46,8 @@ export type EvolutionTask = {
   trade_penalty?: number;
   fee_rate?: number;
   spread_rate?: number;
+  long_term_filter_enabled?: boolean;
+  long_term_filter_months?: number;
   interval?: string;
   spawn_mode?: "inherit" | "random_once" | "manual";
   test_mode?: boolean;
@@ -129,6 +131,9 @@ export type GenomeRecord = {
     };
     fee_rate?: number;
     spread_rate?: number;
+    long_term_filter_enabled?: boolean;
+    long_term_filter_months?: number;
+    long_term_filter_version?: string;
     spawn_mode?: string;
     population?: number;
     generations?: number;
@@ -165,6 +170,8 @@ export type CreateTaskInput = {
   trade_penalty?: number;
   fee_rate?: number;
   spread_rate?: number;
+  long_term_filter_enabled?: boolean;
+  long_term_filter_months?: number;
   pop_size: number;
   max_generations: number;
   spawn_mode: "inherit" | "random_once" | "manual";

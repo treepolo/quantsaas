@@ -145,20 +145,52 @@ func (s *Simulator) RebalanceToExposure(targetWeight float64, price float64) Tra
 			LotType:    quant.LotTypeFloating,
 		}}
 	} else {
-		qty := math.Min(-delta/price, portfolio.DeadBTC+portfolio.FloatBTC)
-		if qty > portfolio.FloatBTC && portfolio.DeadBTC > 0 {
-			output.LotTransfers = []quant.LotTransfer{{
-				FromLotType: quant.LotTypeDeadStack,
-				ToLotType:   quant.LotTypeFloating,
-				Amount:      math.Min(portfolio.DeadBTC, qty-portfolio.FloatBTC),
-			}}
-		}
-		output.Intents = []quant.TradeIntent{{
-			Action:   quant.ActionSell,
-			Engine:   quant.EngineMicro,
-			QtyAsset: qty,
-			LotType:  quant.LotTypeFloating,
-		}}
+		return s.sellAnyAsset(math.Min(-delta/price, totalAssetQuantity(portfolio)), price, true)
 	}
 	return s.Execute(output, price)
+}
+
+// LiquidateAll is reserved for an outer portfolio overlay such as the P07
+// risk filter. It liquidates every lot, including otherwise sealed holdings,
+// without changing strategy state or lot semantics in the practical model.
+func (s *Simulator) LiquidateAll(price float64) TradeSummary {
+	return s.sellAnyAsset(totalAssetQuantity(s.Portfolio(price)), price, false)
+}
+
+func (s *Simulator) sellAnyAsset(qty float64, price float64, respectMinimum bool) TradeSummary {
+	if price <= 0 || qty <= 0 || math.IsNaN(qty) || math.IsInf(qty, 0) {
+		return TradeSummary{}
+	}
+	available := totalAssetQuantity(s.portfolio)
+	qty = math.Min(qty, available)
+	if respectMinimum && (qty < s.config.MinimumAssetQty || qty*price <= s.config.MinimumTradeUSD) {
+		return TradeSummary{}
+	}
+	proceeds := quant.SellProceedsForQuantity(qty, price, s.config.Costs)
+	if proceeds <= 0 {
+		return TradeSummary{}
+	}
+	remaining := qty
+	fromFloating := math.Min(remaining, s.portfolio.FloatBTC)
+	s.portfolio.FloatBTC -= fromFloating
+	remaining -= fromFloating
+	fromDead := math.Min(remaining, s.portfolio.DeadBTC)
+	s.portfolio.DeadBTC -= fromDead
+	remaining -= fromDead
+	fromSealed := math.Min(remaining, s.portfolio.ColdSealedBTC)
+	s.portfolio.ColdSealedBTC -= fromSealed
+	s.portfolio.USDTBalance += proceeds
+	fillPrice := price * (1 - s.config.Costs.SpreadRate)
+	fillNotional := qty * fillPrice
+	costs := CostSummary{
+		FeeCost:      fillNotional * s.config.Costs.FeeRate,
+		SlippageCost: qty * (price - fillPrice),
+	}
+	costs.TotalCost = costs.FeeCost + costs.SlippageCost
+	return TradeSummary{
+		TradeCount:   1,
+		SellCount:    1,
+		SellNotional: qty * price,
+		Costs:        costs,
+	}
 }

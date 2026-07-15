@@ -8,7 +8,12 @@ import (
 	"quantsaas/internal/quant"
 )
 
-const CoreVersion = "p02-v1"
+const CoreVersion = "p07-v1"
+
+const (
+	LongTermFilterVersion       = "p07-long-term-filter-v1"
+	DefaultLongTermFilterMonths = 10
+)
 
 const (
 	RunnerSigmoidDCA     = "sigmoid_dca"
@@ -48,8 +53,15 @@ type Spec struct {
 	MinimumTradeUSD      float64                   `json:"minimum_trade_usd,omitempty"`
 	MinimumAssetQuantity float64                   `json:"minimum_asset_quantity,omitempty"`
 	Costs                quant.ExecutionCostConfig `json:"costs"`
+	LongTermFilter       LongTermFilterConfig      `json:"long_term_filter"`
 	DatasetHash          string                    `json:"dataset_hash,omitempty"`
 	CoreVersion          string                    `json:"core_version"`
+}
+
+type LongTermFilterConfig struct {
+	Enabled bool   `json:"enabled"`
+	Months  int    `json:"months"`
+	Version string `json:"version"`
 }
 
 type CostSummary struct {
@@ -114,6 +126,11 @@ type NAVPoint struct {
 	ActualExposureWeight             float64              `json:"actual_exposure_weight"`
 	IntradayExposureWeight           float64              `json:"intraday_exposure_weight,omitempty"`
 	DailyReturn                      float64              `json:"daily_return"`
+	PracticalTotalEquity             float64              `json:"practical_total_equity"`
+	PracticalCash                    float64              `json:"practical_cash"`
+	PracticalAssetQuantity           float64              `json:"practical_asset_quantity"`
+	PracticalActualExposureWeight    float64              `json:"practical_actual_exposure_weight"`
+	PracticalDailyReturn             float64              `json:"practical_daily_return"`
 	PracticalTargetWeight            float64              `json:"practical_target_weight"`
 	PracticalTargetWeightChange      float64              `json:"practical_target_weight_change"`
 	ModelTargetWeight                float64              `json:"model_target_weight"`
@@ -121,21 +138,33 @@ type NAVPoint struct {
 	EmptyReferenceTargetWeight       float64              `json:"empty_reference_target_weight,omitempty"`
 	EmptyReferenceTargetWeightChange float64              `json:"empty_reference_target_weight_change,omitempty"`
 	Trades                           TradeSummary         `json:"trades"`
+	PracticalTrades                  TradeSummary         `json:"practical_trades"`
+	LongTermFilterEnabled            bool                 `json:"long_term_filter_enabled"`
+	LongTermFilterReady              bool                 `json:"long_term_filter_ready"`
+	LongTermFilterRiskOff            bool                 `json:"long_term_filter_risk_off"`
+	LongTermFilterCurrentSMA         float64              `json:"long_term_filter_current_sma,omitempty"`
+	LongTermFilterPreviousSMA        float64              `json:"long_term_filter_previous_sma,omitempty"`
+	LongTermFilterSignal             string               `json:"long_term_filter_signal,omitempty"`
+	LongTermFilterEvent              string               `json:"long_term_filter_event,omitempty"`
 	EffectiveParameters              *EffectiveParameters `json:"effective_parameters,omitempty"`
 }
 
 type Result struct {
-	Conditions        Spec                  `json:"conditions"`
-	Path              []NAVPoint            `json:"path"`
-	FinalAssets       float64               `json:"final_assets"`
-	TotalReturn       float64               `json:"total_return"`
-	TradeCount        int                   `json:"trade_count"`
-	Costs             CostSummary           `json:"costs"`
-	TotalInjected     float64               `json:"total_injected"`
-	EvaluationInitial float64               `json:"evaluation_initial"`
-	EvaluationStartMs int64                 `json:"evaluation_start_ms"`
-	EvaluationEndMs   int64                 `json:"evaluation_end_ms"`
-	CashFlows         []quant.TimedCashFlow `json:"cash_flows,omitempty"`
+	Conditions           Spec                  `json:"conditions"`
+	Path                 []NAVPoint            `json:"path"`
+	FinalAssets          float64               `json:"final_assets"`
+	TotalReturn          float64               `json:"total_return"`
+	TradeCount           int                   `json:"trade_count"`
+	Costs                CostSummary           `json:"costs"`
+	TotalInjected        float64               `json:"total_injected"`
+	EvaluationInitial    float64               `json:"evaluation_initial"`
+	EvaluationStartMs    int64                 `json:"evaluation_start_ms"`
+	EvaluationEndMs      int64                 `json:"evaluation_end_ms"`
+	CashFlows            []quant.TimedCashFlow `json:"cash_flows,omitempty"`
+	PracticalFinalAssets float64               `json:"practical_final_assets"`
+	PracticalTotalReturn float64               `json:"practical_total_return"`
+	PracticalTradeCount  int                   `json:"practical_trade_count"`
+	PracticalCosts       CostSummary           `json:"practical_costs"`
 }
 
 type StepEvent struct {
@@ -195,6 +224,20 @@ func normalizeSpec(spec Spec, bars []quant.Bar, runner string) (Spec, error) {
 		return Spec{}, fmt.Errorf("最小資產數量不可為負數")
 	}
 	spec.Costs = quant.NormalizeExecutionCosts(spec.Costs)
+	if spec.LongTermFilter.Enabled {
+		if runner != RunnerSigmoidDCA {
+			return Spec{}, fmt.Errorf("長週期風險濾網目前只支援實務策略回測")
+		}
+		if spec.Interval != "1d" {
+			return Spec{}, fmt.Errorf("長週期風險濾網只支援日 K")
+		}
+		if spec.LongTermFilter.Months <= 0 {
+			return Spec{}, fmt.Errorf("長週期風險濾網月線長度必須大於 0")
+		}
+		if strings.TrimSpace(spec.LongTermFilter.Version) == "" {
+			spec.LongTermFilter.Version = LongTermFilterVersion
+		}
+	}
 	spec.CoreVersion = CoreVersion
 	if spec.StartTimeMs == 0 {
 		spec.StartTimeMs = bars[0].OpenTime

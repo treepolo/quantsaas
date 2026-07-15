@@ -41,6 +41,12 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 		MinimumTradeUSD: spec.MinimumTradeUSD,
 		MinimumAssetQty: spec.MinimumAssetQuantity,
 	})
+	filteredSimulator := NewSimulator(spec.InitialCapital, spec.InitialAssetQuantity, SimulatorConfig{
+		Costs:           spec.Costs,
+		MinimumTradeUSD: spec.MinimumTradeUSD,
+		MinimumAssetQty: spec.MinimumAssetQuantity,
+	})
+	longTermFilter := NewLongTermFilter(spec.LongTermFilter)
 	state := map[string]any{}
 	closes := make([]float64, 0, len(request.Bars))
 	timestamps := make([]int64, 0, len(request.Bars))
@@ -51,6 +57,11 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 	actualEvalStart := int64(0)
 	pendingOutput := quant.StrategyOutput{}
 	hasPendingOutput := false
+	pendingPracticalAdjustment := false
+	pendingFilterSignal := ""
+	filterRiskOff := false
+	filterDiverged := false
+	filterObservation := LongTermFilterObservation{}
 	prevModelTargetWeight := 0.0
 	prevPracticalTargetWeight := 0.0
 	prevEmptyReferenceTargetWeight := 0.0
@@ -59,6 +70,8 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 	hasPrevTargetWeight := false
 	tradeCount := 0
 	costSummary := CostSummary{}
+	practicalTradeCount := 0
+	practicalCostSummary := CostSummary{}
 	lastYear, lastMonth := barYearMonth(request.Bars[0])
 	runStarted := false
 	historyOnlyStarted := false
@@ -80,6 +93,10 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 		if spec.PrefixMode == PrefixModeHistoryOnly && bar.OpenTime < spec.EvaluationStartMs {
 			closes = append(closes, bar.Close)
 			timestamps = append(timestamps, bar.OpenTime)
+			filterObservation = longTermFilter.Observe(i, request.Bars)
+			if filterObservation.Signal != "" {
+				pendingFilterSignal = filterObservation.Signal
+			}
 			continue
 		}
 		if spec.PrefixMode == PrefixModeHistoryOnly && !historyOnlyStarted {
@@ -91,8 +108,11 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 		}
 
 		year, month := barYearMonth(bar)
+		contributedThisBar := false
 		if i > 0 && (year != lastYear || month != lastMonth) && spec.MonthlyContribution > 0 {
 			simulator.Contribute(spec.MonthlyContribution)
+			filteredSimulator.Contribute(spec.MonthlyContribution)
+			contributedThisBar = true
 			if bar.OpenTime > spec.EvaluationStartMs {
 				evalInjected += spec.MonthlyContribution
 				evalFlows = append(evalFlows, quant.TimedCashFlow{TimeMs: bar.OpenTime, Amount: spec.MonthlyContribution})
@@ -101,17 +121,50 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 		}
 
 		pointTrades := TradeSummary{}
-		if spec.ExecutionMode == ExecutionModeCloseNextOpen && hasPendingOutput {
+		pointPracticalTrades := TradeSummary{}
+		filterEvent := ""
+		if spec.ExecutionMode == ExecutionModeCloseNextOpen && (hasPendingOutput || pendingFilterSignal != "" || (filterDiverged && !filterRiskOff && contributedThisBar)) {
 			if bar.Open <= 0 || math.IsNaN(bar.Open) || math.IsInf(bar.Open, 0) {
 				return Result{}, fmt.Errorf("%d 的開盤價無效，無法執行前一根 K 線訊號", bar.OpenTime)
 			}
-			executed := simulator.Execute(pendingOutput, bar.Open)
+			practicalExecuted := TradeSummary{}
+			if hasPendingOutput {
+				practicalExecuted = simulator.Execute(pendingOutput, bar.Open)
+			}
+			practicalExecutionWeight := actualExposure(simulator.Portfolio(bar.Open), bar.Open)
+			filteredExecuted := TradeSummary{}
+			switch pendingFilterSignal {
+			case LongTermFilterSignalEnter:
+				filterRiskOff = true
+				filterDiverged = true
+				filterEvent = LongTermFilterSignalEnter
+				filteredExecuted = filteredSimulator.LiquidateAll(bar.Open)
+			case LongTermFilterSignalExit:
+				filterRiskOff = false
+				filterDiverged = true
+				filterEvent = LongTermFilterSignalExit
+				filteredExecuted = filteredSimulator.RebalanceToExposure(practicalExecutionWeight, bar.Open)
+			default:
+				if !filterRiskOff && (hasPendingOutput || contributedThisBar) {
+					if filterDiverged {
+						if pendingPracticalAdjustment || contributedThisBar {
+							filteredExecuted = filteredSimulator.RebalanceToExposure(practicalExecutionWeight, bar.Open)
+						}
+					} else {
+						filteredExecuted = filteredSimulator.Execute(pendingOutput, bar.Open)
+					}
+				}
+			}
 			if isEvaluationBar(spec, bar) {
-				pointTrades.Add(executed)
-				tradeCount += executed.TradeCount
-				costSummary.Add(executed.Costs)
+				pointTrades.Add(filteredExecuted)
+				tradeCount += filteredExecuted.TradeCount
+				costSummary.Add(filteredExecuted.Costs)
+				pointPracticalTrades.Add(practicalExecuted)
+				practicalTradeCount += practicalExecuted.TradeCount
+				practicalCostSummary.Add(practicalExecuted.Costs)
 			}
 			hasPendingOutput = false
+			pendingFilterSignal = ""
 		}
 
 		closes = append(closes, bar.Close)
@@ -182,20 +235,53 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 			diagnosticValue(emptyReferenceOutput.Diagnostics, "target_weight"),
 		)
 		state = output.RuntimeState
+		filterObservation = longTermFilter.Observe(i, request.Bars)
 
 		if spec.ExecutionMode == ExecutionModeCloseNextOpen {
 			pendingOutput = output
 			hasPendingOutput = true
+			pendingPracticalAdjustment = hasAnyExecutableAdjustment(output)
+			if filterObservation.Signal != "" {
+				pendingFilterSignal = filterObservation.Signal
+			}
 		} else {
-			executed := simulator.Execute(output, bar.Close)
+			practicalExecuted := simulator.Execute(output, bar.Close)
+			practicalExecutionWeight := actualExposure(simulator.Portfolio(bar.Close), bar.Close)
+			filteredExecuted := TradeSummary{}
+			switch filterObservation.Signal {
+			case LongTermFilterSignalEnter:
+				filterRiskOff = true
+				filterDiverged = true
+				filterEvent = LongTermFilterSignalEnter
+				filteredExecuted = filteredSimulator.LiquidateAll(bar.Close)
+			case LongTermFilterSignalExit:
+				filterRiskOff = false
+				filterDiverged = true
+				filterEvent = LongTermFilterSignalExit
+				filteredExecuted = filteredSimulator.RebalanceToExposure(practicalExecutionWeight, bar.Close)
+			default:
+				if !filterRiskOff {
+					if filterDiverged {
+						if hasAnyExecutableAdjustment(output) || contributedThisBar {
+							filteredExecuted = filteredSimulator.RebalanceToExposure(practicalExecutionWeight, bar.Close)
+						}
+					} else {
+						filteredExecuted = filteredSimulator.Execute(output, bar.Close)
+					}
+				}
+			}
 			if isEvaluationBar(spec, bar) {
-				pointTrades.Add(executed)
-				tradeCount += executed.TradeCount
-				costSummary.Add(executed.Costs)
+				pointTrades.Add(filteredExecuted)
+				tradeCount += filteredExecuted.TradeCount
+				costSummary.Add(filteredExecuted.Costs)
+				pointPracticalTrades.Add(practicalExecuted)
+				practicalTradeCount += practicalExecuted.TradeCount
+				practicalCostSummary.Add(practicalExecuted.Costs)
 			}
 		}
 
 		portfolio = simulator.Portfolio(bar.Close)
+		filteredPortfolio := filteredSimulator.Portfolio(bar.Close)
 		if request.Hooks.OnStep != nil {
 			request.Hooks.OnStep(StepEvent{
 				Index:         i,
@@ -210,7 +296,7 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 			continue
 		}
 		if len(points) == 0 {
-			evalInitial = portfolio.TotalEquity
+			evalInitial = filteredPortfolio.TotalEquity
 			actualEvalStart = bar.OpenTime
 			spec.EvaluationStartIndex = i
 		}
@@ -226,16 +312,25 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 		}
 		dailyReturn := 0.0
 		if len(points) > 0 && points[len(points)-1].TotalEquity > 0 {
-			dailyReturn = portfolio.TotalEquity/points[len(points)-1].TotalEquity - 1
+			dailyReturn = filteredPortfolio.TotalEquity/points[len(points)-1].TotalEquity - 1
+		}
+		practicalDailyReturn := 0.0
+		if len(points) > 0 && points[len(points)-1].PracticalTotalEquity > 0 {
+			practicalDailyReturn = portfolio.TotalEquity/points[len(points)-1].PracticalTotalEquity - 1
 		}
 		points = append(points, NAVPoint{
 			TimeMs:                           bar.OpenTime,
 			Price:                            bar.Close,
-			TotalEquity:                      portfolio.TotalEquity,
-			Cash:                             portfolio.USDTBalance,
-			AssetQuantity:                    totalAssetQuantity(portfolio),
-			ActualExposureWeight:             actualExposure(portfolio, bar.Close),
+			TotalEquity:                      filteredPortfolio.TotalEquity,
+			Cash:                             filteredPortfolio.USDTBalance,
+			AssetQuantity:                    totalAssetQuantity(filteredPortfolio),
+			ActualExposureWeight:             actualExposure(filteredPortfolio, bar.Close),
 			DailyReturn:                      dailyReturn,
+			PracticalTotalEquity:             portfolio.TotalEquity,
+			PracticalCash:                    portfolio.USDTBalance,
+			PracticalAssetQuantity:           totalAssetQuantity(portfolio),
+			PracticalActualExposureWeight:    actualExposure(portfolio, bar.Close),
+			PracticalDailyReturn:             practicalDailyReturn,
 			PracticalTargetWeight:            practicalTargetWeight,
 			PracticalTargetWeightChange:      practicalTargetWeightChange,
 			ModelTargetWeight:                modelTargetWeight,
@@ -243,6 +338,14 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 			EmptyReferenceTargetWeight:       emptyReferenceTargetWeight,
 			EmptyReferenceTargetWeightChange: emptyReferenceTargetWeightChange,
 			Trades:                           pointTrades,
+			PracticalTrades:                  pointPracticalTrades,
+			LongTermFilterEnabled:            spec.LongTermFilter.Enabled,
+			LongTermFilterReady:              filterObservation.Ready,
+			LongTermFilterRiskOff:            filterRiskOff,
+			LongTermFilterCurrentSMA:         filterObservation.CurrentSMA,
+			LongTermFilterPreviousSMA:        filterObservation.PreviousSMA,
+			LongTermFilterSignal:             filterObservation.Signal,
+			LongTermFilterEvent:              filterEvent,
 			EffectiveParameters:              effectiveSnapshot,
 		})
 		prevPracticalTargetWeight = practicalTargetWeight
@@ -254,10 +357,10 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 	if len(points) == 0 {
 		return Result{}, fmt.Errorf("正式評估區間沒有有效 K 線")
 	}
-	return finishResult(spec, points, evalInitial, evalInjected, actualEvalStart, evalFlows, tradeCount, costSummary), nil
+	return finishResult(spec, points, evalInitial, evalInjected, actualEvalStart, evalFlows, tradeCount, costSummary, practicalTradeCount, practicalCostSummary), nil
 }
 
-func finishResult(spec Spec, points []NAVPoint, evalInitial float64, evalInjected float64, actualEvalStart int64, evalFlows []quant.TimedCashFlow, tradeCount int, costs CostSummary) Result {
+func finishResult(spec Spec, points []NAVPoint, evalInitial float64, evalInjected float64, actualEvalStart int64, evalFlows []quant.TimedCashFlow, tradeCount int, costs CostSummary, practicalTradeCount int, practicalCosts CostSummary) Result {
 	finalAssets := 0.0
 	evaluationEnd := int64(0)
 	if len(points) > 0 {
@@ -268,18 +371,28 @@ func finishResult(spec Spec, points []NAVPoint, evalInitial float64, evalInjecte
 	if len(points) == 1 && evalInitial > 0 && len(evalFlows) == 0 {
 		totalReturn = finalAssets/evalInitial - 1
 	}
+	practicalFinalAssets := points[len(points)-1].PracticalTotalEquity
+	practicalInitial := points[0].PracticalTotalEquity
+	practicalReturn := quant.ModifiedDietzROI(practicalInitial, practicalFinalAssets, evalFlows, actualEvalStart, evaluationEnd)
+	if len(points) == 1 && practicalInitial > 0 && len(evalFlows) == 0 {
+		practicalReturn = practicalFinalAssets/practicalInitial - 1
+	}
 	return Result{
-		Conditions:        spec,
-		Path:              points,
-		FinalAssets:       finalAssets,
-		TotalReturn:       totalReturn,
-		TradeCount:        tradeCount,
-		Costs:             costs,
-		TotalInjected:     evalInitial + evalInjected,
-		EvaluationInitial: evalInitial,
-		EvaluationStartMs: actualEvalStart,
-		EvaluationEndMs:   evaluationEnd,
-		CashFlows:         evalFlows,
+		Conditions:           spec,
+		Path:                 points,
+		FinalAssets:          finalAssets,
+		TotalReturn:          totalReturn,
+		TradeCount:           tradeCount,
+		Costs:                costs,
+		TotalInjected:        evalInitial + evalInjected,
+		EvaluationInitial:    evalInitial,
+		EvaluationStartMs:    actualEvalStart,
+		EvaluationEndMs:      evaluationEnd,
+		CashFlows:            evalFlows,
+		PracticalFinalAssets: practicalFinalAssets,
+		PracticalTotalReturn: practicalReturn,
+		PracticalTradeCount:  practicalTradeCount,
+		PracticalCosts:       practicalCosts,
 	}
 }
 
@@ -501,6 +614,18 @@ func hasExecutablePracticalAdjustment(output quant.StrategyOutput) bool {
 		if intent.Engine != quant.EngineMicro {
 			continue
 		}
+		if intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 {
+			return true
+		}
+		if intent.Action == quant.ActionSell && intent.QtyAsset > 0 {
+			return true
+		}
+	}
+	return len(output.LotTransfers) > 0
+}
+
+func hasAnyExecutableAdjustment(output quant.StrategyOutput) bool {
+	for _, intent := range output.Intents {
 		if intent.Action == quant.ActionBuy && intent.AmountUSDT > 0 {
 			return true
 		}

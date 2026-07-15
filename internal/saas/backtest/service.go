@@ -61,6 +61,8 @@ type CreateRequest struct {
 	MonthlyDCA            *float64          `json:"monthly_dca"`
 	FeeRate               *float64          `json:"fee_rate"`
 	SpreadRate            *float64          `json:"spread_rate"`
+	LongTermFilterEnabled *bool             `json:"long_term_filter_enabled"`
+	LongTermFilterMonths  int               `json:"long_term_filter_months"`
 }
 
 type EquitySnapshot struct {
@@ -81,6 +83,18 @@ type EquitySnapshot struct {
 	ActualExposureWeight             float64 `json:"actual_exposure_weight"`
 	IntradayExposureWeight           float64 `json:"intraday_exposure_weight,omitempty"`
 	DailyReturn                      float64 `json:"daily_return"`
+	PracticalTotalAssets             float64 `json:"practical_total_assets"`
+	PracticalCash                    float64 `json:"practical_cash"`
+	PracticalAssetQuantity           float64 `json:"practical_asset_quantity"`
+	PracticalActualExposureWeight    float64 `json:"practical_actual_exposure_weight"`
+	PracticalDailyReturn             float64 `json:"practical_daily_return"`
+	LongTermFilterEnabled            bool    `json:"long_term_filter_enabled"`
+	LongTermFilterReady              bool    `json:"long_term_filter_ready"`
+	LongTermFilterRiskOff            bool    `json:"long_term_filter_risk_off"`
+	LongTermFilterCurrentSMA         float64 `json:"long_term_filter_current_sma"`
+	LongTermFilterPreviousSMA        float64 `json:"long_term_filter_previous_sma"`
+	LongTermFilterSignal             string  `json:"long_term_filter_signal,omitempty"`
+	LongTermFilterEvent              string  `json:"long_term_filter_event,omitempty"`
 }
 
 type WindowResult struct {
@@ -94,48 +108,55 @@ type WindowResult struct {
 }
 
 type Response struct {
-	ID                   uint               `json:"id"`
-	Status               string             `json:"status"`
-	BacktestResultID     uint               `json:"backtest_result_id,omitempty"`
-	BacktestKey          string             `json:"backtest_key,omitempty"`
-	ResultVersion        string             `json:"result_version,omitempty"`
-	ResultContentHash    string             `json:"result_content_hash,omitempty"`
-	ResultStatus         string             `json:"result_status,omitempty"`
-	ReusedResult         bool               `json:"reused_result"`
-	StrategyID           string             `json:"strategy_id"`
-	Symbol               string             `json:"symbol"`
-	InstrumentID         string             `json:"instrument_id"`
-	DataSource           string             `json:"data_source"`
-	ExecutionMode        string             `json:"execution_mode"`
-	Interval             string             `json:"interval"`
-	Source               string             `json:"source"`
-	TotalReturn          float64            `json:"total_return"`
-	Alpha                float64            `json:"alpha"`
-	MaxDrawdown          float64            `json:"max_drawdown"`
-	FinalEquity          float64            `json:"final_equity"`
-	Benchmark            float64            `json:"benchmark"`
-	BenchmarkReturn      float64            `json:"benchmark_return"`
-	BenchmarkMaxDrawdown float64            `json:"benchmark_max_drawdown"`
-	BenchmarkFinalEquity float64            `json:"benchmark_final_equity"`
-	FeeRate              float64            `json:"fee_rate"`
-	SpreadRate           float64            `json:"spread_rate"`
-	FeeCost              float64            `json:"fee_cost"`
-	SlippageCost         float64            `json:"slippage_cost"`
-	TotalExecutionCost   float64            `json:"total_execution_cost"`
-	RebalanceThreshold   float64            `json:"rebalance_threshold"`
-	ForceFullThreshold   float64            `json:"force_full_threshold"`
-	ForceEmptyThreshold  float64            `json:"force_empty_threshold"`
-	PositionStructure    string             `json:"position_structure"`
-	TradeCount           int                `json:"trade_count"`
-	WMean                float64            `json:"w_mean"`
-	WMomentum            float64            `json:"w_momentum"`
-	WBreakout            float64            `json:"w_breakout"`
-	NAV                  []EquitySnapshot   `json:"nav"`
-	Windows              map[string]float64 `json:"windows"`
-	WindowDetails        []WindowResult     `json:"window_details"`
-	Error                string             `json:"error,omitempty"`
-	CreatedAt            string             `json:"created_at,omitempty"`
-	FinishedAt           string             `json:"finished_at,omitempty"`
+	ID                    uint               `json:"id"`
+	Status                string             `json:"status"`
+	BacktestResultID      uint               `json:"backtest_result_id,omitempty"`
+	BacktestKey           string             `json:"backtest_key,omitempty"`
+	ResultVersion         string             `json:"result_version,omitempty"`
+	ResultContentHash     string             `json:"result_content_hash,omitempty"`
+	ResultStatus          string             `json:"result_status,omitempty"`
+	ReusedResult          bool               `json:"reused_result"`
+	StrategyID            string             `json:"strategy_id"`
+	Symbol                string             `json:"symbol"`
+	InstrumentID          string             `json:"instrument_id"`
+	DataSource            string             `json:"data_source"`
+	ExecutionMode         string             `json:"execution_mode"`
+	Interval              string             `json:"interval"`
+	Source                string             `json:"source"`
+	TotalReturn           float64            `json:"total_return"`
+	Alpha                 float64            `json:"alpha"`
+	MaxDrawdown           float64            `json:"max_drawdown"`
+	FinalEquity           float64            `json:"final_equity"`
+	Benchmark             float64            `json:"benchmark"`
+	BenchmarkReturn       float64            `json:"benchmark_return"`
+	BenchmarkMaxDrawdown  float64            `json:"benchmark_max_drawdown"`
+	BenchmarkFinalEquity  float64            `json:"benchmark_final_equity"`
+	FeeRate               float64            `json:"fee_rate"`
+	SpreadRate            float64            `json:"spread_rate"`
+	FeeCost               float64            `json:"fee_cost"`
+	SlippageCost          float64            `json:"slippage_cost"`
+	TotalExecutionCost    float64            `json:"total_execution_cost"`
+	RebalanceThreshold    float64            `json:"rebalance_threshold"`
+	ForceFullThreshold    float64            `json:"force_full_threshold"`
+	ForceEmptyThreshold   float64            `json:"force_empty_threshold"`
+	PositionStructure     string             `json:"position_structure"`
+	TradeCount            int                `json:"trade_count"`
+	LongTermFilterEnabled bool               `json:"long_term_filter_enabled"`
+	LongTermFilterMonths  int                `json:"long_term_filter_months"`
+	LongTermFilterVersion string             `json:"long_term_filter_version"`
+	PracticalTotalReturn  float64            `json:"practical_total_return"`
+	PracticalMaxDrawdown  float64            `json:"practical_max_drawdown"`
+	PracticalFinalEquity  float64            `json:"practical_final_equity"`
+	PracticalTradeCount   int                `json:"practical_trade_count"`
+	WMean                 float64            `json:"w_mean"`
+	WMomentum             float64            `json:"w_momentum"`
+	WBreakout             float64            `json:"w_breakout"`
+	NAV                   []EquitySnapshot   `json:"nav"`
+	Windows               map[string]float64 `json:"windows"`
+	WindowDetails         []WindowResult     `json:"window_details"`
+	Error                 string             `json:"error,omitempty"`
+	CreatedAt             string             `json:"created_at,omitempty"`
+	FinishedAt            string             `json:"finished_at,omitempty"`
 }
 
 type StandardResultDescriptor struct {
@@ -172,25 +193,32 @@ type StandardPathBlockResponse struct {
 }
 
 type storedResponseMetrics struct {
-	Alpha                float64            `json:"alpha"`
-	Benchmark            float64            `json:"benchmark"`
-	BenchmarkReturn      float64            `json:"benchmark_return"`
-	BenchmarkMaxDrawdown float64            `json:"benchmark_max_drawdown"`
-	BenchmarkFinalEquity float64            `json:"benchmark_final_equity"`
-	FeeRate              float64            `json:"fee_rate"`
-	SpreadRate           float64            `json:"spread_rate"`
-	FeeCost              float64            `json:"fee_cost"`
-	SlippageCost         float64            `json:"slippage_cost"`
-	TotalExecutionCost   float64            `json:"total_execution_cost"`
-	RebalanceThreshold   float64            `json:"rebalance_threshold"`
-	ForceFullThreshold   float64            `json:"force_full_threshold"`
-	ForceEmptyThreshold  float64            `json:"force_empty_threshold"`
-	PositionStructure    string             `json:"position_structure"`
-	WMean                float64            `json:"w_mean"`
-	WMomentum            float64            `json:"w_momentum"`
-	WBreakout            float64            `json:"w_breakout"`
-	Windows              map[string]float64 `json:"windows"`
-	WindowDetails        []WindowResult     `json:"window_details"`
+	Alpha                 float64            `json:"alpha"`
+	Benchmark             float64            `json:"benchmark"`
+	BenchmarkReturn       float64            `json:"benchmark_return"`
+	BenchmarkMaxDrawdown  float64            `json:"benchmark_max_drawdown"`
+	BenchmarkFinalEquity  float64            `json:"benchmark_final_equity"`
+	FeeRate               float64            `json:"fee_rate"`
+	SpreadRate            float64            `json:"spread_rate"`
+	FeeCost               float64            `json:"fee_cost"`
+	SlippageCost          float64            `json:"slippage_cost"`
+	TotalExecutionCost    float64            `json:"total_execution_cost"`
+	RebalanceThreshold    float64            `json:"rebalance_threshold"`
+	ForceFullThreshold    float64            `json:"force_full_threshold"`
+	ForceEmptyThreshold   float64            `json:"force_empty_threshold"`
+	PositionStructure     string             `json:"position_structure"`
+	WMean                 float64            `json:"w_mean"`
+	WMomentum             float64            `json:"w_momentum"`
+	WBreakout             float64            `json:"w_breakout"`
+	Windows               map[string]float64 `json:"windows"`
+	WindowDetails         []WindowResult     `json:"window_details"`
+	LongTermFilterEnabled bool               `json:"long_term_filter_enabled"`
+	LongTermFilterMonths  int                `json:"long_term_filter_months"`
+	LongTermFilterVersion string             `json:"long_term_filter_version"`
+	PracticalTotalReturn  float64            `json:"practical_total_return"`
+	PracticalMaxDrawdown  float64            `json:"practical_max_drawdown"`
+	PracticalFinalEquity  float64            `json:"practical_final_equity"`
+	PracticalTradeCount   int                `json:"practical_trade_count"`
 }
 
 type preparedBacktest struct {
@@ -445,6 +473,7 @@ func (s *Service) prepare(ctx context.Context, userID uint, req CreateRequest) (
 		MonthlyContribution:  spawn.Policy.MonthlyInjectUSDT,
 		InitialAssetQuantity: spawn.Policy.ColdSealedBTC,
 		Costs:                costs,
+		LongTermFilter:       longTermFilterConfig(req),
 		CoreVersion:          backtestcore.CoreVersion,
 	}
 	identity, err := backtestresult.BuildIdentity(backtestresult.SpecInput{
@@ -454,6 +483,8 @@ func (s *Service) prepare(ctx context.Context, userID uint, req CreateRequest) (
 		Parameters:             params,
 		CoreSpec:               coreSpec,
 		DatasetVersion:         backtestresult.DatasetSchemaVersion,
+		LongTermFilterVersion:  coreSpec.LongTermFilter.Version,
+		LongTermFilterSettings: coreSpec.LongTermFilter,
 	}, bars)
 	if err != nil {
 		return preparedBacktest{}, err
@@ -472,6 +503,7 @@ func (s *Service) executePrepared(prepared preparedBacktest) (backtestresult.Art
 		return backtestresult.Artifacts{}, err
 	}
 	pathMaxDrawdown := maxDrawdown(path.Path)
+	practicalMaxDrawdown := maxDrawdown(practicalPath(path.Path))
 	spawn := prepared.params.Spawn
 	baseline := quant.SimulateGhostDCAFrom(prepared.bars, prepared.bars[0].OpenTime, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
@@ -480,30 +512,37 @@ func (s *Service) executePrepared(prepared preparedBacktest) (backtestresult.Art
 		Costs:             prepared.costs,
 	})
 	alpha := path.TotalReturn - baseline.ROI
-	windows, windowDetails, err := scoreWindows(prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure)
+	windows, windowDetails, err := scoreWindows(prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter)
 	if err != nil {
 		return backtestresult.Artifacts{}, err
 	}
 	metrics := storedResponseMetrics{
-		Alpha:                alpha,
-		Benchmark:            baseline.FinalEquity,
-		BenchmarkReturn:      baseline.ROI,
-		BenchmarkMaxDrawdown: baseline.MaxDrawdown,
-		BenchmarkFinalEquity: baseline.FinalEquity,
-		FeeRate:              prepared.costs.FeeRate,
-		SpreadRate:           prepared.costs.SpreadRate,
-		FeeCost:              path.Costs.FeeCost,
-		SlippageCost:         path.Costs.SlippageCost,
-		TotalExecutionCost:   path.Costs.TotalCost,
-		RebalanceThreshold:   prepared.params.Chromosome.RebalanceThreshold,
-		ForceFullThreshold:   prepared.params.Chromosome.ForceFullThreshold,
-		ForceEmptyThreshold:  prepared.params.Chromosome.ForceEmptyThreshold,
-		PositionStructure:    prepared.params.PositionStructure,
-		WMean:                prepared.params.Chromosome.WMean,
-		WMomentum:            prepared.params.Chromosome.WMomentum,
-		WBreakout:            prepared.params.Chromosome.WBreakout,
-		Windows:              windows,
-		WindowDetails:        windowDetails,
+		Alpha:                 alpha,
+		Benchmark:             baseline.FinalEquity,
+		BenchmarkReturn:       baseline.ROI,
+		BenchmarkMaxDrawdown:  baseline.MaxDrawdown,
+		BenchmarkFinalEquity:  baseline.FinalEquity,
+		FeeRate:               prepared.costs.FeeRate,
+		SpreadRate:            prepared.costs.SpreadRate,
+		FeeCost:               path.Costs.FeeCost,
+		SlippageCost:          path.Costs.SlippageCost,
+		TotalExecutionCost:    path.Costs.TotalCost,
+		RebalanceThreshold:    prepared.params.Chromosome.RebalanceThreshold,
+		ForceFullThreshold:    prepared.params.Chromosome.ForceFullThreshold,
+		ForceEmptyThreshold:   prepared.params.Chromosome.ForceEmptyThreshold,
+		PositionStructure:     prepared.params.PositionStructure,
+		WMean:                 prepared.params.Chromosome.WMean,
+		WMomentum:             prepared.params.Chromosome.WMomentum,
+		WBreakout:             prepared.params.Chromosome.WBreakout,
+		Windows:               windows,
+		WindowDetails:         windowDetails,
+		LongTermFilterEnabled: prepared.coreSpec.LongTermFilter.Enabled,
+		LongTermFilterMonths:  prepared.coreSpec.LongTermFilter.Months,
+		LongTermFilterVersion: prepared.coreSpec.LongTermFilter.Version,
+		PracticalTotalReturn:  path.PracticalTotalReturn,
+		PracticalMaxDrawdown:  practicalMaxDrawdown,
+		PracticalFinalEquity:  path.PracticalFinalAssets,
+		PracticalTradeCount:   path.PracticalTradeCount,
 	}
 	summary, err := backtestresult.BuildSummary(path, pathMaxDrawdown, backtestresult.SummaryOptions{Extra: metrics})
 	if err != nil {
@@ -726,6 +765,10 @@ func (s *Service) loadBarsForSnapshot(ctx context.Context, snapshot backtestresu
 }
 
 func coreSpecFromSnapshot(snapshot backtestresult.SpecSnapshot) backtestcore.Spec {
+	filter := backtestcore.LongTermFilterConfig{}
+	if len(snapshot.LongTermFilterSettings) > 0 {
+		_ = json.Unmarshal(snapshot.LongTermFilterSettings, &filter)
+	}
 	return backtestcore.Spec{
 		Runner: snapshot.Runner, InstrumentID: snapshot.InstrumentID, Symbol: snapshot.Symbol,
 		DataSource: snapshot.DataSource, Interval: snapshot.Interval, ExecutionMode: snapshot.ExecutionMode,
@@ -734,8 +777,9 @@ func coreSpecFromSnapshot(snapshot backtestresult.SpecSnapshot) backtestcore.Spe
 		PrefixMode: snapshot.PrefixMode, InitialCapital: snapshot.InitialCapital,
 		MonthlyContribution: snapshot.MonthlyContribution, InitialAssetQuantity: snapshot.InitialAssetQuantity,
 		MinimumTradeUSD: snapshot.MinimumTradeUSD, MinimumAssetQuantity: snapshot.MinimumAssetQuantity,
-		Costs:       quant.ExecutionCostConfig{FeeRate: snapshot.FeeRate, SpreadRate: snapshot.SlippageRate},
-		DatasetHash: snapshot.DatasetHash, CoreVersion: snapshot.CoreVersion,
+		Costs:          quant.ExecutionCostConfig{FeeRate: snapshot.FeeRate, SpreadRate: snapshot.SlippageRate},
+		LongTermFilter: filter,
+		DatasetHash:    snapshot.DatasetHash, CoreVersion: snapshot.CoreVersion,
 	}
 }
 
@@ -756,52 +800,65 @@ func responseFromStored(run saasstore.BacktestRun, loaded backtestresult.LoadedR
 	if metrics.Windows == nil {
 		metrics.Windows = map[string]float64{}
 	}
+	if metrics.PracticalFinalEquity == 0 && loaded.Summary.FinalEquity != 0 {
+		metrics.PracticalFinalEquity = loaded.Summary.FinalEquity
+		metrics.PracticalTotalReturn = loaded.Summary.ROI
+		metrics.PracticalMaxDrawdown = loaded.Summary.MaxDrawdown
+		metrics.PracticalTradeCount = loaded.Summary.TradeCount
+	}
 	status := run.Status
 	if status == saasstore.BacktestStatusRunning {
 		status = saasstore.BacktestStatusCompleted
 	}
 	response := &Response{
-		ID:                   run.ID,
-		Status:               status,
-		BacktestResultID:     loaded.Result.ID,
-		BacktestKey:          loaded.Result.BacktestKey,
-		ResultVersion:        loaded.Result.ResultVersion,
-		ResultContentHash:    loaded.Result.ContentHash,
-		ResultStatus:         loaded.Result.Status,
-		ReusedResult:         run.ReusedResult,
-		StrategyID:           identity.Snapshot.StrategyID,
-		Symbol:               identity.Snapshot.Symbol,
-		InstrumentID:         identity.Snapshot.InstrumentID,
-		DataSource:           identity.Snapshot.DataSource,
-		ExecutionMode:        identity.Snapshot.ExecutionMode,
-		Interval:             identity.Snapshot.Interval,
-		Source:               run.Source,
-		TotalReturn:          loaded.Summary.ROI,
-		Alpha:                metrics.Alpha,
-		MaxDrawdown:          loaded.Summary.MaxDrawdown,
-		FinalEquity:          loaded.Summary.FinalEquity,
-		Benchmark:            metrics.Benchmark,
-		BenchmarkReturn:      metrics.BenchmarkReturn,
-		BenchmarkMaxDrawdown: metrics.BenchmarkMaxDrawdown,
-		BenchmarkFinalEquity: metrics.BenchmarkFinalEquity,
-		FeeRate:              metrics.FeeRate,
-		SpreadRate:           metrics.SpreadRate,
-		FeeCost:              metrics.FeeCost,
-		SlippageCost:         metrics.SlippageCost,
-		TotalExecutionCost:   metrics.TotalExecutionCost,
-		RebalanceThreshold:   metrics.RebalanceThreshold,
-		ForceFullThreshold:   metrics.ForceFullThreshold,
-		ForceEmptyThreshold:  metrics.ForceEmptyThreshold,
-		PositionStructure:    metrics.PositionStructure,
-		TradeCount:           loaded.Summary.TradeCount,
-		WMean:                metrics.WMean,
-		WMomentum:            metrics.WMomentum,
-		WBreakout:            metrics.WBreakout,
-		NAV:                  equitySnapshotsFromStandardPath(loaded.Path()),
-		Windows:              metrics.Windows,
-		WindowDetails:        metrics.WindowDetails,
-		Error:                run.ErrorMessage,
-		CreatedAt:            run.CreatedAt.Format(time.RFC3339),
+		ID:                    run.ID,
+		Status:                status,
+		BacktestResultID:      loaded.Result.ID,
+		BacktestKey:           loaded.Result.BacktestKey,
+		ResultVersion:         loaded.Result.ResultVersion,
+		ResultContentHash:     loaded.Result.ContentHash,
+		ResultStatus:          loaded.Result.Status,
+		ReusedResult:          run.ReusedResult,
+		StrategyID:            identity.Snapshot.StrategyID,
+		Symbol:                identity.Snapshot.Symbol,
+		InstrumentID:          identity.Snapshot.InstrumentID,
+		DataSource:            identity.Snapshot.DataSource,
+		ExecutionMode:         identity.Snapshot.ExecutionMode,
+		Interval:              identity.Snapshot.Interval,
+		Source:                run.Source,
+		TotalReturn:           loaded.Summary.ROI,
+		Alpha:                 metrics.Alpha,
+		MaxDrawdown:           loaded.Summary.MaxDrawdown,
+		FinalEquity:           loaded.Summary.FinalEquity,
+		Benchmark:             metrics.Benchmark,
+		BenchmarkReturn:       metrics.BenchmarkReturn,
+		BenchmarkMaxDrawdown:  metrics.BenchmarkMaxDrawdown,
+		BenchmarkFinalEquity:  metrics.BenchmarkFinalEquity,
+		FeeRate:               metrics.FeeRate,
+		SpreadRate:            metrics.SpreadRate,
+		FeeCost:               metrics.FeeCost,
+		SlippageCost:          metrics.SlippageCost,
+		TotalExecutionCost:    metrics.TotalExecutionCost,
+		RebalanceThreshold:    metrics.RebalanceThreshold,
+		ForceFullThreshold:    metrics.ForceFullThreshold,
+		ForceEmptyThreshold:   metrics.ForceEmptyThreshold,
+		PositionStructure:     metrics.PositionStructure,
+		TradeCount:            loaded.Summary.TradeCount,
+		LongTermFilterEnabled: metrics.LongTermFilterEnabled,
+		LongTermFilterMonths:  metrics.LongTermFilterMonths,
+		LongTermFilterVersion: metrics.LongTermFilterVersion,
+		PracticalTotalReturn:  metrics.PracticalTotalReturn,
+		PracticalMaxDrawdown:  metrics.PracticalMaxDrawdown,
+		PracticalFinalEquity:  metrics.PracticalFinalEquity,
+		PracticalTradeCount:   metrics.PracticalTradeCount,
+		WMean:                 metrics.WMean,
+		WMomentum:             metrics.WMomentum,
+		WBreakout:             metrics.WBreakout,
+		NAV:                   equitySnapshotsFromStandardPath(loaded.Path()),
+		Windows:               metrics.Windows,
+		WindowDetails:         metrics.WindowDetails,
+		Error:                 run.ErrorMessage,
+		CreatedAt:             run.CreatedAt.Format(time.RFC3339),
 	}
 	if run.FinishedAt != nil {
 		response.FinishedAt = run.FinishedAt.Format(time.RFC3339)
@@ -810,25 +867,31 @@ func responseFromStored(run saasstore.BacktestRun, loaded backtestresult.LoadedR
 }
 
 func pendingResponse(run saasstore.BacktestRun, result saasstore.BacktestResult) *Response {
+	var req CreateRequest
+	_ = json.Unmarshal([]byte(run.Request), &req)
+	filter := longTermFilterConfig(req)
 	return &Response{
-		ID:                run.ID,
-		Status:            saasstore.BacktestStatusRunning,
-		BacktestResultID:  result.ID,
-		BacktestKey:       result.BacktestKey,
-		ResultVersion:     result.ResultVersion,
-		ResultContentHash: result.ContentHash,
-		ResultStatus:      result.Status,
-		ReusedResult:      run.ReusedResult,
-		StrategyID:        run.StrategyID,
-		Symbol:            run.Symbol,
-		InstrumentID:      run.InstrumentID,
-		DataSource:        run.DataSource,
-		ExecutionMode:     run.ExecutionMode,
-		Interval:          run.Interval,
-		Source:            run.Source,
-		NAV:               []EquitySnapshot{},
-		Windows:           map[string]float64{},
-		CreatedAt:         run.CreatedAt.Format(time.RFC3339),
+		ID:                    run.ID,
+		Status:                saasstore.BacktestStatusRunning,
+		BacktestResultID:      result.ID,
+		BacktestKey:           result.BacktestKey,
+		ResultVersion:         result.ResultVersion,
+		ResultContentHash:     result.ContentHash,
+		ResultStatus:          result.Status,
+		ReusedResult:          run.ReusedResult,
+		StrategyID:            run.StrategyID,
+		Symbol:                run.Symbol,
+		InstrumentID:          run.InstrumentID,
+		DataSource:            run.DataSource,
+		ExecutionMode:         run.ExecutionMode,
+		Interval:              run.Interval,
+		Source:                run.Source,
+		LongTermFilterEnabled: filter.Enabled,
+		LongTermFilterMonths:  filter.Months,
+		LongTermFilterVersion: filter.Version,
+		NAV:                   []EquitySnapshot{},
+		Windows:               map[string]float64{},
+		CreatedAt:             run.CreatedAt.Format(time.RFC3339),
 	}
 }
 
@@ -870,6 +933,18 @@ func equitySnapshotsFromStandardPath(path []backtestresult.PathPoint) []EquitySn
 		if item.BenchmarkEquity != nil {
 			benchmark = *item.BenchmarkEquity
 		}
+		practicalTotalEquity := item.PracticalTotalEquity
+		practicalCash := item.PracticalCash
+		practicalAssetQuantity := item.PracticalAssetQuantity
+		practicalActualExposure := item.PracticalActualExposureWeight
+		practicalDailyReturn := item.PracticalDailyReturn
+		if practicalTotalEquity == 0 && item.TotalEquity != 0 {
+			practicalTotalEquity = item.TotalEquity
+			practicalCash = item.Cash
+			practicalAssetQuantity = item.AssetQuantity
+			practicalActualExposure = item.ActualExposureWeight
+			practicalDailyReturn = item.DailyReturn
+		}
 		points = append(points, EquitySnapshot{
 			Time:                             time.UnixMilli(item.TimeMs).UTC().Format(time.RFC3339),
 			Price:                            item.Price,
@@ -888,6 +963,18 @@ func equitySnapshotsFromStandardPath(path []backtestresult.PathPoint) []EquitySn
 			ActualExposureWeight:             item.ActualExposureWeight,
 			IntradayExposureWeight:           item.IntradayExposureWeight,
 			DailyReturn:                      item.DailyReturn,
+			PracticalTotalAssets:             practicalTotalEquity,
+			PracticalCash:                    practicalCash,
+			PracticalAssetQuantity:           practicalAssetQuantity,
+			PracticalActualExposureWeight:    practicalActualExposure,
+			PracticalDailyReturn:             practicalDailyReturn,
+			LongTermFilterEnabled:            item.LongTermFilterEnabled,
+			LongTermFilterReady:              item.LongTermFilterReady,
+			LongTermFilterRiskOff:            item.LongTermFilterRiskOff,
+			LongTermFilterCurrentSMA:         item.LongTermFilterCurrentSMA,
+			LongTermFilterPreviousSMA:        item.LongTermFilterPreviousSMA,
+			LongTermFilterSignal:             item.LongTermFilterSignal,
+			LongTermFilterEvent:              item.LongTermFilterEvent,
 		})
 		previousStrategy = item.TotalEquity
 		if item.BenchmarkEquity != nil {
@@ -1120,6 +1207,13 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateRequest) Creat
 		req.Source = SourceChampion
 	}
 	req.Source = strings.ToLower(strings.TrimSpace(req.Source))
+	if req.LongTermFilterEnabled == nil {
+		enabled := true
+		req.LongTermFilterEnabled = &enabled
+	}
+	if req.LongTermFilterMonths == 0 {
+		req.LongTermFilterMonths = backtestcore.DefaultLongTermFilterMonths
+	}
 	return req
 }
 
@@ -1153,6 +1247,14 @@ func (s *Service) validateBasicRequest(ctx context.Context, req CreateRequest) e
 	}
 	if req.ExecutionMode == marketdata.ExecutionModePreclose10m {
 		return errors.New("收盤前 10 分鐘模式需要歷史快照回測路徑，目前尚未開放，不能用日 K 假裝回測")
+	}
+	if req.LongTermFilterEnabled != nil && *req.LongTermFilterEnabled {
+		if req.Interval != "1d" {
+			return errors.New("長週期風險濾網只支援日 K，請改用日 K 或關閉濾網")
+		}
+		if req.LongTermFilterMonths <= 0 {
+			return errors.New("N 月線長度必須大於 0")
+		}
 	}
 	if req.StartTimeMs > 0 && req.EndTimeMs > 0 && req.StartTimeMs > req.EndTimeMs {
 		return errors.New("start_time_ms must be earlier than end_time_ms")
@@ -1278,7 +1380,30 @@ func backtestCosts(req CreateRequest) quant.ExecutionCostConfig {
 	return quant.NormalizeExecutionCosts(costs)
 }
 
-func scoreWindows(bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) (map[string]float64, []WindowResult, error) {
+func longTermFilterConfig(req CreateRequest) backtestcore.LongTermFilterConfig {
+	enabled := req.LongTermFilterEnabled != nil && *req.LongTermFilterEnabled
+	return backtestcore.LongTermFilterConfig{
+		Enabled: enabled,
+		Months:  req.LongTermFilterMonths,
+		Version: backtestcore.LongTermFilterVersion,
+	}
+}
+
+func practicalPath(points []backtestcore.NAVPoint) []backtestcore.NAVPoint {
+	result := make([]backtestcore.NAVPoint, len(points))
+	for index, point := range points {
+		point.TotalEquity = point.PracticalTotalEquity
+		point.Cash = point.PracticalCash
+		point.AssetQuantity = point.PracticalAssetQuantity
+		point.ActualExposureWeight = point.PracticalActualExposureWeight
+		point.DailyReturn = point.PracticalDailyReturn
+		point.Trades = point.PracticalTrades
+		result[index] = point
+	}
+	return result
+}
+
+func scoreWindows(bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig) (map[string]float64, []WindowResult, error) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
@@ -1301,6 +1426,7 @@ func scoreWindows(bars []quant.Bar, symbol string, interval string, executionMod
 				MonthlyContribution:  spawn.Policy.MonthlyInjectUSDT,
 				InitialAssetQuantity: spawn.Policy.ColdSealedBTC,
 				Costs:                costs,
+				LongTermFilter:       longTermFilter,
 			},
 			Bars:   window.Bars,
 			Params: params,

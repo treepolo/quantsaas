@@ -439,6 +439,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		TradePenalty              float64  `json:"trade_penalty"`
 		FeeRate                   float64  `json:"fee_rate"`
 		SpreadRate                float64  `json:"spread_rate"`
+		LongTermFilterEnabled     bool     `json:"long_term_filter_enabled"`
+		LongTermFilterMonths      int      `json:"long_term_filter_months"`
 		SpawnMode                 string   `json:"spawn_mode"`
 		TestMode                  bool     `json:"test_mode"`
 		TraceMode                 string   `json:"trace_mode"`
@@ -542,6 +544,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"trade_penalty":                cfg.TradePenalty,
 		"fee_rate":                     cfg.FeeRate,
 		"spread_rate":                  cfg.SpreadRate,
+		"long_term_filter_enabled":     cfg.LongTermFilterEnabled,
+		"long_term_filter_months":      cfg.LongTermFilterMonths,
 		"interval":                     cfg.Interval,
 		"spawn_mode":                   cfg.SpawnMode,
 		"test_mode":                    cfg.TestMode,

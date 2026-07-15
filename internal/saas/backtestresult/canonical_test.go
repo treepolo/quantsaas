@@ -85,6 +85,26 @@ func TestBacktestKeySeparatesAllOutputAffectingInputs(t *testing.T) {
 	}
 }
 
+func TestBacktestKeySeparatesLongTermFilterMonths(t *testing.T) {
+	leftInput := baseSpecInput()
+	leftInput.LongTermFilterVersion = backtestcore.LongTermFilterVersion
+	leftInput.LongTermFilterSettings = backtestcore.LongTermFilterConfig{Enabled: true, Months: 10, Version: backtestcore.LongTermFilterVersion}
+	rightInput := leftInput
+	rightInput.LongTermFilterSettings = backtestcore.LongTermFilterConfig{Enabled: true, Months: 12, Version: backtestcore.LongTermFilterVersion}
+
+	left, err := BuildIdentity(leftInput, testBars())
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := BuildIdentity(rightInput, testBars())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left.BacktestKey == right.BacktestKey {
+		t.Fatal("不同 N 月線長度不得命中相同回測 key")
+	}
+}
+
 func TestDatasetHashIncludesOHLCVAndOrdering(t *testing.T) {
 	base, err := HashDataset(DatasetSchemaVersion, testBars())
 	if err != nil {

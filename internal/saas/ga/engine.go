@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"quantsaas/internal/backtestcore"
 	"quantsaas/internal/quant"
 )
 
@@ -74,6 +75,7 @@ type EpochConfig struct {
 	GeneOptions        GeneOptions
 	Costs              quant.ExecutionCostConfig
 	TradePenalty       float64
+	LongTermFilter     backtestcore.LongTermFilterConfig
 	OnProgress         func(EpochProgress)
 	OnTrace            func(TraceEvent)
 	OnComputePlan      func(ComputePlan)
@@ -140,20 +142,23 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	e.trace(cfg, TraceModeSummary, "evolution", "epoch.start", "epoch started", map[string]any{
-		"pair":            cfg.Pair,
-		"instrument_id":   cfg.InstrumentID,
-		"data_source":     cfg.DataSource,
-		"interval":        cfg.Interval,
-		"execution_mode":  cfg.ExecutionMode,
-		"population":      e.popSize(cfg),
-		"max_generations": e.maxGenerations(cfg),
-		"initial_capital": e.initialCapital(cfg),
-		"monthly_dca":     e.monthlyDCA(cfg),
-		"gene_options":    cfg.GeneOptions,
-		"fee_rate":        cfg.Costs.FeeRate,
-		"spread_rate":     cfg.Costs.SpreadRate,
-		"trade_penalty":   cfg.TradePenalty,
-		"trace_mode":      cfg.TraceMode,
+		"pair":                     cfg.Pair,
+		"instrument_id":            cfg.InstrumentID,
+		"data_source":              cfg.DataSource,
+		"interval":                 cfg.Interval,
+		"execution_mode":           cfg.ExecutionMode,
+		"population":               e.popSize(cfg),
+		"max_generations":          e.maxGenerations(cfg),
+		"initial_capital":          e.initialCapital(cfg),
+		"monthly_dca":              e.monthlyDCA(cfg),
+		"gene_options":             cfg.GeneOptions,
+		"fee_rate":                 cfg.Costs.FeeRate,
+		"spread_rate":              cfg.Costs.SpreadRate,
+		"trade_penalty":            cfg.TradePenalty,
+		"long_term_filter_enabled": cfg.LongTermFilter.Enabled,
+		"long_term_filter_months":  cfg.LongTermFilter.Months,
+		"long_term_filter_version": cfg.LongTermFilter.Version,
+		"trace_mode":               cfg.TraceMode,
 	})
 	plan, err := e.buildEvaluablePlan(ctx, cfg)
 	if err != nil {
@@ -323,25 +328,28 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		spawnMode = "inherit"
 	}
 	raw, err := json.Marshal(map[string]any{
-		"strategy_id":      e.evolvable.StrategyID(),
-		"symbol":           cfg.Pair,
-		"instrument_id":    cfg.InstrumentID,
-		"data_source":      cfg.DataSource,
-		"interval":         cfg.Interval,
-		"execution_mode":   cfg.ExecutionMode,
-		"train_start_ms":   cfg.StartTimeMs,
-		"train_end_ms":     cfg.EndTimeMs,
-		"initial_capital":  e.initialCapital(cfg),
-		"monthly_dca":      e.monthlyDCA(cfg),
-		"gene_options":     cfg.GeneOptions,
-		"fee_rate":         quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
-		"spread_rate":      quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
-		"trade_penalty":    cfg.TradePenalty,
-		"spawn_mode":       spawnMode,
-		"population":       e.popSize(cfg),
-		"generations":      e.maxGenerations(cfg),
-		"seed_gene_id":     cfg.SeedGeneID,
-		"fixed_param_keys": cfg.GeneOptions.FixedParamKeys,
+		"strategy_id":              e.evolvable.StrategyID(),
+		"symbol":                   cfg.Pair,
+		"instrument_id":            cfg.InstrumentID,
+		"data_source":              cfg.DataSource,
+		"interval":                 cfg.Interval,
+		"execution_mode":           cfg.ExecutionMode,
+		"train_start_ms":           cfg.StartTimeMs,
+		"train_end_ms":             cfg.EndTimeMs,
+		"initial_capital":          e.initialCapital(cfg),
+		"monthly_dca":              e.monthlyDCA(cfg),
+		"gene_options":             cfg.GeneOptions,
+		"fee_rate":                 quant.NormalizeExecutionCosts(cfg.Costs).FeeRate,
+		"spread_rate":              quant.NormalizeExecutionCosts(cfg.Costs).SpreadRate,
+		"trade_penalty":            cfg.TradePenalty,
+		"spawn_mode":               spawnMode,
+		"population":               e.popSize(cfg),
+		"generations":              e.maxGenerations(cfg),
+		"seed_gene_id":             cfg.SeedGeneID,
+		"fixed_param_keys":         cfg.GeneOptions.FixedParamKeys,
+		"long_term_filter_enabled": cfg.LongTermFilter.Enabled,
+		"long_term_filter_months":  cfg.LongTermFilter.Months,
+		"long_term_filter_version": cfg.LongTermFilter.Version,
 	})
 	if err != nil {
 		return []byte(`{}`)
@@ -426,6 +434,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		Spawn:          spawn,
 		Costs:          costs,
 		TradePenalty:   math.Max(0, cfg.TradePenalty),
+		LongTermFilter: cfg.LongTermFilter,
 		GeneOptions:    cfg.GeneOptions,
 		LotStep:        cfg.LotStepSize,
 		LotMin:         cfg.LotMinQty,

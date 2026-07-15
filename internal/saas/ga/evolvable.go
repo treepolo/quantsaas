@@ -3,6 +3,7 @@ package ga
 import (
 	"context"
 
+	"quantsaas/internal/backtestcore"
 	"quantsaas/internal/quant"
 )
 
@@ -25,6 +26,7 @@ type EvaluablePlan struct {
 	Spawn          *quant.SpawnPoint
 	Costs          quant.ExecutionCostConfig
 	TradePenalty   float64
+	LongTermFilter backtestcore.LongTermFilterConfig
 	GeneOptions    GeneOptions
 	LotStep        float64
 	LotMin         float64

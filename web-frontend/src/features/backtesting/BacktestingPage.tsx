@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type HTMLAttributes } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from "recharts";
+import { Area, AreaChart, CartesianGrid, Legend, ReferenceArea, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
@@ -23,12 +23,16 @@ type ChartPoint = {
   price?: number;
   strategy?: number;
   benchmark?: number;
+  practical?: number;
   strategy_value?: number;
   benchmark_value?: number;
+  practical_value?: number;
   strategy_change_pct?: number;
   benchmark_change_pct?: number;
   practical_target_weight?: number;
   practical_target_weight_change?: number;
+  actual_exposure_weight?: number;
+  practical_actual_exposure_weight?: number;
   model_target_weight?: number;
   model_target_weight_change?: number;
   empty_reference_target_weight?: number;
@@ -39,7 +43,14 @@ type ChartPoint = {
   model_target_weight_change_value?: number;
   empty_reference_target_weight_value?: number;
   empty_reference_target_weight_change_value?: number;
-  [key: string]: string | number | undefined;
+  long_term_filter_enabled?: boolean;
+  long_term_filter_ready?: boolean;
+  long_term_filter_risk_off?: boolean;
+  long_term_filter_current_sma?: number;
+  long_term_filter_previous_sma?: number;
+  long_term_filter_signal?: string;
+  long_term_filter_event?: string;
+  [key: string]: string | number | boolean | undefined;
 };
 type ComparisonResult = { genome: GenomeRecord; result: BacktestResult; color: string };
 type SeriesDef = { key: string; dataKey: string; name: string; color: string };
@@ -107,6 +118,7 @@ function buildSingleChartData(result: BacktestResult | null): ChartPoint[] {
     time: item.time,
     price: item.price,
     strategy: item.total_assets,
+    practical: item.practical_total_assets ?? item.total_assets,
     benchmark: item.benchmark ?? item.total_assets,
     strategy_change_pct: item.strategy_change_pct,
     benchmark_change_pct: item.benchmark_change_pct,
@@ -115,8 +127,31 @@ function buildSingleChartData(result: BacktestResult | null): ChartPoint[] {
     model_target_weight: item.model_target_weight,
     model_target_weight_change: item.model_target_weight_change,
     empty_reference_target_weight: item.empty_reference_target_weight,
-    empty_reference_target_weight_change: item.empty_reference_target_weight_change
+    empty_reference_target_weight_change: item.empty_reference_target_weight_change,
+    actual_exposure_weight: item.actual_exposure_weight,
+    practical_actual_exposure_weight: item.practical_actual_exposure_weight,
+    long_term_filter_enabled: item.long_term_filter_enabled,
+    long_term_filter_ready: item.long_term_filter_ready,
+    long_term_filter_risk_off: item.long_term_filter_risk_off,
+    long_term_filter_current_sma: item.long_term_filter_current_sma,
+    long_term_filter_previous_sma: item.long_term_filter_previous_sma,
+    long_term_filter_signal: item.long_term_filter_signal,
+    long_term_filter_event: item.long_term_filter_event
   }));
+}
+
+function riskOffRanges(points: ChartPoint[]) {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let start: number | null = null;
+  for (const point of points) {
+    if (point.long_term_filter_risk_off && start === null) start = point.time_ms;
+    if (!point.long_term_filter_risk_off && start !== null) {
+      ranges.push({ start, end: point.time_ms });
+      start = null;
+    }
+  }
+  if (start !== null && points.length > 0) ranges.push({ start, end: points[points.length - 1].time_ms });
+  return ranges;
 }
 
 function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
@@ -153,6 +188,15 @@ function buildComparisonChartData(items: ComparisonResult[]): ChartPoint[] {
         point.model_target_weight_change = item.model_target_weight_change;
         point.empty_reference_target_weight = item.empty_reference_target_weight;
         point.empty_reference_target_weight_change = item.empty_reference_target_weight_change;
+        point.actual_exposure_weight = item.actual_exposure_weight;
+        point.practical_actual_exposure_weight = item.practical_actual_exposure_weight;
+        point.long_term_filter_enabled = item.long_term_filter_enabled;
+        point.long_term_filter_ready = item.long_term_filter_ready;
+        point.long_term_filter_risk_off = item.long_term_filter_risk_off;
+        point.long_term_filter_current_sma = item.long_term_filter_current_sma;
+        point.long_term_filter_previous_sma = item.long_term_filter_previous_sma;
+        point.long_term_filter_signal = item.long_term_filter_signal;
+        point.long_term_filter_event = item.long_term_filter_event;
       }
       points.set(timeMs, point);
     }
@@ -299,6 +343,8 @@ export function BacktestingPage() {
   const [monthlyDCA, setMonthlyDCA] = useState(1000);
   const [feeRate, setFeeRate] = useState(0);
   const [spreadRate, setSpreadRate] = useState(0);
+  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(true);
+  const [longTermFilterMonths, setLongTermFilterMonths] = useState(10);
   const linkedRunQuery = useQuery({ queryKey: ["backtest-run", initialRun], queryFn: () => backtestsApi.get(initialRun), enabled: initialRun > 0 });
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
   const selectableGenomes = genomes.filter((genome) => ["candidate", "challenger", "champion", "retired", "archived"].includes(genome.role));
@@ -314,6 +360,8 @@ export function BacktestingPage() {
         symbol: selectedInstrument?.symbol ?? instrumentId,
         interval,
         execution_mode: executionMode,
+        long_term_filter_enabled: interval === "1d" && longTermFilterEnabled,
+        long_term_filter_months: longTermFilterMonths,
         start_time_ms: dateStartMs(backtestStart),
         end_time_ms: dateEndMs(backtestEnd),
         source
@@ -359,8 +407,8 @@ export function BacktestingPage() {
             name: shortGenomeLabel(item.genome),
             color: item.color
           }))
-        : [{ key: "strategy", dataKey: "strategy_value", name: "策略結果", color: "#2dd4bf" }],
-    [comparisonResults]
+        : [{ key: "strategy", dataKey: "strategy_value", name: result?.long_term_filter_enabled ? "過濾模型" : "實務模型", color: "#2dd4bf" }],
+    [comparisonResults, result?.long_term_filter_enabled]
   );
   const modelWeightSeries = useMemo(
     () => buildMetricSeries(comparisonResults, "model_target_weight", { dataKey: "model_target_weight", name: "基準模型", color: "#38bdf8" }),
@@ -409,6 +457,7 @@ export function BacktestingPage() {
     if (visibleRawChartData.length === 0) return [];
     const bases = Object.fromEntries(seriesDefs.map((series) => [series.key, Math.max(1, Number(visibleRawChartData[0][series.key]) || 1)]));
     const baseBenchmark = Math.max(1, Number(visibleRawChartData[0].benchmark) || 1);
+    const basePractical = Math.max(1, Number(visibleRawChartData[0].practical) || 1);
     return visibleRawChartData.map((item) => {
       const next: ChartPoint = { ...item };
       for (const series of seriesDefs) {
@@ -419,6 +468,9 @@ export function BacktestingPage() {
       const benchmarkRawValue = Number(item.benchmark) || 0;
       const benchmarkRaw = valueMode === "relative" ? (benchmarkRawValue / baseBenchmark) * 100 : benchmarkRawValue;
       next.benchmark_value = toChartValue(benchmarkRaw, scaleMode);
+      const practicalRawValue = Number(item.practical) || 0;
+      const practicalRaw = valueMode === "relative" ? (practicalRawValue / basePractical) * 100 : practicalRawValue;
+      next.practical_value = toChartValue(practicalRaw, scaleMode);
       next.practical_target_weight_value = Number(item.practical_target_weight) || 0;
       next.practical_target_weight_change_value = Number(item.practical_target_weight_change) || 0;
       next.model_target_weight_value = Number(item.model_target_weight) || 0;
@@ -430,6 +482,8 @@ export function BacktestingPage() {
   }, [visibleRawChartData, scaleMode, valueMode, seriesDefs]);
   const axisTicks = useMemo(() => buildAxisTicks(visibleChartData), [visibleChartData]);
   const hoveredPoint = hoverIndex !== null ? visibleChartData[hoverIndex] : null;
+  const visibleRiskOffRanges = useMemo(() => riskOffRanges(visibleChartData), [visibleChartData]);
+  const visibleFilterEvents = useMemo(() => visibleChartData.filter((point) => point.long_term_filter_event === "enter" || point.long_term_filter_event === "exit"), [visibleChartData]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -511,6 +565,12 @@ export function BacktestingPage() {
           <NumberInput label="每月投入 / 定投金額" value={monthlyDCA} min={0} disabled={!overrideBacktestAssumptions} onChange={setMonthlyDCA} />
           <NumberInput label="手續費率" value={feeRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" value={spreadRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setSpreadRate} />
+          <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
+            <input type="checkbox" checked={interval === "1d" && longTermFilterEnabled} disabled={interval !== "1d"} onChange={(event) => setLongTermFilterEnabled(event.target.checked)} />
+            啟用長週期風險濾網
+          </label>
+          <NumberInput label="N 月線長度" value={longTermFilterMonths} min={1} onChange={setLongTermFilterMonths} />
+          {interval !== "1d" ? <div className="text-xs text-[#fde68a] md:col-span-2">長週期風險濾網以日 K 組成月收盤；非日 K 回測會自動關閉。</div> : null}
 
           {source === "candidate" ? (
             <div className="md:col-span-2">
@@ -574,7 +634,8 @@ export function BacktestingPage() {
               ["定投期末權益", formatMoney(result.benchmark_final_equity ?? result.benchmark), "text-slate-100"],
               ["手續費率", formatPercent(result.fee_rate ?? 0), "text-slate-100"],
               ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"],
-              ["調倉門檻", formatPercent(result.rebalance_threshold ?? 0), "text-slate-100"]
+              ["調倉門檻", formatPercent(result.rebalance_threshold ?? 0), "text-slate-100"],
+              ["濾網設定", result.long_term_filter_enabled ? `${result.long_term_filter_months ?? longTermFilterMonths} 月線` : "關閉", "text-slate-100"]
             ].map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>
@@ -588,6 +649,9 @@ export function BacktestingPage() {
               ["強制空倉門檻", formatPercent(result.force_empty_threshold ?? 0), "text-slate-100"],
               ["倉位結構", result.position_structure === "floating_only" ? "純浮動模型" : "雙層模型", "text-slate-100"],
               ["交易次數", (result.trade_count ?? 0).toLocaleString("zh-TW"), "text-slate-100"],
+              ["實務模型總報酬", formatPercent(result.practical_total_return ?? result.total_return), "text-slate-100"],
+              ["實務模型最大回撤", formatPercent(result.practical_max_drawdown ?? result.max_drawdown), "text-[#fecaca]"],
+              ["實務模型期末權益", formatMoney(result.practical_final_equity ?? result.final_equity), "text-slate-100"],
               ["均值回歸訊號", result.w_mean === 0 ? "停用" : formatNumber(result.w_mean), "text-slate-100"],
               ["動能訊號", result.w_momentum === 0 ? "停用" : formatNumber(result.w_momentum), "text-slate-100"],
               ["突破訊號", result.w_breakout === 0 ? "停用" : formatNumber(result.w_breakout), "text-slate-100"]
@@ -678,10 +742,13 @@ export function BacktestingPage() {
                   <XAxis dataKey="time_ms" ticks={axisTicks.ticks} tickFormatter={axisTicks.formatter} stroke="#64748b" tickLine={false} axisLine={false} fontSize={11} interval={0} minTickGap={24} />
                   <YAxis stroke="#64748b" tickLine={false} axisLine={false} fontSize={12} tickFormatter={axisFormatter} domain={["auto", "auto"]} />
                   {hoveredPoint ? <ReferenceLine x={hoveredPoint.time_ms} stroke="#f8fafc" strokeOpacity={0.35} strokeWidth={1} /> : null}
+                  {visibleRiskOffRanges.map((riskRange) => <ReferenceArea key={`${riskRange.start}-${riskRange.end}`} x1={riskRange.start} x2={riskRange.end} fill="#ef4444" fillOpacity={0.08} strokeOpacity={0} />)}
+                  {visibleFilterEvents.map((point) => <ReferenceLine key={`filter-${point.time_ms}`} x={point.time_ms} stroke={point.long_term_filter_event === "enter" ? "#fb7185" : "#4ade80"} strokeDasharray="3 3" strokeWidth={1.5} />)}
                   <Legend />
                   {seriesDefs.map((series) => (
                     <Area key={series.dataKey} name={series.name} type="monotone" dataKey={series.dataKey} stroke={series.color} strokeWidth={2} fill={seriesDefs.length === 1 ? `url(#${series.dataKey}Fill)` : "transparent"} isAnimationActive={false} connectNulls />
                   ))}
+                  {comparisonResults.length === 0 && result.long_term_filter_enabled ? <Area name="實務模型" type="monotone" dataKey="practical_value" stroke="#38bdf8" strokeDasharray="4 3" fill="transparent" isAnimationActive={false} connectNulls /> : null}
                   <Area name="基準" type="monotone" dataKey="benchmark_value" stroke="#64748b" strokeDasharray="5 5" fill="transparent" isAnimationActive={false} />
                 </AreaChart>
               </ResponsiveContainer>
@@ -698,7 +765,8 @@ export function BacktestingPage() {
                 rows={[
                   ["日期", formatFullAxisTime(hoveredPoint.time_ms)],
                   ["價位 / 點數", formatPrice(hoveredPoint.price)],
-                  ["策略淨值", formatMoney(Number(hoveredPoint.strategy ?? 0))],
+                  [result.long_term_filter_enabled ? "過濾模型淨值" : "實務模型淨值", formatMoney(Number(hoveredPoint.strategy ?? 0))],
+                  ["實務模型淨值", formatMoney(Number(hoveredPoint.practical ?? hoveredPoint.strategy ?? 0))],
                   ["策略日變化", signedPercent(Number(hoveredPoint.strategy_change_pct ?? 0))],
                   ["定投淨值", formatMoney(Number(hoveredPoint.benchmark ?? 0))],
                   ["定投日變化", signedPercent(Number(hoveredPoint.benchmark_change_pct ?? 0))],
@@ -707,7 +775,14 @@ export function BacktestingPage() {
                   ["基準模型目標權重", formatPercent(Number(hoveredPoint.model_target_weight ?? 0))],
                   ["基準模型權重變化", signedPercent(Number(hoveredPoint.model_target_weight_change ?? 0))],
                   ["空倉參考目標權重", formatPercent(Number(hoveredPoint.empty_reference_target_weight ?? 0))],
-                  ["空倉參考權重變化", signedPercent(Number(hoveredPoint.empty_reference_target_weight_change ?? 0))]
+                  ["空倉參考權重變化", signedPercent(Number(hoveredPoint.empty_reference_target_weight_change ?? 0))],
+                  ["濾網是否啟用", hoveredPoint.long_term_filter_enabled ? "是" : "否"],
+                  ["濾網狀態", hoveredPoint.long_term_filter_risk_off ? "風險關閉" : "正常"],
+                  ["本月 N 月線", hoveredPoint.long_term_filter_ready ? formatPrice(Number(hoveredPoint.long_term_filter_current_sma ?? 0)) : "資料不足"],
+                  ["上月 N 月線", hoveredPoint.long_term_filter_ready ? formatPrice(Number(hoveredPoint.long_term_filter_previous_sma ?? 0)) : "資料不足"],
+                  ["過濾模型實際權重", formatPercent(Number(hoveredPoint.actual_exposure_weight ?? 0))],
+                  ["實務模型實際權重", formatPercent(Number(hoveredPoint.practical_actual_exposure_weight ?? 0))],
+                  ["濾網事件", hoveredPoint.long_term_filter_event === "enter" ? "進入" : hoveredPoint.long_term_filter_event === "exit" ? "解除" : "無"]
                 ]}
               />
             ) : null}

@@ -289,7 +289,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			Individual:    plan.Individual,
 			Worker:        plan.Worker,
 			Window:        window.Label,
-		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair).Metrics
+		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair, plan.LongTermFilter).Metrics
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown) - plan.TradePenalty*float64(metrics.TradeCount)
@@ -416,7 +416,7 @@ func RunSigmoidDCAPathBacktestWithMode(bars []quant.Bar, evalStartMs int64, inte
 }
 
 func RunSigmoidDCAPathBacktestWithModeAndCosts(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, sigmoiddca.PositionStructureDualLayer, "BTCUSDT")
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, sigmoiddca.PositionStructureDualLayer, "BTCUSDT", backtestcore.LongTermFilterConfig{})
 }
 
 func RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
@@ -424,7 +424,7 @@ func RunSigmoidDCAPathBacktestWithModeCostsAndStructure(bars []quant.Bar, evalSt
 }
 
 func RunSigmoidDCAPathBacktestForInstrument(bars []quant.Bar, evalStartMs int64, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, positionStructure, symbol)
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, PathTraceConfig{}, costs, positionStructure, symbol, backtestcore.LongTermFilterConfig{})
 }
 
 func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, interval string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
@@ -432,10 +432,10 @@ func RunSigmoidDCAPathBacktestWithTrace(bars []quant.Bar, evalStartMs int64, int
 }
 
 func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig) SigmoidDCAPathResult {
-	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{}, sigmoiddca.PositionStructureDualLayer, "BTCUSDT")
+	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{}, sigmoiddca.PositionStructureDualLayer, "BTCUSDT", backtestcore.LongTermFilterConfig{})
 }
 
-func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string, symbol string) SigmoidDCAPathResult {
+func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string, symbol string, longTermFilter backtestcore.LongTermFilterConfig) SigmoidDCAPathResult {
 	executionMode = normalizeBacktestExecutionMode(executionMode)
 	if len(bars) == 0 || bars[0].Close <= 0 || executionMode == executionModePreclose10m {
 		return SigmoidDCAPathResult{}
@@ -486,6 +486,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			MonthlyContribution:  params.Spawn.Policy.MonthlyInjectUSDT,
 			InitialAssetQuantity: params.Spawn.Policy.ColdSealedBTC,
 			Costs:                costs,
+			LongTermFilter:       longTermFilter,
 		},
 		Bars:   bars,
 		Params: params,
