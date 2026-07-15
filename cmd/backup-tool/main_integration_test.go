@@ -273,6 +273,48 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 		}
 	}
 
+	gene := saasstore.GeneRecord{
+		StrategyID: "sigmoid-dca-btc", InstrumentID: "BTCUSDT", DataSource: "binance", Interval: "1d",
+		ExecutionMode: "close_same_bar", Role: "candidate", Name: "P08 backup source",
+		Tags: saasstore.JSONB(`[]`), SearchConfig: saasstore.JSONB(`{}`), ParamPack: saasstore.JSONB(`{"beta":1.25}`), WindowScore: saasstore.JSONB(`{}`),
+	}
+	if err := source.Create(&gene).Error; err != nil {
+		t.Fatal(err)
+	}
+	robustnessSettings := saasstore.JSONB(`{"version":"p08-study-setting-v1"}`)
+	robustnessSpace := saasstore.JSONB(`{"schema_version":"p08-grid-v1","axes":[{"name":"beta","label":"訊號反應係數","type":"float","values":[1.2,1.25,1.3],"legal_min":0.1,"legal_max":10,"step":0.05,"study_start":0,"study_end":2}],"fixed":{}}`)
+	robustnessStudy := saasstore.RobustnessStudy{
+		OwnerUserID: user.ID, StudyKey: "p08-study:backup", Name: "P08 backup study", Mode: "one_dimensional", Status: compute.TaskStatusCompleted,
+		SettingVersion: "p08-study-setting-v1", SettingHash: compute.HashBytes(robustnessSettings), Settings: robustnessSettings,
+		SpaceVersion: "p08-grid-v1", SpaceHash: compute.HashBytes(robustnessSpace), ParameterSpace: robustnessSpace,
+		CenterPointKey: "1", SourceGenomeID: &gene.ID, ComputeTaskID: &computeRoot.ID, ExpectedPointCount: 1, ActualPointCount: 1, CompletedAt: &completedAt,
+	}
+	if err := source.Create(&robustnessStudy).Error; err != nil {
+		t.Fatal(err)
+	}
+	coordinates := saasstore.JSONB(`[1]`)
+	parameters := saasstore.JSONB(`{"beta":1.25}`)
+	metrics := saasstore.JSONB(`{"version":"p08-relative-metrics-v1","final_nav_ratio":1.01,"log_final_nav_ratio":0.00995,"drawdown_residual_ratio":1.1,"log_drawdown_residual_ratio":0.09531,"performance_drawdown_composite":0.010945,"qualified":true}`)
+	robustnessPoint := saasstore.RobustnessEvaluationPoint{
+		StudyID: robustnessStudy.ID, PointKey: "1", Kind: "actual", State: "qualified",
+		CoordinateHash: compute.HashBytes(coordinates), Coordinates: coordinates, ParameterHash: compute.HashBytes(parameters), Parameters: parameters,
+		BacktestResultID: &resultID, BacktestResultVersion: backtestresult.ResultSchemaVersion, BacktestResultContentHash: artifacts.ResultContentHash,
+		MetricsVersion: "p08-relative-metrics-v1", MetricsHash: compute.HashBytes(metrics), Metrics: metrics, PredictionMetadata: saasstore.JSONB(`{}`),
+	}
+	if err := source.Create(&robustnessPoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	analysisPayload := saasstore.JSONB(`{"analysis_version":"p08-analysis-v1","points":[],"scales":[],"regions":[],"missing_coordinates":[]}`)
+	robustnessSnapshot := saasstore.RobustnessAnalysisSnapshot{
+		StudyID: robustnessStudy.ID, AnalysisKey: "p08-analysis:backup", AnalysisVersion: "p08-analysis-v1",
+		ConnectivityVersion: "p08-axis-connectivity-v1", DistanceVersion: "p08-grid-distance-v1", FrontierVersion: "p08-pareto-v1", CenterVersion: "p08-center-v1",
+		PointSetHash: "backup-point-set", SettingsHash: robustnessStudy.SettingHash, Metric: "log_final_nav_ratio", Radii: saasstore.JSONB(`[1,2,3]`),
+		Payload: analysisPayload, ContentHash: compute.HashBytes(analysisPayload),
+	}
+	if err := source.Create(&robustnessSnapshot).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	backup, err := buildIncrementalBackup(source, since)
 	if err != nil {
 		t.Fatal(err)
@@ -285,6 +327,9 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if len(backup.ComputeTasks) != 3 || len(backup.ComputeTaskItems) != 2 || len(backup.ComputeDependencies) != 1 || len(backup.ComputeCacheEntries) != 1 {
 		t.Fatalf("incomplete compute backup closure: tasks=%d items=%d dependencies=%d caches=%d", len(backup.ComputeTasks), len(backup.ComputeTaskItems), len(backup.ComputeDependencies), len(backup.ComputeCacheEntries))
+	}
+	if backup.Version != backupVersion || len(backup.RobustnessStudies) != 1 || len(backup.RobustnessPoints) != 1 || len(backup.RobustnessSnapshots) != 1 || len(backup.GeneRecords) != 1 {
+		t.Fatalf("incomplete P08 backup closure: version=%d studies=%d points=%d snapshots=%d genes=%d", backup.Version, len(backup.RobustnessStudies), len(backup.RobustnessPoints), len(backup.RobustnessSnapshots), len(backup.GeneRecords))
 	}
 	if len(backup.MarketSeries) != 1 || len(backup.MarketDataVersions) != 2 || len(backup.MarketVersionBars) != 2 ||
 		len(backup.MarketVersionSources) != 1 || len(backup.RecompositionPlans) != 1 || len(backup.RecompositionSegments) != 1 ||
@@ -340,6 +385,13 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if restoredMarketVersion.ContentHash != marketHash || !restoredMarketVersion.Published {
 		t.Fatalf("restored market version = %+v", restoredMarketVersion)
+	}
+	var restoredRobustnessPoint saasstore.RobustnessEvaluationPoint
+	if err := target.First(&restoredRobustnessPoint, robustnessPoint.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredRobustnessPoint.StudyID != robustnessStudy.ID || restoredRobustnessPoint.BacktestResultID == nil || *restoredRobustnessPoint.BacktestResultID != resultID || restoredRobustnessPoint.MetricsHash != robustnessPoint.MetricsHash {
+		t.Fatalf("restored P08 point = %+v", restoredRobustnessPoint)
 	}
 }
 

@@ -553,6 +553,83 @@ type ComputeCacheEntry struct {
 	ArchivedAt          *time.Time
 }
 
+// RobustnessStudy owns one immutable P08 center scan, multidimensional sample,
+// or imported M evaluation-point collection. PostgreSQL is the source of truth;
+// ComputeTask only owns execution lifecycle and reusable item cache.
+type RobustnessStudy struct {
+	ID                  uint `gorm:"primaryKey"`
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	OwnerUserID         uint   `gorm:"not null;index;uniqueIndex:idx_robustness_study_key"`
+	StudyKey            string `gorm:"size:96;not null;uniqueIndex:idx_robustness_study_key"`
+	Name                string `gorm:"size:160;not null"`
+	Mode                string `gorm:"size:32;not null;index"`
+	Status              string `gorm:"size:24;not null;index"`
+	SettingVersion      string `gorm:"size:40;not null"`
+	SettingHash         string `gorm:"size:80;not null;index"`
+	Settings            JSONB  `gorm:"type:jsonb;not null"`
+	SpaceVersion        string `gorm:"size:40;not null"`
+	SpaceHash           string `gorm:"size:80;not null;index"`
+	ParameterSpace      JSONB  `gorm:"type:jsonb;not null"`
+	CenterPointKey      string `gorm:"size:160;not null;default:''"`
+	SourceGenomeID      *uint  `gorm:"index"`
+	ComputeTaskID       *uint  `gorm:"index"`
+	ExpectedPointCount  int    `gorm:"not null;default:0"`
+	ActualPointCount    int    `gorm:"not null;default:0"`
+	PredictedPointCount int    `gorm:"not null;default:0"`
+	CompletedAt         *time.Time
+	ArchivedAt          *time.Time
+
+	Points    []RobustnessEvaluationPoint  `gorm:"foreignKey:StudyID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	Snapshots []RobustnessAnalysisSnapshot `gorm:"foreignKey:StudyID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type RobustnessEvaluationPoint struct {
+	ID                        uint `gorm:"primaryKey"`
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	StudyID                   uint   `gorm:"not null;index;uniqueIndex:idx_robustness_point_key"`
+	PointKey                  string `gorm:"size:160;not null;uniqueIndex:idx_robustness_point_key"`
+	Kind                      string `gorm:"size:24;not null;index"`
+	State                     string `gorm:"size:24;not null;index"`
+	CoordinateHash            string `gorm:"size:80;not null;index"`
+	Coordinates               JSONB  `gorm:"type:jsonb;not null"`
+	ParameterHash             string `gorm:"size:80;not null;index"`
+	Parameters                JSONB  `gorm:"type:jsonb;not null"`
+	BacktestResultID          *uint  `gorm:"index"`
+	BacktestResultVersion     string `gorm:"size:40;not null;default:''"`
+	BacktestResultContentHash string `gorm:"size:80;not null;default:'';index"`
+	MetricsVersion            string `gorm:"size:40;not null;default:''"`
+	MetricsHash               string `gorm:"size:80;not null;default:'';index"`
+	Metrics                   JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	SourceStage               string `gorm:"size:80;not null;default:''"`
+	SamplingBatch             string `gorm:"size:80;not null;default:''"`
+	PredictionMetadata        JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+
+	Study          RobustnessStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	BacktestResult *BacktestResult `gorm:"foreignKey:BacktestResultID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type RobustnessAnalysisSnapshot struct {
+	ID                  uint `gorm:"primaryKey"`
+	CreatedAt           time.Time
+	StudyID             uint   `gorm:"not null;index;uniqueIndex:idx_robustness_analysis_key"`
+	AnalysisKey         string `gorm:"size:96;not null;uniqueIndex:idx_robustness_analysis_key"`
+	AnalysisVersion     string `gorm:"size:40;not null"`
+	ConnectivityVersion string `gorm:"size:40;not null"`
+	DistanceVersion     string `gorm:"size:40;not null"`
+	FrontierVersion     string `gorm:"size:40;not null"`
+	CenterVersion       string `gorm:"size:40;not null"`
+	PointSetHash        string `gorm:"size:80;not null;index"`
+	SettingsHash        string `gorm:"size:80;not null;index"`
+	Metric              string `gorm:"size:48;not null"`
+	Radii               JSONB  `gorm:"type:jsonb;not null"`
+	Payload             JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash         string `gorm:"size:80;not null;index"`
+
+	Study RobustnessStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
 type BacktestRun struct {
 	ID               uint `gorm:"primaryKey"`
 	CreatedAt        time.Time

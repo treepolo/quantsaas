@@ -208,7 +208,7 @@ func TestCreatePersistsAndReusesStandardizedResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	corruptPrepared, err := service.prepare(ctx, user.ID, corruptRequest)
+	corruptPrepared, err := service.prepare(ctx, user.ID, service.normalizeRequest(ctx, corruptRequest))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -230,6 +230,18 @@ type preparedBacktest struct {
 	identity backtestresult.Identity
 }
 
+// StandardExecutionResult is the P02/P03 result of a domain-owned calculation.
+// It intentionally does not create a user BacktestRun; callers such as P08 own
+// their request/evaluation records and reference this immutable result directly.
+type StandardExecutionResult struct {
+	ID          uint
+	BacktestKey string
+	Version     string
+	ContentHash string
+	Summary     backtestresult.SummaryData
+	Reused      bool
+}
+
 type instanceConfig struct {
 	InitialUSDT       float64 `json:"initial_usdt"`
 	MonthlyInjectUSDT float64 `json:"monthly_inject_usdt"`
@@ -243,6 +255,88 @@ func NewService(db *gorm.DB) *Service {
 		results:       backtestresult.NewStore(db),
 		runSigmoidDCA: backtestcore.RunSigmoidDCA,
 	}
+}
+
+func (s *Service) EnsureStandardResult(ctx context.Context, userID uint, req CreateRequest) (StandardExecutionResult, error) {
+	req = s.normalizeRequest(ctx, req)
+	if err := s.validateBasicRequest(ctx, req); err != nil {
+		return StandardExecutionResult{}, err
+	}
+	prepared, err := s.prepare(ctx, userID, req)
+	if err != nil {
+		return StandardExecutionResult{}, err
+	}
+	reservation, err := s.results.Reserve(ctx, prepared.identity)
+	if err != nil {
+		return StandardExecutionResult{}, err
+	}
+	if reservation.Reusable {
+		return s.loadStandardExecution(ctx, reservation.Result.ID, true)
+	}
+	if !reservation.Created {
+		return s.waitStandardExecution(ctx, reservation.Result.ID)
+	}
+	if err := s.results.MarkRunning(ctx, reservation.Result.ID); err != nil {
+		return StandardExecutionResult{}, err
+	}
+	artifacts, err := s.executePrepared(prepared)
+	if err != nil {
+		_ = s.results.Fail(context.Background(), reservation.Result.ID, err)
+		return StandardExecutionResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		_ = s.results.Cancel(context.Background(), reservation.Result.ID, err.Error())
+		return StandardExecutionResult{}, err
+	}
+	if err := s.results.Complete(ctx, reservation.Result.ID, artifacts); err != nil {
+		_ = s.results.Fail(context.Background(), reservation.Result.ID, err)
+		return StandardExecutionResult{}, err
+	}
+	if _, err := s.results.VerifyResult(ctx, reservation.Result.ID); err != nil {
+		_ = s.results.Invalidate(context.Background(), reservation.Result.ID, err.Error())
+		return StandardExecutionResult{}, err
+	}
+	return s.loadStandardExecution(ctx, reservation.Result.ID, false)
+}
+
+func (s *Service) waitStandardExecution(ctx context.Context, resultID uint) (StandardExecutionResult, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		loaded, err := s.results.Load(ctx, resultID, false)
+		if err != nil {
+			return StandardExecutionResult{}, err
+		}
+		switch loaded.Result.Status {
+		case saasstore.BacktestResultStatusCompleted:
+			return s.loadStandardExecution(ctx, resultID, true)
+		case saasstore.BacktestResultStatusFailed, saasstore.BacktestResultStatusCancelled, saasstore.BacktestResultStatusInvalidated, saasstore.BacktestResultStatusArchived:
+			return StandardExecutionResult{}, fmt.Errorf("標準化回測結果 %d 無法重用：%s %s", resultID, loaded.Result.Status, loaded.Result.ErrorMessage)
+		}
+		select {
+		case <-ctx.Done():
+			return StandardExecutionResult{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *Service) loadStandardExecution(ctx context.Context, resultID uint, reused bool) (StandardExecutionResult, error) {
+	if _, err := s.results.VerifyResult(ctx, resultID); err != nil {
+		return StandardExecutionResult{}, err
+	}
+	loaded, err := s.results.Load(ctx, resultID, false)
+	if err != nil {
+		return StandardExecutionResult{}, err
+	}
+	if loaded.Summary == nil {
+		return StandardExecutionResult{}, fmt.Errorf("標準化回測結果缺少摘要")
+	}
+	return StandardExecutionResult{
+		ID: loaded.Result.ID, BacktestKey: loaded.Result.BacktestKey,
+		Version: loaded.Result.ResultVersion, ContentHash: loaded.Result.ContentHash,
+		Summary: *loaded.Summary, Reused: reused,
+	}, nil
 }
 
 func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*Response, error) {

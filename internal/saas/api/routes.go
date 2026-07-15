@@ -17,6 +17,7 @@ import (
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/instance"
 	"quantsaas/internal/saas/marketdata"
+	robustnesssvc "quantsaas/internal/saas/robustness"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -40,6 +41,7 @@ type RouterDeps struct {
 	EvolutionHandler *EvolutionHandler
 	ComputeTasks     *computetask.Service
 	MarketData       *marketdata.Service
+	Robustness       *robustnesssvc.Service
 	AgentStatus      AgentStatusProvider
 	WSHandler        gin.HandlerFunc
 }
@@ -85,6 +87,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	}
 	research := NewResearchStatusHandler(deps.DB)
 	researchData := NewResearchDataHandler(deps.Config.AppRole, deps.DB)
+	robustnessStudies := deps.Robustness
+	if robustnessStudies == nil {
+		robustnessStudies = robustnesssvc.NewService(deps.DB, deps.ComputeTasks)
+	}
+	robustnessHandler := NewRobustnessHandler(robustnessStudies)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
@@ -141,6 +148,13 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.PATCH("/research-datasets/:id", researchData.Update)
 	lab.DELETE("/research-datasets/:id", researchData.Delete)
 	lab.GET("/research/status", research.Status)
+	lab.GET("/robustness/parameters", robustnessHandler.Parameters)
+	lab.POST("/robustness/studies/preview", robustnessHandler.Preview)
+	lab.POST("/robustness/studies", robustnessHandler.Create)
+	lab.POST("/robustness/studies/import", robustnessHandler.Import)
+	lab.GET("/robustness/studies", robustnessHandler.List)
+	lab.GET("/robustness/studies/:id", robustnessHandler.Get)
+	lab.POST("/robustness/studies/:id/analyze", robustnessHandler.Analyze)
 	if deps.ComputeTasks != nil {
 		computeTasks := NewComputeTaskHandler(deps.ComputeTasks)
 		lab.GET("/compute-tasks/limits", computeTasks.Limits)

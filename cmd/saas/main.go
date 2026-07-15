@@ -17,6 +17,7 @@ import (
 	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/instance"
 	"quantsaas/internal/saas/marketdata"
+	robustnesssvc "quantsaas/internal/saas/robustness"
 	"quantsaas/internal/saas/store"
 	"quantsaas/internal/saas/ws"
 
@@ -63,6 +64,7 @@ func main() {
 	evolutionHandler := api.NewEvolutionHandler(cfg.AppRole, db.DB, redisClient, epochService)
 	computeRegistry := computetask.NewRegistry()
 	for _, executor := range []computetask.Executor{
+		robustnesssvc.NewPointExecutor(db.DB),
 		marketdata.NewRecompositionPreviewExecutor(marketDataService),
 		marketdata.NewRecompositionExpandExecutor(marketDataService),
 		marketdata.NewRecompositionAuditExecutor(marketDataService),
@@ -83,6 +85,7 @@ func main() {
 		logger.Fatal("init compute task service failed", zap.Error(err))
 	}
 	marketDataService.SetComputeTasks(computeTasks)
+	robustnessStudies := robustnesssvc.NewService(db.DB, computeTasks)
 	if err := computeTasks.Start(); err != nil {
 		logger.Fatal("start compute task service failed", zap.Error(err))
 	}
@@ -97,6 +100,7 @@ func main() {
 		EvolutionHandler: evolutionHandler,
 		ComputeTasks:     computeTasks,
 		MarketData:       marketDataService,
+		Robustness:       robustnessStudies,
 		AgentStatus:      hub,
 		WSHandler:        hub.HandleConnection,
 	})

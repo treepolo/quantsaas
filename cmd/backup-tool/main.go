@@ -23,7 +23,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const backupVersion = 5
+const backupVersion = 6
 
 type incrementalBackup struct {
 	Version                  int                                      `json:"version"`
@@ -49,6 +49,9 @@ type incrementalBackup struct {
 	ComputeCacheEntries      []saasstore.ComputeCacheEntry            `json:"compute_cache_entries"`
 	ComputeTaskItems         []saasstore.ComputeTaskItem              `json:"compute_task_items"`
 	ComputeDependencies      []saasstore.ComputeTaskDependency        `json:"compute_task_dependencies"`
+	RobustnessStudies        []saasstore.RobustnessStudy              `json:"robustness_studies"`
+	RobustnessPoints         []saasstore.RobustnessEvaluationPoint    `json:"robustness_evaluation_points"`
+	RobustnessSnapshots      []saasstore.RobustnessAnalysisSnapshot   `json:"robustness_analysis_snapshots"`
 	MarketSeries             []saasstore.MarketSeries                 `json:"market_series"`
 	MarketDataVersions       []saasstore.MarketDataVersion            `json:"market_data_versions"`
 	MarketVersionBars        []saasstore.MarketDataVersionBar         `json:"market_data_version_bars"`
@@ -240,6 +243,15 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	if err := createdSince(db, since, &backup.ComputeDependencies); err != nil {
 		return backup, err
 	}
+	if err := changedSince(db, since, &backup.RobustnessStudies); err != nil {
+		return backup, err
+	}
+	if err := changedSince(db, since, &backup.RobustnessPoints); err != nil {
+		return backup, err
+	}
+	if err := createdSince(db, since, &backup.RobustnessSnapshots); err != nil {
+		return backup, err
+	}
 	if err := changedSince(db, since, &backup.MarketSeries); err != nil {
 		return backup, err
 	}
@@ -279,6 +291,9 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	if err := hydrateMarketVersionClosure(db, &backup); err != nil {
 		return backup, err
 	}
+	if err := hydrateRobustnessClosure(db, &backup); err != nil {
+		return backup, err
+	}
 	if err := hydrateComputeClosure(db, &backup); err != nil {
 		return backup, err
 	}
@@ -313,6 +328,9 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	backup.Counts["compute_cache_entries"] = len(backup.ComputeCacheEntries)
 	backup.Counts["compute_task_items"] = len(backup.ComputeTaskItems)
 	backup.Counts["compute_task_dependencies"] = len(backup.ComputeDependencies)
+	backup.Counts["robustness_studies"] = len(backup.RobustnessStudies)
+	backup.Counts["robustness_evaluation_points"] = len(backup.RobustnessPoints)
+	backup.Counts["robustness_analysis_snapshots"] = len(backup.RobustnessSnapshots)
 	backup.Counts["market_series"] = len(backup.MarketSeries)
 	backup.Counts["market_data_versions"] = len(backup.MarketDataVersions)
 	backup.Counts["market_data_version_bars"] = len(backup.MarketVersionBars)
@@ -326,6 +344,149 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	backup.Counts["research_datasets"] = len(backup.ResearchDatasets)
 	backup.Counts["research_dataset_series"] = len(backup.ResearchDatasetSeries)
 	return backup, nil
+}
+
+func hydrateRobustnessClosure(db *gorm.DB, backup *incrementalBackup) error {
+	if len(backup.RobustnessStudies)+len(backup.RobustnessPoints)+len(backup.RobustnessSnapshots) == 0 {
+		return nil
+	}
+	studyIDs := map[uint]struct{}{}
+	for _, row := range backup.RobustnessStudies {
+		studyIDs[row.ID] = struct{}{}
+	}
+	for _, row := range backup.RobustnessPoints {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	for _, row := range backup.RobustnessSnapshots {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	ids := uintSetValues(studyIDs)
+	if len(ids) > 0 {
+		var studies []saasstore.RobustnessStudy
+		if err := db.Where("id IN ?", ids).Find(&studies).Error; err != nil {
+			return err
+		}
+		backup.RobustnessStudies = mergeRobustnessStudies(backup.RobustnessStudies, studies)
+		var points []saasstore.RobustnessEvaluationPoint
+		if err := db.Where("study_id IN ?", ids).Find(&points).Error; err != nil {
+			return err
+		}
+		backup.RobustnessPoints = mergeRobustnessPoints(backup.RobustnessPoints, points)
+		var snapshots []saasstore.RobustnessAnalysisSnapshot
+		if err := db.Where("study_id IN ?", ids).Find(&snapshots).Error; err != nil {
+			return err
+		}
+		backup.RobustnessSnapshots = mergeRobustnessSnapshots(backup.RobustnessSnapshots, snapshots)
+	}
+	geneIDs, taskIDs, resultIDs := map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}
+	for _, study := range backup.RobustnessStudies {
+		if study.SourceGenomeID != nil {
+			geneIDs[*study.SourceGenomeID] = struct{}{}
+		}
+		if study.ComputeTaskID != nil {
+			taskIDs[*study.ComputeTaskID] = struct{}{}
+		}
+	}
+	for _, point := range backup.RobustnessPoints {
+		if point.BacktestResultID != nil {
+			resultIDs[*point.BacktestResultID] = struct{}{}
+		}
+	}
+	if ids := uintSetValues(geneIDs); len(ids) > 0 {
+		var rows []saasstore.GeneRecord
+		if err := db.Unscoped().Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.GeneRecords = mergeGeneRecords(backup.GeneRecords, rows)
+	}
+	if ids := uintSetValues(taskIDs); len(ids) > 0 {
+		var rows []saasstore.ComputeTask
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.ComputeTasks = mergeComputeTasks(backup.ComputeTasks, rows)
+	}
+	if ids := uintSetValues(resultIDs); len(ids) > 0 {
+		var rows []saasstore.BacktestResult
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.BacktestResults = mergeBacktestResults(backup.BacktestResults, rows)
+	}
+	return nil
+}
+
+func uintSetValues(values map[uint]struct{}) []uint {
+	result := make([]uint, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func mergeGeneRecords(left, right []saasstore.GeneRecord) []saasstore.GeneRecord {
+	byID := make(map[uint]saasstore.GeneRecord, len(left)+len(right))
+	for _, row := range left {
+		byID[row.ID] = row
+	}
+	for _, row := range right {
+		byID[row.ID] = row
+	}
+	rows := make([]saasstore.GeneRecord, 0, len(byID))
+	for _, row := range byID {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	return rows
+}
+
+func mergeRobustnessStudies(left, right []saasstore.RobustnessStudy) []saasstore.RobustnessStudy {
+	byID := make(map[uint]saasstore.RobustnessStudy, len(left)+len(right))
+	for _, row := range left {
+		byID[row.ID] = row
+	}
+	for _, row := range right {
+		byID[row.ID] = row
+	}
+	rows := make([]saasstore.RobustnessStudy, 0, len(byID))
+	for _, row := range byID {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	return rows
+}
+
+func mergeRobustnessPoints(left, right []saasstore.RobustnessEvaluationPoint) []saasstore.RobustnessEvaluationPoint {
+	byID := make(map[uint]saasstore.RobustnessEvaluationPoint, len(left)+len(right))
+	for _, row := range left {
+		byID[row.ID] = row
+	}
+	for _, row := range right {
+		byID[row.ID] = row
+	}
+	rows := make([]saasstore.RobustnessEvaluationPoint, 0, len(byID))
+	for _, row := range byID {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	return rows
+}
+
+func mergeRobustnessSnapshots(left, right []saasstore.RobustnessAnalysisSnapshot) []saasstore.RobustnessAnalysisSnapshot {
+	byID := make(map[uint]saasstore.RobustnessAnalysisSnapshot, len(left)+len(right))
+	for _, row := range left {
+		byID[row.ID] = row
+	}
+	for _, row := range right {
+		byID[row.ID] = row
+	}
+	rows := make([]saasstore.RobustnessAnalysisSnapshot, 0, len(byID))
+	for _, row := range byID {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].ID < rows[j].ID })
+	return rows
 }
 
 func hydrateMarketVersionClosure(db *gorm.DB, backup *incrementalBackup) error {
@@ -476,6 +637,15 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 		if err := saveAll(tx, backup.ComputeDependencies); err != nil {
 			return err
 		}
+		if err := saveAll(tx, backup.RobustnessStudies); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.RobustnessPoints); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.RobustnessSnapshots); err != nil {
+			return err
+		}
 		if err := saveAll(tx, backup.MarketSeries); err != nil {
 			return err
 		}
@@ -524,11 +694,66 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 		if err := verifyRestoredComputeTasks(tx, backup); err != nil {
 			return err
 		}
+		if err := verifyRestoredRobustness(tx, backup); err != nil {
+			return err
+		}
 		if err := verifyRestoredMarketVersions(tx, backup); err != nil {
 			return err
 		}
 		return resetSequences(tx)
 	})
+}
+
+func verifyRestoredRobustness(db *gorm.DB, backup incrementalBackup) error {
+	for _, saved := range backup.RobustnessStudies {
+		var study saasstore.RobustnessStudy
+		if err := db.First(&study, saved.ID).Error; err != nil {
+			return err
+		}
+		if study.StudyKey != saved.StudyKey || study.SettingHash != saved.SettingHash || study.SpaceHash != saved.SpaceHash {
+			return fmt.Errorf("P08 研究 %d 還原後身分不一致", saved.ID)
+		}
+		if study.SourceGenomeID != nil {
+			var count int64
+			if err := db.Unscoped().Model(&saasstore.GeneRecord{}).Where("id = ?", *study.SourceGenomeID).Count(&count).Error; err != nil || count != 1 {
+				return fmt.Errorf("P08 研究 %d 缺少來源參數", saved.ID)
+			}
+		}
+		if study.ComputeTaskID != nil {
+			var count int64
+			if err := db.Model(&saasstore.ComputeTask{}).Where("id = ?", *study.ComputeTaskID).Count(&count).Error; err != nil || count != 1 {
+				return fmt.Errorf("P08 研究 %d 缺少計算任務", saved.ID)
+			}
+		}
+	}
+	for _, saved := range backup.RobustnessPoints {
+		var point saasstore.RobustnessEvaluationPoint
+		if err := db.First(&point, saved.ID).Error; err != nil {
+			return err
+		}
+		if point.CoordinateHash != saved.CoordinateHash || point.ParameterHash != saved.ParameterHash || point.MetricsHash != saved.MetricsHash {
+			return fmt.Errorf("P08 評估點 %d 還原後 hash 不一致", saved.ID)
+		}
+		if point.BacktestResultID != nil {
+			var result saasstore.BacktestResult
+			if err := db.First(&result, *point.BacktestResultID).Error; err != nil {
+				return err
+			}
+			if result.ContentHash != point.BacktestResultContentHash {
+				return fmt.Errorf("P08 評估點 %d 的回測引用不一致", saved.ID)
+			}
+		}
+	}
+	for _, saved := range backup.RobustnessSnapshots {
+		var snapshot saasstore.RobustnessAnalysisSnapshot
+		if err := db.First(&snapshot, saved.ID).Error; err != nil {
+			return err
+		}
+		if snapshot.ContentHash != saved.ContentHash || snapshot.PointSetHash != saved.PointSetHash {
+			return fmt.Errorf("P08 分析快照 %d 還原後 hash 不一致", saved.ID)
+		}
+	}
+	return nil
 }
 
 func verifyRestoredMarketVersions(db *gorm.DB, backup incrementalBackup) error {
@@ -1395,6 +1620,9 @@ func resetSequences(db *gorm.DB) error {
 		"compute_cache_entries":           "id",
 		"compute_task_items":              "id",
 		"compute_task_dependencies":       "id",
+		"robustness_studies":              "id",
+		"robustness_evaluation_points":    "id",
+		"robustness_analysis_snapshots":   "id",
 		"market_series":                   "id",
 		"market_data_versions":            "id",
 		"market_data_version_bars":        "id",
