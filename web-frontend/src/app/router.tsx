@@ -15,6 +15,7 @@ import { ResearchDatasetPage } from "../features/researchdata/ResearchDatasetPag
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { ComputeTasksPage } from "../features/computetasks/ComputeTasksPage";
 import { RobustnessPage } from "../features/robustness/RobustnessPage";
+import { DynamicParametersPage } from "../features/dynamicparameters/DynamicParametersPage";
 
 function AuthGate() {
   const { user, loading } = useAuth();
@@ -66,6 +67,7 @@ export function AppRouter() {
                 <Route path="status" element={<MarketStatusPage />} />
                 <Route path="backtesting" element={<BacktestingPage />} />
                 <Route path="robustness" element={<RobustnessPage />} />
+                <Route path="dynamic-parameters" element={<DynamicParametersPage />} />
                 <Route path="tasks" element={<ComputeTasksPage />} />
               </Route>
               <Route path="templates" element={<Navigate to="/" replace />} />

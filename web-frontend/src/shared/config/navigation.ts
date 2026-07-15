@@ -1,6 +1,7 @@
 import {
   Activity,
   BarChart3,
+  BrainCircuit,
   ClipboardList,
   Database,
   FlaskConical,
@@ -32,6 +33,7 @@ export const navItems: NavItem[] = [
   { to: "/evolution", labelKey: "nav.evolution", icon: FlaskConical, placement: "main", feature: "strategies" },
   { to: "/backtesting", labelKey: "nav.backtesting", icon: BarChart3, placement: "main", feature: "backtesting" },
   { to: "/robustness", labelKey: "參數穩健性", icon: Grid3X3, placement: "main", feature: "backtesting" },
+  { to: "/dynamic-parameters", labelKey: "預測與動態參數", icon: BrainCircuit, placement: "main", feature: "backtesting" },
   { to: "/tasks", labelKey: "計算任務", icon: ClipboardList, placement: "main", feature: "backtesting" },
   { to: "/settings", labelKey: "nav.settings", icon: Settings, placement: "footer", feature: "settings" }
 ];

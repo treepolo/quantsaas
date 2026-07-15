@@ -222,12 +222,23 @@ type storedResponseMetrics struct {
 }
 
 type preparedBacktest struct {
-	req      CreateRequest
-	params   sigmoiddca.Params
-	bars     []quant.Bar
-	costs    quant.ExecutionCostConfig
-	coreSpec backtestcore.Spec
-	identity backtestresult.Identity
+	req               CreateRequest
+	params            sigmoiddca.Params
+	bars              []quant.Bar
+	costs             quant.ExecutionCostConfig
+	coreSpec          backtestcore.Spec
+	identity          backtestresult.Identity
+	parameterProvider backtestcore.ParameterProvider
+}
+
+type DynamicExecutionMetadata struct {
+	ModelArtifactHash          string
+	PredictionSchemaHash       string
+	MaterializedPredictionHash string
+	DynamicPolicyHash          string
+	DynamicControlMode         string
+	EffectiveParametersHash    string
+	ParameterProvider          backtestcore.ParameterProvider
 }
 
 // StandardExecutionResult is the P02/P03 result of a domain-owned calculation.
@@ -266,6 +277,25 @@ func (s *Service) EnsureStandardResult(ctx context.Context, userID uint, req Cre
 	if err != nil {
 		return StandardExecutionResult{}, err
 	}
+	return s.ensureStandardPrepared(ctx, prepared)
+}
+
+func (s *Service) EnsureDynamicStandardResult(ctx context.Context, userID uint, req CreateRequest, dynamic DynamicExecutionMetadata) (StandardExecutionResult, error) {
+	if dynamic.ModelArtifactHash == "" || dynamic.PredictionSchemaHash == "" || dynamic.MaterializedPredictionHash == "" || dynamic.DynamicPolicyHash == "" || dynamic.DynamicControlMode == "" || dynamic.EffectiveParametersHash == "" || dynamic.ParameterProvider == nil {
+		return StandardExecutionResult{}, fmt.Errorf("動態參數回測缺少完整不可變身分")
+	}
+	req = s.normalizeRequest(ctx, req)
+	if err := s.validateBasicRequest(ctx, req); err != nil {
+		return StandardExecutionResult{}, err
+	}
+	prepared, err := s.prepareWithDynamic(ctx, userID, req, &dynamic)
+	if err != nil {
+		return StandardExecutionResult{}, err
+	}
+	return s.ensureStandardPrepared(ctx, prepared)
+}
+
+func (s *Service) ensureStandardPrepared(ctx context.Context, prepared preparedBacktest) (StandardExecutionResult, error) {
 	reservation, err := s.results.Reserve(ctx, prepared.identity)
 	if err != nil {
 		return StandardExecutionResult{}, err
@@ -530,6 +560,10 @@ func (s *Service) Get(ctx context.Context, userID uint, id uint) (*Response, err
 }
 
 func (s *Service) prepare(ctx context.Context, userID uint, req CreateRequest) (preparedBacktest, error) {
+	return s.prepareWithDynamic(ctx, userID, req, nil)
+}
+
+func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req CreateRequest, dynamic *DynamicExecutionMetadata) (preparedBacktest, error) {
 	params, err := s.resolveParams(ctx, userID, req)
 	if err != nil {
 		return preparedBacktest{}, err
@@ -570,28 +604,53 @@ func (s *Service) prepare(ctx context.Context, userID uint, req CreateRequest) (
 		LongTermFilter:       longTermFilterConfig(req),
 		CoreVersion:          backtestcore.CoreVersion,
 	}
+	var modelArtifactHash string
+	var predictionSchemaHash string
+	var materializedPredictionHash string
+	var dynamicPolicyHash string
+	var dynamicControlMode string
+	var effectiveParametersHash string
+	if dynamic != nil {
+		modelArtifactHash = dynamic.ModelArtifactHash
+		predictionSchemaHash = dynamic.PredictionSchemaHash
+		materializedPredictionHash = dynamic.MaterializedPredictionHash
+		dynamicPolicyHash = dynamic.DynamicPolicyHash
+		dynamicControlMode = dynamic.DynamicControlMode
+		effectiveParametersHash = dynamic.EffectiveParametersHash
+	}
 	identity, err := backtestresult.BuildIdentity(backtestresult.SpecInput{
-		StrategyID:             req.StrategyID,
-		StrategyVersion:        sigmoiddca.StrategyVersion,
-		ParameterSchemaVersion: backtestresult.ParameterSchemaV1,
-		Parameters:             params,
-		CoreSpec:               coreSpec,
-		DatasetVersion:         backtestresult.DatasetSchemaVersion,
-		LongTermFilterVersion:  coreSpec.LongTermFilter.Version,
-		LongTermFilterSettings: coreSpec.LongTermFilter,
+		StrategyID:                 req.StrategyID,
+		StrategyVersion:            sigmoiddca.StrategyVersion,
+		ParameterSchemaVersion:     backtestresult.ParameterSchemaV1,
+		Parameters:                 params,
+		CoreSpec:                   coreSpec,
+		DatasetVersion:             backtestresult.DatasetSchemaVersion,
+		LongTermFilterVersion:      coreSpec.LongTermFilter.Version,
+		LongTermFilterSettings:     coreSpec.LongTermFilter,
+		ModelArtifactHash:          modelArtifactHash,
+		PredictionSchemaHash:       predictionSchemaHash,
+		MaterializedPredictionHash: materializedPredictionHash,
+		DynamicPolicyHash:          dynamicPolicyHash,
+		DynamicControlMode:         dynamicControlMode,
+		EffectiveParametersHash:    effectiveParametersHash,
 	}, bars)
 	if err != nil {
 		return preparedBacktest{}, err
 	}
 	coreSpec.DatasetHash = identity.Snapshot.DatasetHash
-	return preparedBacktest{req: req, params: params, bars: bars, costs: costs, coreSpec: coreSpec, identity: identity}, nil
+	prepared := preparedBacktest{req: req, params: params, bars: bars, costs: costs, coreSpec: coreSpec, identity: identity}
+	if dynamic != nil {
+		prepared.parameterProvider = dynamic.ParameterProvider
+	}
+	return prepared, nil
 }
 
 func (s *Service) executePrepared(prepared preparedBacktest) (backtestresult.Artifacts, error) {
 	path, err := s.runSigmoidDCA(backtestcore.SigmoidDCARequest{
-		Spec:   prepared.coreSpec,
-		Bars:   prepared.bars,
-		Params: prepared.params,
+		Spec:              prepared.coreSpec,
+		Bars:              prepared.bars,
+		Params:            prepared.params,
+		ParameterProvider: prepared.parameterProvider,
 	})
 	if err != nil {
 		return backtestresult.Artifacts{}, err

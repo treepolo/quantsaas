@@ -10,9 +10,11 @@ import (
 
 	"quantsaas/internal/saas/api"
 	"quantsaas/internal/saas/auth"
+	"quantsaas/internal/saas/backtest"
 	"quantsaas/internal/saas/computetask"
 	"quantsaas/internal/saas/config"
 	saascron "quantsaas/internal/saas/cron"
+	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/instance"
@@ -63,8 +65,11 @@ func main() {
 	epochService := epoch.NewService(db.DB, evolutionEngine, logger)
 	evolutionHandler := api.NewEvolutionHandler(cfg.AppRole, db.DB, redisClient, epochService)
 	computeRegistry := computetask.NewRegistry()
+	backtestService := backtest.NewService(db.DB)
 	for _, executor := range []computetask.Executor{
 		robustnesssvc.NewPointExecutor(db.DB),
+		dynamicparamsvc.NewTrainExecutor(db.DB),
+		dynamicparamsvc.NewMaterializeExecutor(db.DB, backtestService),
 		marketdata.NewRecompositionPreviewExecutor(marketDataService),
 		marketdata.NewRecompositionExpandExecutor(marketDataService),
 		marketdata.NewRecompositionAuditExecutor(marketDataService),
@@ -86,23 +91,25 @@ func main() {
 	}
 	marketDataService.SetComputeTasks(computeTasks)
 	robustnessStudies := robustnesssvc.NewService(db.DB, computeTasks)
+	dynamicParameterStudies := dynamicparamsvc.NewService(db.DB, computeTasks)
 	if err := computeTasks.Start(); err != nil {
 		logger.Fatal("start compute task service failed", zap.Error(err))
 	}
 
 	router := api.NewRouter(api.RouterDeps{
-		Config:           cfg,
-		DB:               db.DB,
-		Redis:            redisClient,
-		Auth:             authService,
-		InstanceManager:  instanceManager,
-		EpochService:     epochService,
-		EvolutionHandler: evolutionHandler,
-		ComputeTasks:     computeTasks,
-		MarketData:       marketDataService,
-		Robustness:       robustnessStudies,
-		AgentStatus:      hub,
-		WSHandler:        hub.HandleConnection,
+		Config:            cfg,
+		DB:                db.DB,
+		Redis:             redisClient,
+		Auth:              authService,
+		InstanceManager:   instanceManager,
+		EpochService:      epochService,
+		EvolutionHandler:  evolutionHandler,
+		ComputeTasks:      computeTasks,
+		MarketData:        marketDataService,
+		Robustness:        robustnessStudies,
+		DynamicParameters: dynamicParameterStudies,
+		AgentStatus:       hub,
+		WSHandler:         hub.HandleConnection,
 	})
 
 	scheduler := saascron.NewScheduler(instanceManager, marketDataService, logger)

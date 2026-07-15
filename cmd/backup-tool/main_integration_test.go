@@ -315,6 +315,46 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	dynamicSettings := saasstore.JSONB(fmt.Sprintf(`{"version":"p09-study-setting-v1","request":{"genome_id":%d}}`, gene.ID))
+	dynamicStudy := saasstore.DynamicModelStudy{OwnerUserID: user.ID, StudyKey: "p09-study:backup", Name: "P09 backup study", Status: "completed", Route: "explainable_gam", InstrumentID: outputInstrumentID, DataSource: "generated", Symbol: outputInstrumentID, Interval: "1d", ExecutionMode: "close_same_bar", TrainStartTimeMs: versionBars[0].OpenTime, TrainEndTimeMs: versionBars[1].OpenTime, DatasetHash: "p09-dataset", SettingVersion: "p09-study-setting-v1", SettingHash: compute.HashBytes(dynamicSettings), Settings: dynamicSettings, ComputeTaskID: &computeRoot.ID, MaterializationTaskID: &computeRoot.ID, ArtifactSetHash: "p09-artifact-set", CompletedAt: &completedAt}
+	if err := source.Create(&dynamicStudy).Error; err != nil {
+		t.Fatal(err)
+	}
+	artifactPayload := saasstore.JSONB(`{"schema_version":"p09-model-artifact-v1"}`)
+	dynamicArtifact := saasstore.DynamicModelArtifact{StudyID: dynamicStudy.ID, ArtifactKey: "horizon-20", SchemaVersion: "p09-model-artifact-v1", Route: "explainable_gam", Horizon: 20, TargetKind: "horizon_bundle", Lookback: 20, DatasetHash: dynamicStudy.DatasetHash, TrainingStartTimeMs: dynamicStudy.TrainStartTimeMs, TrainingEndTimeMs: dynamicStudy.TrainEndTimeMs, ContentHash: compute.HashBytes(artifactPayload), Payload: artifactPayload}
+	if err := source.Create(&dynamicArtifact).Error; err != nil {
+		t.Fatal(err)
+	}
+	predictionManifest := saasstore.JSONB(`[{"block_id":"oof-0000"}]`)
+	dynamicPrediction := saasstore.DynamicPredictionSnapshot{StudyID: dynamicStudy.ID, SnapshotKey: "p09-oof:backup", SchemaVersion: "p09-prediction-v1", ArtifactSetHash: dynamicStudy.ArtifactSetHash, DatasetHash: dynamicStudy.DatasetHash, PredictionCount: 2, StartTimeMs: dynamicStudy.TrainStartTimeMs, EndTimeMs: dynamicStudy.TrainEndTimeMs, BlockManifestHash: compute.HashBytes(predictionManifest), BlockManifest: predictionManifest, ContentHash: "p09-prediction-hash"}
+	if err := source.Create(&dynamicPrediction).Error; err != nil {
+		t.Fatal(err)
+	}
+	policyPayload := saasstore.JSONB(`{"schema_version":"p09-dynamic-policy-v1"}`)
+	spacePayload := saasstore.JSONB(`{"schema_version":"p09-dynamic-parameter-space-v1"}`)
+	dynamicPolicy := saasstore.DynamicPolicyArtifact{OwnerUserID: user.ID, StudyID: dynamicStudy.ID, PolicyKey: "p09-policy:backup", SchemaVersion: "p09-dynamic-policy-v1", ArtifactSetHash: dynamicStudy.ArtifactSetHash, PredictionSnapshotID: dynamicPrediction.ID, ContentHash: compute.HashBytes(policyPayload), Payload: policyPayload, ParameterSpaceVersion: "p09-dynamic-parameter-space-v1", ParameterSpaceHash: compute.HashBytes(spacePayload), ParameterSpace: spacePayload}
+	if err := source.Create(&dynamicPolicy).Error; err != nil {
+		t.Fatal(err)
+	}
+	materialManifest := saasstore.JSONB(`[{"block_id":"daily-diagnostics"}]`)
+	dynamicMaterialization := saasstore.DynamicMaterialization{OwnerUserID: user.ID, MaterializationKey: "p09-materialized:backup", SchemaVersion: "p09-prediction-v1", StudyID: dynamicStudy.ID, PredictionSnapshotID: dynamicPrediction.ID, PolicyArtifactID: dynamicPolicy.ID, ContentHash: "p09-materialized-hash", BlockManifestHash: compute.HashBytes(materialManifest), BlockManifest: materialManifest, BacktestResultID: &resultID, BacktestResultVersion: backtestresult.ResultSchemaVersion, BacktestResultContentHash: artifacts.ResultContentHash}
+	if err := source.Create(&dynamicMaterialization).Error; err != nil {
+		t.Fatal(err)
+	}
+	reportManifest := saasstore.JSONB(`[{"block_id":"model-validation"}]`)
+	dynamicReport := saasstore.DynamicModelReportSnapshot{StudyID: dynamicStudy.ID, SnapshotKey: "p09-report:backup", SchemaVersion: "p09-model-report-v1", FormulaVersion: "p09-report-formula-v1", ArtifactSetHash: dynamicStudy.ArtifactSetHash, PredictionSnapshotID: dynamicPrediction.ID, PolicyArtifactID: &dynamicPolicy.ID, MaterializationID: &dynamicMaterialization.ID, ActualStartTimeMs: dynamicStudy.TrainStartTimeMs, ActualEndTimeMs: dynamicStudy.TrainEndTimeMs, Completeness: "complete", BlockManifestHash: compute.HashBytes(reportManifest), BlockManifest: reportManifest, ContentHash: "p09-report-hash"}
+	if err := source.Create(&dynamicReport).Error; err != nil {
+		t.Fatal(err)
+	}
+	dynamicBlockPayload := saasstore.JSONB(`[{"mean_loss":0.5}]`)
+	dynamicBlock := saasstore.DynamicReportBlock{StudyID: dynamicStudy.ID, OwnerKind: "report_snapshot", OwnerID: dynamicReport.ID, BlockID: "model-validation", BlockKind: "model_validation", SchemaVersion: "p09-model-report-v1", FormulaVersion: "p09-report-formula-v1", BlockIndex: 0, StartTimeMs: dynamicStudy.TrainStartTimeMs, EndTimeMs: dynamicStudy.TrainEndTimeMs, PointCount: 1, ContentHash: compute.HashBytes(dynamicBlockPayload), Payload: dynamicBlockPayload}
+	if err := source.Create(&dynamicBlock).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Model(&dynamicStudy).Updates(map[string]any{"prediction_snapshot_id": dynamicPrediction.ID, "policy_artifact_id": dynamicPolicy.ID, "materialization_id": dynamicMaterialization.ID, "report_snapshot_id": dynamicReport.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	backup, err := buildIncrementalBackup(source, since)
 	if err != nil {
 		t.Fatal(err)
@@ -330,6 +370,9 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if backup.Version != backupVersion || len(backup.RobustnessStudies) != 1 || len(backup.RobustnessPoints) != 1 || len(backup.RobustnessSnapshots) != 1 || len(backup.GeneRecords) != 1 {
 		t.Fatalf("incomplete P08 backup closure: version=%d studies=%d points=%d snapshots=%d genes=%d", backup.Version, len(backup.RobustnessStudies), len(backup.RobustnessPoints), len(backup.RobustnessSnapshots), len(backup.GeneRecords))
+	}
+	if len(backup.DynamicModelStudies) != 1 || len(backup.DynamicModelArtifacts) != 1 || len(backup.DynamicPredictions) != 1 || len(backup.DynamicPolicies) != 1 || len(backup.DynamicMaterializations) != 1 || len(backup.DynamicReportSnapshots) != 1 || len(backup.DynamicReportBlocks) != 1 {
+		t.Fatalf("incomplete P09 backup closure: studies=%d artifacts=%d predictions=%d policies=%d materializations=%d reports=%d blocks=%d", len(backup.DynamicModelStudies), len(backup.DynamicModelArtifacts), len(backup.DynamicPredictions), len(backup.DynamicPolicies), len(backup.DynamicMaterializations), len(backup.DynamicReportSnapshots), len(backup.DynamicReportBlocks))
 	}
 	if len(backup.MarketSeries) != 1 || len(backup.MarketDataVersions) != 2 || len(backup.MarketVersionBars) != 2 ||
 		len(backup.MarketVersionSources) != 1 || len(backup.RecompositionPlans) != 1 || len(backup.RecompositionSegments) != 1 ||
@@ -392,6 +435,13 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if restoredRobustnessPoint.StudyID != robustnessStudy.ID || restoredRobustnessPoint.BacktestResultID == nil || *restoredRobustnessPoint.BacktestResultID != resultID || restoredRobustnessPoint.MetricsHash != robustnessPoint.MetricsHash {
 		t.Fatalf("restored P08 point = %+v", restoredRobustnessPoint)
+	}
+	var restoredDynamicMaterialization saasstore.DynamicMaterialization
+	if err := target.First(&restoredDynamicMaterialization, dynamicMaterialization.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredDynamicMaterialization.ContentHash != dynamicMaterialization.ContentHash || restoredDynamicMaterialization.BacktestResultID == nil || *restoredDynamicMaterialization.BacktestResultID != resultID {
+		t.Fatalf("restored P09 materialization = %+v", restoredDynamicMaterialization)
 	}
 }
 

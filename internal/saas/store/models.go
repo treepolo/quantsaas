@@ -1018,3 +1018,171 @@ type DailyExecutionSnapshot struct {
 	Volume       float64 `gorm:"type:numeric(30,10);not null;default:0"`
 	ObservedAtMs int64   `gorm:"not null;index"`
 }
+
+// DynamicModelStudy owns one immutable P09 training configuration and its
+// explicit P05 computation lifecycle. Model artifacts and reports are append-only.
+type DynamicModelStudy struct {
+	ID                    uint `gorm:"primaryKey"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	OwnerUserID           uint   `gorm:"not null;index;uniqueIndex:idx_dynamic_study_owner_key"`
+	StudyKey              string `gorm:"size:128;not null;uniqueIndex:idx_dynamic_study_owner_key"`
+	Name                  string `gorm:"size:180;not null"`
+	Status                string `gorm:"size:32;not null;index"`
+	Route                 string `gorm:"size:32;not null;index"`
+	InstrumentID          string `gorm:"size:32;not null;index"`
+	DataSource            string `gorm:"size:32;not null;index"`
+	Symbol                string `gorm:"size:64;not null"`
+	Interval              string `gorm:"size:16;not null;index"`
+	ExecutionMode         string `gorm:"size:32;not null;index"`
+	TrainStartTimeMs      int64  `gorm:"not null;index"`
+	TrainEndTimeMs        int64  `gorm:"not null;index"`
+	DatasetHash           string `gorm:"size:128;not null;index"`
+	SettingVersion        string `gorm:"size:48;not null"`
+	SettingHash           string `gorm:"size:128;not null;index"`
+	Settings              JSONB  `gorm:"type:jsonb;not null"`
+	ComputeTaskID         *uint  `gorm:"index"`
+	MaterializationTaskID *uint  `gorm:"index"`
+	ArtifactSetHash       string `gorm:"size:128;not null;default:''"`
+	PredictionSnapshotID  *uint  `gorm:"index"`
+	PolicyArtifactID      *uint  `gorm:"index"`
+	MaterializationID     *uint  `gorm:"index"`
+	ReportSnapshotID      *uint  `gorm:"index"`
+	ErrorCode             string `gorm:"size:64"`
+	ErrorMessage          string `gorm:"type:text"`
+	CompletedAt           *time.Time
+	ArchivedAt            *time.Time
+
+	Owner               User         `gorm:"foreignKey:OwnerUserID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	ComputeTask         *ComputeTask `gorm:"foreignKey:ComputeTaskID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
+	MaterializationTask *ComputeTask `gorm:"foreignKey:MaterializationTaskID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
+}
+
+type DynamicModelArtifact struct {
+	ID                  uint `gorm:"primaryKey"`
+	CreatedAt           time.Time
+	StudyID             uint   `gorm:"not null;index;uniqueIndex:idx_dynamic_artifact_identity"`
+	ArtifactKey         string `gorm:"size:128;not null;uniqueIndex:idx_dynamic_artifact_identity"`
+	SchemaVersion       string `gorm:"size:48;not null"`
+	Route               string `gorm:"size:32;not null;index"`
+	Horizon             int    `gorm:"not null;index"`
+	TargetKind          string `gorm:"size:32;not null;index"`
+	Lookback            int    `gorm:"not null"`
+	DatasetHash         string `gorm:"size:128;not null;index"`
+	TrainingStartTimeMs int64  `gorm:"not null"`
+	TrainingEndTimeMs   int64  `gorm:"not null"`
+	ContentHash         string `gorm:"size:128;not null;index"`
+	Payload             JSONB  `gorm:"type:jsonb;not null"`
+	ArchivedAt          *time.Time
+
+	Study DynamicModelStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
+type DynamicPredictionSnapshot struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	StudyID           uint   `gorm:"not null;index;uniqueIndex:idx_dynamic_prediction_identity"`
+	SnapshotKey       string `gorm:"size:128;not null;uniqueIndex:idx_dynamic_prediction_identity"`
+	SchemaVersion     string `gorm:"size:48;not null"`
+	ArtifactSetHash   string `gorm:"size:128;not null;index"`
+	DatasetHash       string `gorm:"size:128;not null;index"`
+	PredictionCount   int    `gorm:"not null"`
+	StartTimeMs       int64  `gorm:"not null;index"`
+	EndTimeMs         int64  `gorm:"not null;index"`
+	BlockManifestHash string `gorm:"size:128;not null"`
+	BlockManifest     JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash       string `gorm:"size:128;not null;index"`
+	ArchivedAt        *time.Time
+
+	Study DynamicModelStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
+type DynamicPolicyArtifact struct {
+	ID                    uint `gorm:"primaryKey"`
+	CreatedAt             time.Time
+	OwnerUserID           uint   `gorm:"not null;index;uniqueIndex:idx_dynamic_policy_owner_key"`
+	StudyID               uint   `gorm:"not null;index"`
+	PolicyKey             string `gorm:"size:128;not null;uniqueIndex:idx_dynamic_policy_owner_key"`
+	SchemaVersion         string `gorm:"size:48;not null"`
+	ArtifactSetHash       string `gorm:"size:128;not null;index"`
+	PredictionSnapshotID  uint   `gorm:"not null;index"`
+	ContentHash           string `gorm:"size:128;not null;index"`
+	Payload               JSONB  `gorm:"type:jsonb;not null"`
+	ParameterSpaceVersion string `gorm:"size:48;not null"`
+	ParameterSpaceHash    string `gorm:"size:128;not null;index"`
+	ParameterSpace        JSONB  `gorm:"type:jsonb;not null"`
+	ArchivedAt            *time.Time
+
+	Owner              User                      `gorm:"foreignKey:OwnerUserID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	Study              DynamicModelStudy         `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	PredictionSnapshot DynamicPredictionSnapshot `gorm:"foreignKey:PredictionSnapshotID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
+type DynamicMaterialization struct {
+	ID                        uint `gorm:"primaryKey"`
+	CreatedAt                 time.Time
+	OwnerUserID               uint   `gorm:"not null;index;uniqueIndex:idx_dynamic_materialization_owner_key"`
+	MaterializationKey        string `gorm:"size:128;not null;uniqueIndex:idx_dynamic_materialization_owner_key"`
+	SchemaVersion             string `gorm:"size:48;not null"`
+	StudyID                   uint   `gorm:"not null;index"`
+	PredictionSnapshotID      uint   `gorm:"not null;index"`
+	PolicyArtifactID          uint   `gorm:"not null;index"`
+	ContentHash               string `gorm:"size:128;not null;index"`
+	BlockManifestHash         string `gorm:"size:128;not null"`
+	BlockManifest             JSONB  `gorm:"type:jsonb;not null"`
+	BacktestResultID          *uint  `gorm:"index"`
+	BacktestResultVersion     string `gorm:"size:48"`
+	BacktestResultContentHash string `gorm:"size:128"`
+	ArchivedAt                *time.Time
+
+	Owner              User                      `gorm:"foreignKey:OwnerUserID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	Study              DynamicModelStudy         `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	PredictionSnapshot DynamicPredictionSnapshot `gorm:"foreignKey:PredictionSnapshotID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	PolicyArtifact     DynamicPolicyArtifact     `gorm:"foreignKey:PolicyArtifactID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	BacktestResult     *BacktestResult           `gorm:"foreignKey:BacktestResultID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
+type DynamicModelReportSnapshot struct {
+	ID                   uint `gorm:"primaryKey"`
+	CreatedAt            time.Time
+	StudyID              uint   `gorm:"not null;index;uniqueIndex:idx_dynamic_report_identity"`
+	SnapshotKey          string `gorm:"size:128;not null;uniqueIndex:idx_dynamic_report_identity"`
+	SchemaVersion        string `gorm:"size:48;not null"`
+	FormulaVersion       string `gorm:"size:48;not null"`
+	ArtifactSetHash      string `gorm:"size:128;not null;index"`
+	PredictionSnapshotID uint   `gorm:"not null;index"`
+	PolicyArtifactID     *uint  `gorm:"index"`
+	MaterializationID    *uint  `gorm:"index"`
+	ActualStartTimeMs    int64  `gorm:"not null;index"`
+	ActualEndTimeMs      int64  `gorm:"not null;index"`
+	Completeness         string `gorm:"size:32;not null;index"`
+	BlockManifestHash    string `gorm:"size:128;not null"`
+	BlockManifest        JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash          string `gorm:"size:128;not null;index"`
+	ArchivedAt           *time.Time
+
+	Study              DynamicModelStudy         `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	PredictionSnapshot DynamicPredictionSnapshot `gorm:"foreignKey:PredictionSnapshotID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
+// DynamicReportBlock stores immutable, lazy-loadable prediction, calibration,
+// state, effective-parameter and report payloads for P09 and the future N adapter.
+type DynamicReportBlock struct {
+	ID             uint `gorm:"primaryKey"`
+	CreatedAt      time.Time
+	StudyID        uint   `gorm:"not null;index"`
+	OwnerKind      string `gorm:"size:32;not null;index;uniqueIndex:idx_dynamic_report_block"`
+	OwnerID        uint   `gorm:"not null;index;uniqueIndex:idx_dynamic_report_block"`
+	BlockID        string `gorm:"size:96;not null;uniqueIndex:idx_dynamic_report_block"`
+	BlockKind      string `gorm:"size:48;not null;index"`
+	SchemaVersion  string `gorm:"size:48;not null"`
+	FormulaVersion string `gorm:"size:48;not null"`
+	BlockIndex     int    `gorm:"not null"`
+	StartTimeMs    int64  `gorm:"not null;index"`
+	EndTimeMs      int64  `gorm:"not null;index"`
+	PointCount     int    `gorm:"not null"`
+	ContentHash    string `gorm:"size:128;not null;index"`
+	Payload        JSONB  `gorm:"type:jsonb;not null"`
+
+	Study DynamicModelStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}

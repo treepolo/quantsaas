@@ -15,6 +15,7 @@ import (
 	"quantsaas/internal/marketversion"
 	"quantsaas/internal/saas/backtestresult"
 	"quantsaas/internal/saas/config"
+	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
 	"quantsaas/internal/saas/performancereport"
 	saasstore "quantsaas/internal/saas/store"
 
@@ -23,7 +24,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const backupVersion = 6
+const backupVersion = 7
 
 type incrementalBackup struct {
 	Version                  int                                      `json:"version"`
@@ -52,6 +53,13 @@ type incrementalBackup struct {
 	RobustnessStudies        []saasstore.RobustnessStudy              `json:"robustness_studies"`
 	RobustnessPoints         []saasstore.RobustnessEvaluationPoint    `json:"robustness_evaluation_points"`
 	RobustnessSnapshots      []saasstore.RobustnessAnalysisSnapshot   `json:"robustness_analysis_snapshots"`
+	DynamicModelStudies      []saasstore.DynamicModelStudy            `json:"dynamic_model_studies"`
+	DynamicModelArtifacts    []saasstore.DynamicModelArtifact         `json:"dynamic_model_artifacts"`
+	DynamicPredictions       []saasstore.DynamicPredictionSnapshot    `json:"dynamic_prediction_snapshots"`
+	DynamicPolicies          []saasstore.DynamicPolicyArtifact        `json:"dynamic_policy_artifacts"`
+	DynamicMaterializations  []saasstore.DynamicMaterialization       `json:"dynamic_materializations"`
+	DynamicReportSnapshots   []saasstore.DynamicModelReportSnapshot   `json:"dynamic_model_report_snapshots"`
+	DynamicReportBlocks      []saasstore.DynamicReportBlock           `json:"dynamic_report_blocks"`
 	MarketSeries             []saasstore.MarketSeries                 `json:"market_series"`
 	MarketDataVersions       []saasstore.MarketDataVersion            `json:"market_data_versions"`
 	MarketVersionBars        []saasstore.MarketDataVersionBar         `json:"market_data_version_bars"`
@@ -252,6 +260,27 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	if err := createdSince(db, since, &backup.RobustnessSnapshots); err != nil {
 		return backup, err
 	}
+	if err := changedSince(db, since, &backup.DynamicModelStudies); err != nil {
+		return backup, err
+	}
+	if err := createdSince(db, since, &backup.DynamicModelArtifacts); err != nil {
+		return backup, err
+	}
+	if err := createdSince(db, since, &backup.DynamicPredictions); err != nil {
+		return backup, err
+	}
+	if err := createdSince(db, since, &backup.DynamicPolicies); err != nil {
+		return backup, err
+	}
+	if err := createdSince(db, since, &backup.DynamicMaterializations); err != nil {
+		return backup, err
+	}
+	if err := createdSince(db, since, &backup.DynamicReportSnapshots); err != nil {
+		return backup, err
+	}
+	if err := createdSince(db, since, &backup.DynamicReportBlocks); err != nil {
+		return backup, err
+	}
 	if err := changedSince(db, since, &backup.MarketSeries); err != nil {
 		return backup, err
 	}
@@ -294,6 +323,9 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	if err := hydrateRobustnessClosure(db, &backup); err != nil {
 		return backup, err
 	}
+	if err := hydrateDynamicModelClosure(db, &backup); err != nil {
+		return backup, err
+	}
 	if err := hydrateComputeClosure(db, &backup); err != nil {
 		return backup, err
 	}
@@ -331,6 +363,13 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	backup.Counts["robustness_studies"] = len(backup.RobustnessStudies)
 	backup.Counts["robustness_evaluation_points"] = len(backup.RobustnessPoints)
 	backup.Counts["robustness_analysis_snapshots"] = len(backup.RobustnessSnapshots)
+	backup.Counts["dynamic_model_studies"] = len(backup.DynamicModelStudies)
+	backup.Counts["dynamic_model_artifacts"] = len(backup.DynamicModelArtifacts)
+	backup.Counts["dynamic_prediction_snapshots"] = len(backup.DynamicPredictions)
+	backup.Counts["dynamic_policy_artifacts"] = len(backup.DynamicPolicies)
+	backup.Counts["dynamic_materializations"] = len(backup.DynamicMaterializations)
+	backup.Counts["dynamic_model_report_snapshots"] = len(backup.DynamicReportSnapshots)
+	backup.Counts["dynamic_report_blocks"] = len(backup.DynamicReportBlocks)
 	backup.Counts["market_series"] = len(backup.MarketSeries)
 	backup.Counts["market_data_versions"] = len(backup.MarketDataVersions)
 	backup.Counts["market_data_version_bars"] = len(backup.MarketVersionBars)
@@ -414,6 +453,139 @@ func hydrateRobustnessClosure(db *gorm.DB, backup *incrementalBackup) error {
 		backup.BacktestResults = mergeBacktestResults(backup.BacktestResults, rows)
 	}
 	return nil
+}
+
+func hydrateDynamicModelClosure(db *gorm.DB, backup *incrementalBackup) error {
+	if len(backup.DynamicModelStudies)+len(backup.DynamicModelArtifacts)+len(backup.DynamicPredictions)+len(backup.DynamicPolicies)+len(backup.DynamicMaterializations)+len(backup.DynamicReportSnapshots)+len(backup.DynamicReportBlocks) == 0 {
+		return nil
+	}
+	studyIDs := map[uint]struct{}{}
+	for _, row := range backup.DynamicModelStudies {
+		studyIDs[row.ID] = struct{}{}
+	}
+	for _, row := range backup.DynamicModelArtifacts {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	for _, row := range backup.DynamicPredictions {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	for _, row := range backup.DynamicPolicies {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	for _, row := range backup.DynamicMaterializations {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	for _, row := range backup.DynamicReportSnapshots {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	for _, row := range backup.DynamicReportBlocks {
+		studyIDs[row.StudyID] = struct{}{}
+	}
+	ids := uintSetValues(studyIDs)
+	if len(ids) == 0 {
+		return nil
+	}
+	var studies []saasstore.DynamicModelStudy
+	if err := db.Where("id IN ?", ids).Find(&studies).Error; err != nil {
+		return err
+	}
+	backup.DynamicModelStudies = mergeByUintID(backup.DynamicModelStudies, studies, func(row saasstore.DynamicModelStudy) uint { return row.ID })
+	loadChildren := func(target any) error { return db.Where("study_id IN ?", ids).Find(target).Error }
+	var artifacts []saasstore.DynamicModelArtifact
+	if err := loadChildren(&artifacts); err != nil {
+		return err
+	}
+	var predictions []saasstore.DynamicPredictionSnapshot
+	if err := loadChildren(&predictions); err != nil {
+		return err
+	}
+	var policies []saasstore.DynamicPolicyArtifact
+	if err := loadChildren(&policies); err != nil {
+		return err
+	}
+	var materializations []saasstore.DynamicMaterialization
+	if err := loadChildren(&materializations); err != nil {
+		return err
+	}
+	var reports []saasstore.DynamicModelReportSnapshot
+	if err := loadChildren(&reports); err != nil {
+		return err
+	}
+	var blocks []saasstore.DynamicReportBlock
+	if err := loadChildren(&blocks); err != nil {
+		return err
+	}
+	backup.DynamicModelArtifacts = mergeByUintID(backup.DynamicModelArtifacts, artifacts, func(row saasstore.DynamicModelArtifact) uint { return row.ID })
+	backup.DynamicPredictions = mergeByUintID(backup.DynamicPredictions, predictions, func(row saasstore.DynamicPredictionSnapshot) uint { return row.ID })
+	backup.DynamicPolicies = mergeByUintID(backup.DynamicPolicies, policies, func(row saasstore.DynamicPolicyArtifact) uint { return row.ID })
+	backup.DynamicMaterializations = mergeByUintID(backup.DynamicMaterializations, materializations, func(row saasstore.DynamicMaterialization) uint { return row.ID })
+	backup.DynamicReportSnapshots = mergeByUintID(backup.DynamicReportSnapshots, reports, func(row saasstore.DynamicModelReportSnapshot) uint { return row.ID })
+	backup.DynamicReportBlocks = mergeByUintID(backup.DynamicReportBlocks, blocks, func(row saasstore.DynamicReportBlock) uint { return row.ID })
+	taskIDs, backtestIDs, geneIDs := map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}
+	for _, study := range backup.DynamicModelStudies {
+		if study.ComputeTaskID != nil {
+			taskIDs[*study.ComputeTaskID] = struct{}{}
+		}
+		if study.MaterializationTaskID != nil {
+			taskIDs[*study.MaterializationTaskID] = struct{}{}
+		}
+		var setting dynamicparamsvc.StudySetting
+		if json.Unmarshal(study.Settings, &setting) == nil && setting.Request.GenomeID != 0 {
+			geneIDs[setting.Request.GenomeID] = struct{}{}
+		}
+		var klines []saasstore.KLine
+		if err := db.Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ? AND open_time >= ? AND open_time <= ?", study.InstrumentID, study.DataSource, study.Symbol, study.Interval, study.TrainStartTimeMs, study.TrainEndTimeMs).Find(&klines).Error; err != nil {
+			return err
+		}
+		backup.KLines = mergeKLines(backup.KLines, klines)
+	}
+	for _, materialization := range backup.DynamicMaterializations {
+		if materialization.BacktestResultID != nil {
+			backtestIDs[*materialization.BacktestResultID] = struct{}{}
+		}
+	}
+	if len(taskIDs) > 0 {
+		var tasks []saasstore.ComputeTask
+		if err := db.Where("id IN ?", uintKeys(taskIDs)).Find(&tasks).Error; err != nil {
+			return err
+		}
+		backup.ComputeTasks = mergeComputeTasks(backup.ComputeTasks, tasks)
+	}
+	if len(backtestIDs) > 0 {
+		var results []saasstore.BacktestResult
+		if err := db.Where("id IN ?", uintKeys(backtestIDs)).Find(&results).Error; err != nil {
+			return err
+		}
+		backup.BacktestResults = mergeByUintID(backup.BacktestResults, results, func(row saasstore.BacktestResult) uint { return row.ID })
+	}
+	if len(geneIDs) > 0 {
+		var genes []saasstore.GeneRecord
+		if err := db.Unscoped().Where("id IN ?", uintKeys(geneIDs)).Find(&genes).Error; err != nil {
+			return err
+		}
+		backup.GeneRecords = mergeByUintID(backup.GeneRecords, genes, func(row saasstore.GeneRecord) uint { return row.ID })
+	}
+	return nil
+}
+
+func mergeByUintID[T any](left, right []T, id func(T) uint) []T {
+	rows := make(map[uint]T, len(left)+len(right))
+	for _, row := range left {
+		rows[id(row)] = row
+	}
+	for _, row := range right {
+		rows[id(row)] = row
+	}
+	keys := make([]uint, 0, len(rows))
+	for key := range rows {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	result := make([]T, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, rows[key])
+	}
+	return result
 }
 
 func uintSetValues(values map[uint]struct{}) []uint {
@@ -646,6 +818,27 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 		if err := saveAll(tx, backup.RobustnessSnapshots); err != nil {
 			return err
 		}
+		if err := saveAll(tx, backup.DynamicModelStudies); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.DynamicModelArtifacts); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.DynamicPredictions); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.DynamicPolicies); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.DynamicMaterializations); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.DynamicReportSnapshots); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.DynamicReportBlocks); err != nil {
+			return err
+		}
 		if err := saveAll(tx, backup.MarketSeries); err != nil {
 			return err
 		}
@@ -697,11 +890,98 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 		if err := verifyRestoredRobustness(tx, backup); err != nil {
 			return err
 		}
+		if err := verifyRestoredDynamicModels(tx, backup); err != nil {
+			return err
+		}
 		if err := verifyRestoredMarketVersions(tx, backup); err != nil {
 			return err
 		}
 		return resetSequences(tx)
 	})
+}
+
+func verifyRestoredDynamicModels(db *gorm.DB, backup incrementalBackup) error {
+	for _, saved := range backup.DynamicModelStudies {
+		var study saasstore.DynamicModelStudy
+		if err := db.First(&study, saved.ID).Error; err != nil {
+			return err
+		}
+		if study.StudyKey != saved.StudyKey || study.SettingHash != saved.SettingHash || study.DatasetHash != saved.DatasetHash || study.ArtifactSetHash != saved.ArtifactSetHash {
+			return fmt.Errorf("P09 研究 %d 還原後身分不一致", saved.ID)
+		}
+		for _, taskID := range []*uint{study.ComputeTaskID, study.MaterializationTaskID} {
+			if taskID != nil {
+				var count int64
+				if err := db.Model(&saasstore.ComputeTask{}).Where("id = ?", *taskID).Count(&count).Error; err != nil || count != 1 {
+					return fmt.Errorf("P09 研究 %d 缺少計算任務", saved.ID)
+				}
+			}
+		}
+	}
+	for _, saved := range backup.DynamicModelArtifacts {
+		var row saasstore.DynamicModelArtifact
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.DatasetHash != saved.DatasetHash {
+			return fmt.Errorf("P09 模型 artifact %d hash 不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.DynamicPredictions {
+		var row saasstore.DynamicPredictionSnapshot
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.BlockManifestHash != saved.BlockManifestHash {
+			return fmt.Errorf("P09 預測快照 %d hash 不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.DynamicPolicies {
+		var row saasstore.DynamicPolicyArtifact
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.ParameterSpaceHash != saved.ParameterSpaceHash {
+			return fmt.Errorf("P09 政策 %d hash 不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.DynamicMaterializations {
+		var row saasstore.DynamicMaterialization
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.BlockManifestHash != saved.BlockManifestHash {
+			return fmt.Errorf("P09 物化結果 %d hash 不一致", saved.ID)
+		}
+		if row.BacktestResultID != nil {
+			var result saasstore.BacktestResult
+			if err := db.First(&result, *row.BacktestResultID).Error; err != nil {
+				return err
+			}
+			if result.ContentHash != row.BacktestResultContentHash {
+				return fmt.Errorf("P09 物化結果 %d 回測引用不一致", saved.ID)
+			}
+		}
+	}
+	for _, saved := range backup.DynamicReportSnapshots {
+		var row saasstore.DynamicModelReportSnapshot
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.BlockManifestHash != saved.BlockManifestHash {
+			return fmt.Errorf("P09 報告快照 %d hash 不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.DynamicReportBlocks {
+		var row saasstore.DynamicReportBlock
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.PointCount != saved.PointCount {
+			return fmt.Errorf("P09 報告區塊 %d hash 不一致", saved.ID)
+		}
+	}
+	return nil
 }
 
 func verifyRestoredRobustness(db *gorm.DB, backup incrementalBackup) error {
@@ -1623,6 +1903,13 @@ func resetSequences(db *gorm.DB) error {
 		"robustness_studies":              "id",
 		"robustness_evaluation_points":    "id",
 		"robustness_analysis_snapshots":   "id",
+		"dynamic_model_studies":           "id",
+		"dynamic_model_artifacts":         "id",
+		"dynamic_prediction_snapshots":    "id",
+		"dynamic_policy_artifacts":        "id",
+		"dynamic_materializations":        "id",
+		"dynamic_model_report_snapshots":  "id",
+		"dynamic_report_blocks":           "id",
 		"market_series":                   "id",
 		"market_data_versions":            "id",
 		"market_data_version_bars":        "id",

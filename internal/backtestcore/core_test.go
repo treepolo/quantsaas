@@ -239,6 +239,40 @@ func TestSigmoidDynamicParametersAreValidatedAndTraceable(t *testing.T) {
 	}
 }
 
+func TestFixedDynamicProviderMatchesStaticP02Execution(t *testing.T) {
+	bars := flatCoreBars(140)
+	params := sigmoiddca.DefaultParams()
+	params.Spawn.Policy.InitialUSDT = 1000
+	params.Spawn.Policy.MonthlyInjectUSDT = 50
+	spec := Spec{Symbol: "TEST", Interval: "1d", ExecutionMode: ExecutionModeCloseNextOpen, InitialCapital: 1000, MonthlyContribution: 50, EvaluationStartMs: bars[112].OpenTime}
+	staticResult, err := RunSigmoidDCA(SigmoidDCARequest{Spec: spec, Bars: bars, Params: params})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynamicResult, err := RunSigmoidDCA(SigmoidDCARequest{Spec: spec, Bars: bars, Params: params, ParameterProvider: func(ParameterContext) (EffectiveParameters, error) {
+		return EffectiveParameters{Chromosome: params.Chromosome, Metadata: ParameterMetadata{FallbackEvent: "fixed"}}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coreAssertNear(t, "fixed final assets", dynamicResult.FinalAssets, staticResult.FinalAssets)
+	coreAssertNear(t, "fixed return", dynamicResult.TotalReturn, staticResult.TotalReturn)
+	coreAssertNear(t, "fixed practical final assets", dynamicResult.PracticalFinalAssets, staticResult.PracticalFinalAssets)
+	if dynamicResult.TradeCount != staticResult.TradeCount || len(dynamicResult.Path) != len(staticResult.Path) {
+		t.Fatalf("fixed provider changed execution: static trades/path=%d/%d dynamic=%d/%d", staticResult.TradeCount, len(staticResult.Path), dynamicResult.TradeCount, len(dynamicResult.Path))
+	}
+	for index := range staticResult.Path {
+		staticPoint, dynamicPoint := staticResult.Path[index], dynamicResult.Path[index]
+		coreAssertNear(t, "fixed total equity", dynamicPoint.TotalEquity, staticPoint.TotalEquity)
+		coreAssertNear(t, "fixed target weight", dynamicPoint.PracticalTargetWeight, staticPoint.PracticalTargetWeight)
+		coreAssertNear(t, "fixed cash", dynamicPoint.Cash, staticPoint.Cash)
+		coreAssertNear(t, "fixed quantity", dynamicPoint.AssetQuantity, staticPoint.AssetQuantity)
+		if dynamicPoint.Trades != staticPoint.Trades || dynamicPoint.PracticalTrades != staticPoint.PracticalTrades {
+			t.Fatalf("fixed provider changed trades at path index %d", index)
+		}
+	}
+}
+
 func TestSigmoidDynamicParameterProviderErrorRejectsRun(t *testing.T) {
 	params := sigmoiddca.DefaultParams()
 	_, err := RunSigmoidDCA(SigmoidDCARequest{

@@ -14,6 +14,7 @@ import (
 	"quantsaas/internal/saas/auth"
 	"quantsaas/internal/saas/computetask"
 	"quantsaas/internal/saas/config"
+	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/instance"
 	"quantsaas/internal/saas/marketdata"
@@ -32,18 +33,19 @@ type AgentStatusProvider interface {
 }
 
 type RouterDeps struct {
-	Config           config.Config
-	DB               *gorm.DB
-	Redis            *saasstore.RedisClient
-	Auth             *auth.Service
-	InstanceManager  *instance.Manager
-	EpochService     *epoch.Service
-	EvolutionHandler *EvolutionHandler
-	ComputeTasks     *computetask.Service
-	MarketData       *marketdata.Service
-	Robustness       *robustnesssvc.Service
-	AgentStatus      AgentStatusProvider
-	WSHandler        gin.HandlerFunc
+	Config            config.Config
+	DB                *gorm.DB
+	Redis             *saasstore.RedisClient
+	Auth              *auth.Service
+	InstanceManager   *instance.Manager
+	EpochService      *epoch.Service
+	EvolutionHandler  *EvolutionHandler
+	ComputeTasks      *computetask.Service
+	MarketData        *marketdata.Service
+	Robustness        *robustnesssvc.Service
+	DynamicParameters *dynamicparamsvc.Service
+	AgentStatus       AgentStatusProvider
+	WSHandler         gin.HandlerFunc
 }
 
 func NewRouter(deps RouterDeps) *gin.Engine {
@@ -92,6 +94,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		robustnessStudies = robustnesssvc.NewService(deps.DB, deps.ComputeTasks)
 	}
 	robustnessHandler := NewRobustnessHandler(robustnessStudies)
+	dynamicParameters := deps.DynamicParameters
+	if dynamicParameters == nil {
+		dynamicParameters = dynamicparamsvc.NewService(deps.DB, deps.ComputeTasks)
+	}
+	dynamicParameterHandler := NewDynamicParameterHandler(dynamicParameters)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
@@ -155,6 +162,12 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.GET("/robustness/studies", robustnessHandler.List)
 	lab.GET("/robustness/studies/:id", robustnessHandler.Get)
 	lab.POST("/robustness/studies/:id/analyze", robustnessHandler.Analyze)
+	lab.POST("/dynamic-parameters/studies/preview", dynamicParameterHandler.Preview)
+	lab.POST("/dynamic-parameters/studies", dynamicParameterHandler.Create)
+	lab.GET("/dynamic-parameters/studies", dynamicParameterHandler.List)
+	lab.GET("/dynamic-parameters/studies/:id", dynamicParameterHandler.Get)
+	lab.POST("/dynamic-parameters/studies/:id/materialize", dynamicParameterHandler.Materialize)
+	lab.GET("/dynamic-parameters/studies/:id/report-blocks/:blockID", dynamicParameterHandler.ReportBlock)
 	if deps.ComputeTasks != nil {
 		computeTasks := NewComputeTaskHandler(deps.ComputeTasks)
 		lab.GET("/compute-tasks/limits", computeTasks.Limits)
