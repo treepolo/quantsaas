@@ -18,6 +18,7 @@ import { RobustnessPage } from "../features/robustness/RobustnessPage";
 import { DynamicParametersPage } from "../features/dynamicparameters/DynamicParametersPage";
 import { ParameterResearchPage } from "../features/parameterresearch/ParameterResearchPage";
 import { ControlResearchPage } from "../features/controlresearch/ControlResearchPage";
+import { KlineInversePage } from "../features/klineinverse/KlineInversePage";
 
 function AuthGate() {
   const { user, loading } = useAuth();
@@ -69,6 +70,7 @@ export function AppRouter() {
                 <Route path="status" element={<MarketStatusPage />} />
                 <Route path="backtesting" element={<BacktestingPage />} />
 				<Route path="control-analysis" element={<ControlResearchPage />} />
+				<Route path="kline-inverse" element={<KlineInversePage />} />
                 <Route path="robustness" element={<RobustnessPage />} />
                 <Route path="dynamic-parameters" element={<DynamicParametersPage />} />
                 <Route path="parameter-research" element={<ParameterResearchPage />} />

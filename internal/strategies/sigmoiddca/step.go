@@ -6,7 +6,13 @@ import (
 	"quantsaas/internal/quant"
 )
 
-const minStrategyBars = quant.MicroVolRatioLongBars + 1
+const (
+	// RequiredHistoryBars is the finite amount of history needed before the
+	// first evaluated bar. Research callers consume this metadata instead of
+	// duplicating or guessing the strategy's indicator windows.
+	RequiredHistoryBars = quant.MicroVolRatioLongBars
+	minStrategyBars     = RequiredHistoryBars + 1
+)
 
 func Step(input quant.StrategyInput, params Params) quant.StrategyOutput {
 	state := DecodeRuntimeState(input.RuntimeState)

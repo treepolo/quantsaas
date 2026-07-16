@@ -18,6 +18,7 @@ import (
 	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/instance"
+	klineinversesvc "quantsaas/internal/saas/klineinverse"
 	"quantsaas/internal/saas/marketdata"
 	parameterresearchsvc "quantsaas/internal/saas/parameterresearch"
 	robustnesssvc "quantsaas/internal/saas/robustness"
@@ -48,6 +49,7 @@ type RouterDeps struct {
 	DynamicParameters *dynamicparamsvc.Service
 	ParameterResearch *parameterresearchsvc.Service
 	ControlResearch   *controlresearchsvc.Service
+	KlineInverse      *klineinversesvc.Service
 	AgentStatus       AgentStatusProvider
 	WSHandler         gin.HandlerFunc
 }
@@ -113,6 +115,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		controlResearch = controlresearchsvc.NewService(deps.DB, deps.ComputeTasks, parameterResearch)
 	}
 	controlResearchHandler := NewControlResearchHandler(controlResearch)
+	klineInverse := deps.KlineInverse
+	if klineInverse == nil {
+		klineInverse = klineinversesvc.NewService(deps.DB, deps.ComputeTasks, nil, parameterResearch)
+	}
+	klineInverseHandler := NewKlineInverseHandler(klineInverse, deps.DB)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
@@ -235,6 +242,28 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	controlResearchAPI.GET("/random-batches/:id/records", controlResearchHandler.RandomRecords)
 	controlResearchAPI.DELETE("/random-batches/:id", controlResearchHandler.DeleteUnusedBatch)
 	controlResearchAPI.GET("/evaluations/:evaluationID/path", controlResearchHandler.PathBlock)
+	klineInverseAPI := lab.Group("/kline-inverse")
+	klineInverseAPI.POST("/studies/drafts", klineInverseHandler.CreateDraft)
+	klineInverseAPI.GET("/studies", klineInverseHandler.List)
+	klineInverseAPI.GET("/studies/:id", klineInverseHandler.Get)
+	klineInverseAPI.POST("/studies/:id/plan", klineInverseHandler.Plan)
+	klineInverseAPI.POST("/studies/:id/start", klineInverseHandler.Start)
+	klineInverseAPI.POST("/studies/:id/start-next", klineInverseHandler.StartNext)
+	klineInverseAPI.POST("/studies/:id/archive", klineInverseHandler.Archive)
+	klineInverseAPI.POST("/studies/:id/batches/:batchId/cancel", klineInverseHandler.Cancel)
+	klineInverseAPI.POST("/studies/:id/batches/:batchId/resume", klineInverseHandler.Resume)
+	klineInverseAPI.POST("/studies/:id/search-extensions/plan", klineInverseHandler.PlanExtension)
+	klineInverseAPI.POST("/studies/:id/search-extensions/start", klineInverseHandler.StartExtension)
+	klineInverseAPI.POST("/studies/:id/probes/plan", klineInverseHandler.PlanProbe)
+	klineInverseAPI.POST("/studies/:id/probes/start", klineInverseHandler.StartProbe)
+	klineInverseAPI.GET("/studies/:id/overview", klineInverseHandler.Overview)
+	klineInverseAPI.GET("/studies/:id/map", klineInverseHandler.Map)
+	klineInverseAPI.GET("/studies/:id/paths", klineInverseHandler.Paths)
+	klineInverseAPI.GET("/studies/:id/paths/:pathId", klineInverseHandler.Path)
+	klineInverseAPI.GET("/studies/:id/paths/:pathId/lineage", klineInverseHandler.Lineage)
+	klineInverseAPI.GET("/studies/:id/anchors/:pathId/boundary", klineInverseHandler.Boundary)
+	klineInverseAPI.POST("/studies/:id/paths/:pathId/performance-reports", klineInverseHandler.CreatePerformanceReport)
+	klineInverseAPI.GET("/studies/:id/comparison", klineInverseHandler.Comparison)
 	if deps.ComputeTasks != nil {
 		computeTasks := NewComputeTaskHandler(deps.ComputeTasks)
 		lab.GET("/compute-tasks/limits", computeTasks.Limits)

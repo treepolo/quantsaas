@@ -1609,3 +1609,211 @@ type ControlSnapshotMember struct {
 	EvaluationID       uint   `gorm:"not null;index;uniqueIndex:idx_control_snapshot_member"`
 	RepresentativeRole string `gorm:"size:32"`
 }
+
+// KlineInverseStudy is the immutable P12 research container. Canonical stores
+// every result-affecting setting; lifecycle fields only project append-only
+// batch progress.
+type KlineInverseStudy struct {
+	ID                     uint `gorm:"primaryKey"`
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	OwnerUserID            uint       `gorm:"not null;index"`
+	StudyHash              string     `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion          string     `gorm:"size:48;not null"`
+	Name                   string     `gorm:"size:180;not null"`
+	Notes                  string     `gorm:"type:text"`
+	Tags                   JSONB      `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	Status                 string     `gorm:"size:32;not null;index"`
+	CurrentStage           string     `gorm:"size:48;not null;default:draft"`
+	SourceKind             string     `gorm:"size:32;not null;index"`
+	SourceVersion          string     `gorm:"size:48;not null"`
+	SourceContentHash      string     `gorm:"size:128;not null;index"`
+	SourceGenomeID         *uint      `gorm:"index"`
+	SourceCandidateID      *uint      `gorm:"index"`
+	SourceBacktestResultID *uint      `gorm:"index"`
+	ParameterHash          string     `gorm:"size:128;not null;index"`
+	InstrumentID           string     `gorm:"size:32;not null;index"`
+	DataSource             string     `gorm:"size:32;not null;index"`
+	Symbol                 string     `gorm:"size:64;not null;index"`
+	Interval               string     `gorm:"size:16;not null;index"`
+	ExecutionMode          string     `gorm:"size:32;not null;index"`
+	WarmupLength           int        `gorm:"not null"`
+	EvaluationLength       int        `gorm:"not null"`
+	EvaluationStartMs      int64      `gorm:"not null;index"`
+	InitialCapital         float64    `gorm:"type:double precision;not null"`
+	FeeRate                float64    `gorm:"type:double precision;not null"`
+	SlippageRate           float64    `gorm:"type:double precision;not null"`
+	InitialBudget          int        `gorm:"not null"`
+	CellCount              int        `gorm:"not null"`
+	ParentCapacity         int        `gorm:"not null"`
+	RootSeed               int64      `gorm:"not null"`
+	BoundsHash             string     `gorm:"size:128;not null;index"`
+	CalibrationSourceHash  string     `gorm:"size:128;not null;index"`
+	CanonicalHash          string     `gorm:"size:128;not null;index"`
+	Canonical              JSONB      `gorm:"type:jsonb;not null"`
+	CurrentSnapshotID      *uint      `gorm:"index"`
+	ArchivedAt             *time.Time `gorm:"index"`
+	StartedAt              *time.Time
+	CompletedAt            *time.Time
+	ErrorMessage           string `gorm:"type:text"`
+}
+
+type KlineInverseCalibration struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	StudyID           uint   `gorm:"not null;uniqueIndex"`
+	SchemaVersion     string `gorm:"size:48;not null"`
+	SourceSnapshot    JSONB  `gorm:"type:jsonb;not null"`
+	SourceContentHash string `gorm:"size:128;not null;index"`
+	ObservedBounds    JSONB  `gorm:"type:jsonb;not null"`
+	FinalBounds       JSONB  `gorm:"type:jsonb;not null"`
+	FeatureRanges     JSONB  `gorm:"type:jsonb;not null"`
+	Centers           JSONB  `gorm:"type:jsonb;not null"`
+	CalibrationSeed   int64  `gorm:"not null"`
+	CalibrationCount  int    `gorm:"not null"`
+	CellCount         int    `gorm:"not null"`
+	ParentCapacity    int    `gorm:"not null"`
+	GeneratorVersion  string `gorm:"size:64;not null"`
+	FeatureVersion    string `gorm:"size:64;not null"`
+	CVTVersion        string `gorm:"size:64;not null"`
+	ContentHash       string `gorm:"size:128;not null;index"`
+}
+
+type KlineInverseBatch struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	StudyID            uint   `gorm:"not null;index;uniqueIndex:idx_kline_inverse_batch_ordinal"`
+	Ordinal            int    `gorm:"not null;uniqueIndex:idx_kline_inverse_batch_ordinal"`
+	BatchKey           string `gorm:"size:128;not null;uniqueIndex"`
+	BatchType          string `gorm:"size:32;not null;index"`
+	SchemaVersion      string `gorm:"size:48;not null"`
+	ManifestHash       string `gorm:"size:128;not null;index"`
+	Manifest           JSONB  `gorm:"type:jsonb;not null"`
+	CompatibilityHash  string `gorm:"size:128;not null;index"`
+	Budget             int    `gorm:"not null"`
+	RNGStart           int64  `gorm:"not null"`
+	RNGEnd             int64  `gorm:"not null"`
+	CheckpointPosition int64  `gorm:"not null;default:0"`
+	CheckpointHash     string `gorm:"size:128"`
+	Checkpoint         JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ComputeTaskID      *uint  `gorm:"index"`
+	Status             string `gorm:"size:32;not null;index"`
+	CompletedCount     int    `gorm:"not null;default:0"`
+	CacheHitCount      int    `gorm:"not null;default:0"`
+	ErrorCount         int    `gorm:"not null;default:0"`
+	ErrorMessage       string `gorm:"type:text"`
+	StartedAt          *time.Time
+	CompletedAt        *time.Time
+}
+
+type KlineInversePath struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	PathHash          string `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion     string `gorm:"size:48;not null"`
+	CoordinateVersion string `gorm:"size:64;not null"`
+	WarmupLength      int    `gorm:"not null"`
+	EvaluationLength  int    `gorm:"not null"`
+	StartTimeMs       int64  `gorm:"not null;index"`
+	EvaluationStartMs int64  `gorm:"not null;index"`
+	EndTimeMs         int64  `gorm:"not null;index"`
+	DatesHash         string `gorm:"size:128;not null;index"`
+	CoordinatesHash   string `gorm:"size:128;not null;index"`
+	OHLCContentHash   string `gorm:"size:128;not null;index"`
+	Coordinates       JSONB  `gorm:"type:jsonb;not null"`
+	OHLC              JSONB  `gorm:"type:jsonb;not null"`
+	Permanent         bool   `gorm:"not null;default:false;index"`
+	PermanentReason   string `gorm:"size:64"`
+}
+
+type KlineInverseEvaluation struct {
+	ID                        uint `gorm:"primaryKey"`
+	CreatedAt                 time.Time
+	StudyID                   uint    `gorm:"not null;index;uniqueIndex:idx_kline_inverse_evaluation"`
+	PathID                    uint    `gorm:"not null;index;uniqueIndex:idx_kline_inverse_evaluation"`
+	EvaluationKey             string  `gorm:"size:128;not null;uniqueIndex:idx_kline_inverse_evaluation"`
+	BatchID                   uint    `gorm:"not null;index"`
+	SequenceIndex             int     `gorm:"not null;index"`
+	CellIndex                 int     `gorm:"not null;index"`
+	Status                    string  `gorm:"size:32;not null;index"`
+	OutcomeState              string  `gorm:"size:40;not null;index"`
+	PassA                     bool    `gorm:"not null;index"`
+	PassB                     bool    `gorm:"not null;index"`
+	QRelative                 float64 `gorm:"type:double precision;not null"`
+	QAbsolute                 float64 `gorm:"type:double precision;not null"`
+	FeaturesVersion           string  `gorm:"size:64;not null"`
+	FeaturesHash              string  `gorm:"size:128;not null;index"`
+	Features                  JSONB   `gorm:"type:jsonb;not null"`
+	BacktestResultID          uint    `gorm:"not null;index"`
+	BacktestResultVersion     string  `gorm:"size:48;not null"`
+	BacktestResultContentHash string  `gorm:"size:128;not null;index"`
+	ReusedBacktest            bool    `gorm:"not null;default:false"`
+	Permanent                 bool    `gorm:"not null;default:false;index"`
+	ErrorType                 string  `gorm:"size:64"`
+	ErrorMessage              string  `gorm:"type:text"`
+}
+
+type KlineInverseLineageEdge struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	StudyID            uint    `gorm:"not null;index;uniqueIndex:idx_kline_inverse_lineage"`
+	BatchID            uint    `gorm:"not null;index;uniqueIndex:idx_kline_inverse_lineage"`
+	SequenceIndex      int     `gorm:"not null;uniqueIndex:idx_kline_inverse_lineage"`
+	ChildPathID        uint    `gorm:"not null;index;uniqueIndex:idx_kline_inverse_lineage"`
+	ParentPathID       *uint   `gorm:"index;uniqueIndex:idx_kline_inverse_lineage"`
+	ParentOrdinal      int     `gorm:"not null;default:0;uniqueIndex:idx_kline_inverse_lineage"`
+	RequestedOperation string  `gorm:"size:32;not null"`
+	ActualOperation    string  `gorm:"size:32;not null"`
+	Scale              int     `gorm:"not null;default:0"`
+	Amplitude          float64 `gorm:"type:double precision;not null;default:0"`
+	ChangedStart       int     `gorm:"not null;default:0"`
+	ChangedLength      int     `gorm:"not null;default:0"`
+	ChangedChannels    JSONB   `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	RNGPosition        int64   `gorm:"not null"`
+	VariationVersion   string  `gorm:"size:64;not null"`
+}
+
+type KlineInverseArchiveSnapshot struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	StudyID            uint   `gorm:"not null;index"`
+	BatchID            uint   `gorm:"not null;uniqueIndex"`
+	SnapshotKey        string `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion      string `gorm:"size:48;not null"`
+	SearchVersion      string `gorm:"size:64;not null"`
+	StatisticsVersion  string `gorm:"size:64;not null"`
+	EvaluatedCount     int    `gorm:"not null"`
+	TouchedCellCount   int    `gorm:"not null"`
+	ACellCount         int    `gorm:"not null"`
+	BCellCount         int    `gorm:"not null"`
+	PermanentPathCount int    `gorm:"not null"`
+	LineageEdgeCount   int    `gorm:"not null"`
+	Summary            JSONB  `gorm:"type:jsonb;not null"`
+	ActiveParents      JSONB  `gorm:"type:jsonb;not null"`
+	CellSummary        JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash        string `gorm:"size:128;not null;index"`
+}
+
+type KlineInverseProbeBatch struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	StudyID           uint   `gorm:"not null;index"`
+	BatchID           uint   `gorm:"not null;uniqueIndex"`
+	AnchorPathID      uint   `gorm:"not null;index"`
+	CompatibilityHash string `gorm:"size:128;not null;index"`
+	ManifestHash      string `gorm:"size:128;not null;index"`
+	Manifest          JSONB  `gorm:"type:jsonb;not null"`
+	Status            string `gorm:"size:32;not null;index"`
+}
+
+type KlineInverseSourceLink struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	StudyID           uint   `gorm:"not null;index;uniqueIndex:idx_kline_inverse_source_link"`
+	SourceKind        string `gorm:"size:32;not null;index;uniqueIndex:idx_kline_inverse_source_link"`
+	SourceID          string `gorm:"size:128;not null;uniqueIndex:idx_kline_inverse_source_link"`
+	SourceVersion     string `gorm:"size:64;not null"`
+	SourceContentHash string `gorm:"size:128;not null;index"`
+	BackLink          string `gorm:"size:256"`
+}

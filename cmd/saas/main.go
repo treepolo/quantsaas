@@ -19,6 +19,7 @@ import (
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/ga"
 	"quantsaas/internal/saas/instance"
+	klineinversesvc "quantsaas/internal/saas/klineinverse"
 	"quantsaas/internal/saas/marketdata"
 	parameterresearchsvc "quantsaas/internal/saas/parameterresearch"
 	robustnesssvc "quantsaas/internal/saas/robustness"
@@ -78,6 +79,8 @@ func main() {
 		marketdata.NewRecompositionExpandExecutor(marketDataService),
 		marketdata.NewRecompositionAuditExecutor(marketDataService),
 		marketdata.NewRecompositionPublishExecutor(marketDataService),
+		klineinversesvc.NewCalibrationExecutor(db.DB),
+		klineinversesvc.NewSearchExecutor(db.DB, backtestService),
 	} {
 		if err := computeRegistry.Register(executor); err != nil {
 			logger.Fatal("register market-data compute executor failed", zap.Error(err))
@@ -98,6 +101,7 @@ func main() {
 	dynamicParameterStudies := dynamicparamsvc.NewService(db.DB, computeTasks)
 	parameterResearch := parameterresearchsvc.NewService(db.DB, computeTasks, robustnessStudies)
 	controlResearch := controlresearchsvc.NewService(db.DB, computeTasks, parameterResearch)
+	klineInverse := klineinversesvc.NewService(db.DB, computeTasks, backtestService, parameterResearch)
 	if err := computeTasks.Start(); err != nil {
 		logger.Fatal("start compute task service failed", zap.Error(err))
 	}
@@ -116,6 +120,7 @@ func main() {
 		DynamicParameters: dynamicParameterStudies,
 		ParameterResearch: parameterResearch,
 		ControlResearch:   controlResearch,
+		KlineInverse:      klineInverse,
 		AgentStatus:       hub,
 		WSHandler:         hub.HandleConnection,
 	})

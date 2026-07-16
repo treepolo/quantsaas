@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const backupVersion = 9
+const backupVersion = 10
 
 type incrementalBackup struct {
 	Version                  int                                       `json:"version"`
@@ -95,6 +95,15 @@ type incrementalBackup struct {
 	ControlEvaluations       []saasstore.ControlEvaluation             `json:"control_evaluations"`
 	ControlSnapshots         []saasstore.ControlAnalysisSnapshot       `json:"control_analysis_snapshots"`
 	ControlSnapshotMembers   []saasstore.ControlSnapshotMember         `json:"control_snapshot_members"`
+	KlineInverseStudies      []saasstore.KlineInverseStudy             `json:"kline_inverse_studies"`
+	KlineInverseCalibrations []saasstore.KlineInverseCalibration       `json:"kline_inverse_calibrations"`
+	KlineInverseBatches      []saasstore.KlineInverseBatch             `json:"kline_inverse_batches"`
+	KlineInversePaths        []saasstore.KlineInversePath              `json:"kline_inverse_paths"`
+	KlineInverseEvaluations  []saasstore.KlineInverseEvaluation        `json:"kline_inverse_evaluations"`
+	KlineInverseLineage      []saasstore.KlineInverseLineageEdge       `json:"kline_inverse_lineage_edges"`
+	KlineInverseSnapshots    []saasstore.KlineInverseArchiveSnapshot   `json:"kline_inverse_archive_snapshots"`
+	KlineInverseProbes       []saasstore.KlineInverseProbeBatch        `json:"kline_inverse_probe_batches"`
+	KlineInverseSourceLinks  []saasstore.KlineInverseSourceLink        `json:"kline_inverse_source_links"`
 	Counts                   map[string]int                            `json:"counts"`
 }
 
@@ -360,6 +369,19 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 			return backup, err
 		}
 	}
+	for _, target := range []any{&backup.KlineInverseStudies, &backup.KlineInverseBatches} {
+		if err := changedSinceAny(db, since, target); err != nil {
+			return backup, err
+		}
+	}
+	for _, target := range []any{&backup.KlineInverseCalibrations, &backup.KlineInversePaths, &backup.KlineInverseEvaluations, &backup.KlineInverseLineage, &backup.KlineInverseSnapshots, &backup.KlineInverseProbes, &backup.KlineInverseSourceLinks} {
+		if err := createdSinceAny(db, since, target); err != nil {
+			return backup, err
+		}
+	}
+	if err := hydrateKlineInverseClosure(db, &backup); err != nil {
+		return backup, err
+	}
 	if err := hydrateControlResearchClosure(db, &backup); err != nil {
 		return backup, err
 	}
@@ -454,7 +476,84 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	backup.Counts["control_evaluations"] = len(backup.ControlEvaluations)
 	backup.Counts["control_analysis_snapshots"] = len(backup.ControlSnapshots)
 	backup.Counts["control_snapshot_members"] = len(backup.ControlSnapshotMembers)
+	backup.Counts["kline_inverse_studies"] = len(backup.KlineInverseStudies)
+	backup.Counts["kline_inverse_calibrations"] = len(backup.KlineInverseCalibrations)
+	backup.Counts["kline_inverse_batches"] = len(backup.KlineInverseBatches)
+	backup.Counts["kline_inverse_paths"] = len(backup.KlineInversePaths)
+	backup.Counts["kline_inverse_evaluations"] = len(backup.KlineInverseEvaluations)
+	backup.Counts["kline_inverse_lineage_edges"] = len(backup.KlineInverseLineage)
+	backup.Counts["kline_inverse_archive_snapshots"] = len(backup.KlineInverseSnapshots)
+	backup.Counts["kline_inverse_probe_batches"] = len(backup.KlineInverseProbes)
+	backup.Counts["kline_inverse_source_links"] = len(backup.KlineInverseSourceLinks)
 	return backup, nil
+}
+
+func hydrateKlineInverseClosure(db *gorm.DB, backup *incrementalBackup) error {
+	changed := len(backup.KlineInverseStudies)+len(backup.KlineInverseCalibrations)+len(backup.KlineInverseBatches)+len(backup.KlineInversePaths)+len(backup.KlineInverseEvaluations)+len(backup.KlineInverseLineage)+len(backup.KlineInverseSnapshots)+len(backup.KlineInverseProbes)+len(backup.KlineInverseSourceLinks) > 0
+	if !changed {
+		return nil
+	}
+	for _, target := range []any{&backup.KlineInverseStudies, &backup.KlineInverseCalibrations, &backup.KlineInverseBatches, &backup.KlineInversePaths, &backup.KlineInverseEvaluations, &backup.KlineInverseLineage, &backup.KlineInverseSnapshots, &backup.KlineInverseProbes, &backup.KlineInverseSourceLinks} {
+		if err := db.Find(target).Error; err != nil {
+			return err
+		}
+	}
+	taskIDs, resultIDs, genomeIDs, candidateIDs := map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}
+	for _, row := range backup.KlineInverseStudies {
+		if row.SourceGenomeID != nil {
+			genomeIDs[*row.SourceGenomeID] = struct{}{}
+		}
+		if row.SourceCandidateID != nil {
+			candidateIDs[*row.SourceCandidateID] = struct{}{}
+		}
+		if row.SourceBacktestResultID != nil {
+			resultIDs[*row.SourceBacktestResultID] = struct{}{}
+		}
+	}
+	for _, row := range backup.KlineInverseBatches {
+		if row.ComputeTaskID != nil {
+			taskIDs[*row.ComputeTaskID] = struct{}{}
+		}
+	}
+	for _, row := range backup.KlineInverseEvaluations {
+		if row.BacktestResultID != 0 {
+			resultIDs[row.BacktestResultID] = struct{}{}
+		}
+	}
+	if len(taskIDs) > 0 {
+		var rows []saasstore.ComputeTask
+		if err := db.Where("id IN ?", uintKeys(taskIDs)).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.ComputeTasks = mergeByUintID(backup.ComputeTasks, rows, func(row saasstore.ComputeTask) uint { return row.ID })
+	}
+	if len(resultIDs) > 0 {
+		var results []saasstore.BacktestResult
+		if err := db.Where("id IN ?", uintKeys(resultIDs)).Find(&results).Error; err != nil {
+			return err
+		}
+		backup.BacktestResults = mergeByUintID(backup.BacktestResults, results, func(row saasstore.BacktestResult) uint { return row.ID })
+		var reports []saasstore.PerformanceReport
+		if err := db.Where("backtest_result_id IN ?", uintKeys(resultIDs)).Find(&reports).Error; err != nil {
+			return err
+		}
+		backup.PerformanceReports = mergeByUintID(backup.PerformanceReports, reports, func(row saasstore.PerformanceReport) uint { return row.ID })
+	}
+	if len(genomeIDs) > 0 {
+		var rows []saasstore.GeneRecord
+		if err := db.Where("id IN ?", uintKeys(genomeIDs)).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.GeneRecords = mergeByUintID(backup.GeneRecords, rows, func(row saasstore.GeneRecord) uint { return row.ID })
+	}
+	if len(candidateIDs) > 0 {
+		var rows []saasstore.RobustCandidate
+		if err := db.Where("id IN ?", uintKeys(candidateIDs)).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.RobustCandidates = mergeByUintID(backup.RobustCandidates, rows, func(row saasstore.RobustCandidate) uint { return row.ID })
+	}
+	return nil
 }
 
 func hydrateControlResearchClosure(db *gorm.DB, backup *incrementalBackup) error {
@@ -1155,6 +1254,15 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 			func() error { return saveAll(tx, backup.ControlEvaluations) },
 			func() error { return saveAll(tx, backup.ControlSnapshots) },
 			func() error { return saveAll(tx, backup.ControlSnapshotMembers) },
+			func() error { return saveAll(tx, backup.KlineInverseStudies) },
+			func() error { return saveAll(tx, backup.KlineInverseCalibrations) },
+			func() error { return saveAll(tx, backup.KlineInverseBatches) },
+			func() error { return saveAll(tx, backup.KlineInversePaths) },
+			func() error { return saveAll(tx, backup.KlineInverseEvaluations) },
+			func() error { return saveAll(tx, backup.KlineInverseLineage) },
+			func() error { return saveAll(tx, backup.KlineInverseSnapshots) },
+			func() error { return saveAll(tx, backup.KlineInverseProbes) },
+			func() error { return saveAll(tx, backup.KlineInverseSourceLinks) },
 		} {
 			if err := save(); err != nil {
 				return err
@@ -1184,8 +1292,60 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 		if err := verifyRestoredControlResearch(tx, backup); err != nil {
 			return err
 		}
+		if err := verifyRestoredKlineInverse(tx, backup); err != nil {
+			return err
+		}
 		return resetSequences(tx)
 	})
+}
+
+func verifyRestoredKlineInverse(db *gorm.DB, backup incrementalBackup) error {
+	for _, saved := range backup.KlineInverseStudies {
+		var row saasstore.KlineInverseStudy
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.StudyHash != saved.StudyHash || row.CanonicalHash != saved.CanonicalHash || row.BoundsHash != saved.BoundsHash {
+			return fmt.Errorf("P12 研究 %d 還原後身分不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.KlineInverseCalibrations {
+		var row saasstore.KlineInverseCalibration
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.SourceContentHash != saved.SourceContentHash {
+			return fmt.Errorf("P12 校準 %d 還原後 hash 不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.KlineInversePaths {
+		var row saasstore.KlineInversePath
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.PathHash != saved.PathHash || row.CoordinatesHash != saved.CoordinatesHash || row.OHLCContentHash != saved.OHLCContentHash {
+			return fmt.Errorf("P12 路徑 %d 還原後 hash 不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.KlineInverseEvaluations {
+		var row saasstore.KlineInverseEvaluation
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.EvaluationKey != saved.EvaluationKey || row.FeaturesHash != saved.FeaturesHash || row.BacktestResultContentHash != saved.BacktestResultContentHash {
+			return fmt.Errorf("P12 評估 %d 還原後引用不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.KlineInverseSnapshots {
+		var row saasstore.KlineInverseArchiveSnapshot
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.SnapshotKey != saved.SnapshotKey {
+			return fmt.Errorf("P12 快照 %d 還原後 hash 不一致", saved.ID)
+		}
+	}
+	return nil
 }
 
 func verifyRestoredParameterResearch(db *gorm.DB, backup incrementalBackup) error {
@@ -2383,6 +2543,15 @@ func resetSequences(db *gorm.DB) error {
 		"control_evaluations":                     "id",
 		"control_analysis_snapshots":              "id",
 		"control_snapshot_members":                "id",
+		"kline_inverse_studies":                   "id",
+		"kline_inverse_calibrations":              "id",
+		"kline_inverse_batches":                   "id",
+		"kline_inverse_paths":                     "id",
+		"kline_inverse_evaluations":               "id",
+		"kline_inverse_lineage_edges":             "id",
+		"kline_inverse_archive_snapshots":         "id",
+		"kline_inverse_probe_batches":             "id",
+		"kline_inverse_source_links":              "id",
 	}
 	for table, column := range tables {
 		sql := fmt.Sprintf("SELECT setval(pg_get_serial_sequence('%s', '%s'), COALESCE((SELECT MAX(%s) FROM %s), 1), true)", table, column, column, table)

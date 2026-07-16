@@ -454,6 +454,46 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	inverseStudy := saasstore.KlineInverseStudy{OwnerUserID: user.ID, StudyHash: "p12-study:backup", SchemaVersion: "p12-study-v1", Name: "P12 backup inverse", Tags: saasstore.JSONB(`[]`), Status: "completed", CurrentStage: "probe", SourceKind: "gene", SourceVersion: "gene-record-v1", SourceContentHash: compute.HashBytes(gene.ParamPack), SourceGenomeID: &gene.ID, ParameterHash: compute.HashBytes(parameters), InstrumentID: "BTCUSDT", DataSource: "binance", Symbol: "BTCUSDT", Interval: "1d", ExecutionMode: "close_same_bar", WarmupLength: 1, EvaluationLength: 2, EvaluationStartMs: bars[1].OpenTime, InitialCapital: 1000, FeeRate: .001, InitialBudget: 1, CellCount: 1, ParentCapacity: 1, RootSeed: 1212, BoundsHash: "p12-bounds", CalibrationSourceHash: "p12-calibration-source", CanonicalHash: "p12-canonical", Canonical: saasstore.JSONB(`{"schema_version":"p12-study-v1"}`), StartedAt: &completedAt, CompletedAt: &completedAt}
+	if err := source.Create(&inverseStudy).Error; err != nil {
+		t.Fatal(err)
+	}
+	inverseCalibration := saasstore.KlineInverseCalibration{StudyID: inverseStudy.ID, SchemaVersion: "p12-calibration-v1", SourceSnapshot: saasstore.JSONB(`{}`), SourceContentHash: "p12-calibration-source", ObservedBounds: saasstore.JSONB(`{}`), FinalBounds: saasstore.JSONB(`{}`), FeatureRanges: saasstore.JSONB(`{}`), Centers: saasstore.JSONB(`[]`), CalibrationSeed: 1212, CalibrationCount: 1, CellCount: 1, ParentCapacity: 1, GeneratorVersion: "p12-global-v1", FeatureVersion: "p12-features-v1", CVTVersion: "p12-cvt-v1", ContentHash: "p12-calibration-content"}
+	if err := source.Create(&inverseCalibration).Error; err != nil {
+		t.Fatal(err)
+	}
+	inverseBatch := saasstore.KlineInverseBatch{StudyID: inverseStudy.ID, Ordinal: 0, BatchKey: "p12-batch:backup", BatchType: "probe", SchemaVersion: "p12-batch-v1", ManifestHash: "p12-manifest", Manifest: saasstore.JSONB(`{}`), CompatibilityHash: "p12-compatible", Budget: 1, RNGStart: 0, RNGEnd: 1, CheckpointPosition: 1, CheckpointHash: "p12-checkpoint", Checkpoint: saasstore.JSONB(`{"next":1}`), ComputeTaskID: &computeRoot.ID, Status: "completed", CompletedCount: 1, StartedAt: &completedAt, CompletedAt: &completedAt}
+	if err := source.Create(&inverseBatch).Error; err != nil {
+		t.Fatal(err)
+	}
+	inversePath := saasstore.KlineInversePath{PathHash: "p12-path:backup", SchemaVersion: "p12-path-v1", CoordinateVersion: "p12-coordinate-v1", WarmupLength: 1, EvaluationLength: 2, StartTimeMs: bars[0].OpenTime, EvaluationStartMs: bars[1].OpenTime, EndTimeMs: bars[2].OpenTime, DatesHash: "p12-dates", CoordinatesHash: "p12-coordinates", OHLCContentHash: "p12-ohlc", Coordinates: saasstore.JSONB(`[{"g":0,"b":0,"u":0,"d":0}]`), OHLC: saasstore.JSONB(`[]`), Permanent: true, PermanentReason: "anchor"}
+	if err := source.Create(&inversePath).Error; err != nil {
+		t.Fatal(err)
+	}
+	inverseEvaluation := saasstore.KlineInverseEvaluation{StudyID: inverseStudy.ID, PathID: inversePath.ID, EvaluationKey: "p12-evaluation:backup", BatchID: inverseBatch.ID, SequenceIndex: 0, CellIndex: 0, Status: "completed", OutcomeState: "A+B", PassA: true, PassB: true, QRelative: .01, QAbsolute: .02, FeaturesVersion: "p12-features-v1", FeaturesHash: "p12-features", Features: saasstore.JSONB(`{}`), BacktestResultID: resultID, BacktestResultVersion: backtestresult.ResultSchemaVersion, BacktestResultContentHash: artifacts.ResultContentHash, Permanent: true}
+	if err := source.Create(&inverseEvaluation).Error; err != nil {
+		t.Fatal(err)
+	}
+	inverseLineage := saasstore.KlineInverseLineageEdge{StudyID: inverseStudy.ID, BatchID: inverseBatch.ID, SequenceIndex: 0, ChildPathID: inversePath.ID, RequestedOperation: "global", ActualOperation: "global", ChangedChannels: saasstore.JSONB(`[]`), RNGPosition: 0, VariationVersion: "p12-variation-v1"}
+	if err := source.Create(&inverseLineage).Error; err != nil {
+		t.Fatal(err)
+	}
+	inverseSnapshot := saasstore.KlineInverseArchiveSnapshot{StudyID: inverseStudy.ID, BatchID: inverseBatch.ID, SnapshotKey: "p12-snapshot:backup", SchemaVersion: "p12-snapshot-v1", SearchVersion: "p12-search-v1", StatisticsVersion: "p12-statistics-v1", EvaluatedCount: 1, TouchedCellCount: 1, ACellCount: 1, BCellCount: 1, PermanentPathCount: 1, LineageEdgeCount: 1, Summary: saasstore.JSONB(`{}`), ActiveParents: saasstore.JSONB(`[]`), CellSummary: saasstore.JSONB(`[]`), ContentHash: "p12-snapshot-content"}
+	if err := source.Create(&inverseSnapshot).Error; err != nil {
+		t.Fatal(err)
+	}
+	inverseProbe := saasstore.KlineInverseProbeBatch{StudyID: inverseStudy.ID, BatchID: inverseBatch.ID, AnchorPathID: inversePath.ID, CompatibilityHash: "p12-probe-compatible", ManifestHash: inverseBatch.ManifestHash, Manifest: inverseBatch.Manifest, Status: "completed"}
+	if err := source.Create(&inverseProbe).Error; err != nil {
+		t.Fatal(err)
+	}
+	inverseSource := saasstore.KlineInverseSourceLink{StudyID: inverseStudy.ID, SourceKind: "gene", SourceID: fmt.Sprint(gene.ID), SourceVersion: "gene-record-v1", SourceContentHash: compute.HashBytes(gene.ParamPack), BackLink: "/evolution"}
+	if err := source.Create(&inverseSource).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Model(&inverseStudy).Update("current_snapshot_id", inverseSnapshot.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	backup, err := buildIncrementalBackup(source, since)
 	if err != nil {
 		t.Fatal(err)
@@ -478,6 +518,9 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if len(backup.RandomParameterBatches) != 1 || len(backup.RandomParameterRecords) != 1 || len(backup.ControlAnalysisTasks) != 1 || len(backup.ControlEvaluations) != 1 || len(backup.ControlSnapshots) != 1 || len(backup.ControlSnapshotMembers) != 1 {
 		t.Fatalf("incomplete P11 backup closure: batches=%d records=%d tasks=%d evaluations=%d snapshots=%d members=%d", len(backup.RandomParameterBatches), len(backup.RandomParameterRecords), len(backup.ControlAnalysisTasks), len(backup.ControlEvaluations), len(backup.ControlSnapshots), len(backup.ControlSnapshotMembers))
+	}
+	if len(backup.KlineInverseStudies) != 1 || len(backup.KlineInverseCalibrations) != 1 || len(backup.KlineInverseBatches) != 1 || len(backup.KlineInversePaths) != 1 || len(backup.KlineInverseEvaluations) != 1 || len(backup.KlineInverseLineage) != 1 || len(backup.KlineInverseSnapshots) != 1 || len(backup.KlineInverseProbes) != 1 || len(backup.KlineInverseSourceLinks) != 1 {
+		t.Fatalf("incomplete P12 backup closure: studies=%d calibrations=%d batches=%d paths=%d evaluations=%d lineage=%d snapshots=%d probes=%d sources=%d", len(backup.KlineInverseStudies), len(backup.KlineInverseCalibrations), len(backup.KlineInverseBatches), len(backup.KlineInversePaths), len(backup.KlineInverseEvaluations), len(backup.KlineInverseLineage), len(backup.KlineInverseSnapshots), len(backup.KlineInverseProbes), len(backup.KlineInverseSourceLinks))
 	}
 	if len(backup.MarketSeries) != 1 || len(backup.MarketDataVersions) != 2 || len(backup.MarketVersionBars) != 2 ||
 		len(backup.MarketVersionSources) != 1 || len(backup.RecompositionPlans) != 1 || len(backup.RecompositionSegments) != 1 ||
@@ -568,6 +611,20 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if restoredControlEvaluation.BacktestResultContentHash != artifacts.ResultContentHash || restoredControlEvaluation.PerformanceReportID == nil || *restoredControlEvaluation.PerformanceReportID != performanceReportID {
 		t.Fatalf("restored P11 evaluation = %+v", restoredControlEvaluation)
+	}
+	var restoredInverseStudy saasstore.KlineInverseStudy
+	if err := target.First(&restoredInverseStudy, inverseStudy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredInverseStudy.CanonicalHash != inverseStudy.CanonicalHash || restoredInverseStudy.CurrentSnapshotID == nil || *restoredInverseStudy.CurrentSnapshotID != inverseSnapshot.ID {
+		t.Fatalf("restored P12 study = %+v", restoredInverseStudy)
+	}
+	var restoredInverseEvaluation saasstore.KlineInverseEvaluation
+	if err := target.First(&restoredInverseEvaluation, inverseEvaluation.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredInverseEvaluation.PathID != inversePath.ID || restoredInverseEvaluation.BacktestResultContentHash != artifacts.ResultContentHash || !restoredInverseEvaluation.Permanent {
+		t.Fatalf("restored P12 evaluation = %+v", restoredInverseEvaluation)
 	}
 }
 

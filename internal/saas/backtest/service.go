@@ -170,8 +170,19 @@ type StandardResultDescriptor struct {
 	Manifest           *backtestresult.PathManifest `json:"path_manifest,omitempty"`
 	BacktestRunIDs     []uint                       `json:"backtest_run_ids"`
 	PerformanceReports []PerformanceReportReference `json:"performance_reports"`
+	KlineInverseRefs   []KlineInverseReference      `json:"kline_inverse_references,omitempty"`
 	CreatedAt          string                       `json:"created_at"`
 	CompletedAt        string                       `json:"completed_at,omitempty"`
+}
+
+type KlineInverseReference struct {
+	StudyID      uint   `json:"study_id"`
+	StudyName    string `json:"study_name"`
+	PathID       uint   `json:"path_id"`
+	EvaluationID uint   `json:"evaluation_id"`
+	OutcomeState string `json:"outcome_state"`
+	Permanent    bool   `json:"permanent"`
+	BackLink     string `json:"back_link"`
 }
 
 type PerformanceReportReference struct {
@@ -253,6 +264,17 @@ type StandardExecutionResult struct {
 	Reused      bool
 }
 
+// GeneratedPathRequest lets research modules execute immutable synthetic OHLC
+// through the same P02 runner and P03 result store. The caller owns the path;
+// this service owns only execution semantics and standardized artifacts.
+type GeneratedPathRequest struct {
+	Backtest          CreateRequest
+	Parameters        sigmoiddca.Params
+	Bars              []quant.Bar
+	EvaluationStartMs int64
+	PathHash          string
+}
+
 type instanceConfig struct {
 	InitialUSDT       float64 `json:"initial_usdt"`
 	MonthlyInjectUSDT float64 `json:"monthly_inject_usdt"`
@@ -293,6 +315,60 @@ func (s *Service) EnsureDynamicStandardResult(ctx context.Context, userID uint, 
 		return StandardExecutionResult{}, err
 	}
 	return s.ensureStandardPrepared(ctx, prepared)
+}
+
+func (s *Service) EnsureGeneratedPathStandardResult(ctx context.Context, userID uint, input GeneratedPathRequest) (StandardExecutionResult, error) {
+	if len(input.Bars) < 2 || strings.TrimSpace(input.PathHash) == "" || input.EvaluationStartMs <= input.Bars[0].OpenTime || input.EvaluationStartMs > input.Bars[len(input.Bars)-1].OpenTime {
+		return StandardExecutionResult{}, fmt.Errorf("合成路徑缺少完整 W＋H 身分")
+	}
+	req := s.normalizeRequest(ctx, input.Backtest)
+	disabled := false
+	req.LongTermFilterEnabled = &disabled
+	req.LongTermFilterMonths = 0
+	req.Source = SourceCustom
+	req.StartTimeMs = input.Bars[0].OpenTime
+	req.EndTimeMs = input.Bars[len(input.Bars)-1].OpenTime
+	if err := s.validateBasicRequest(ctx, req); err != nil {
+		return StandardExecutionResult{}, err
+	}
+	for index, bar := range input.Bars {
+		if index > 0 && bar.OpenTime <= input.Bars[index-1].OpenTime {
+			return StandardExecutionResult{}, fmt.Errorf("合成路徑日期必須嚴格遞增")
+		}
+		if bar.Open <= 0 || bar.High < math.Max(bar.Open, bar.Close) || bar.Low <= 0 || bar.Low > math.Min(bar.Open, bar.Close) || bar.Close <= 0 {
+			return StandardExecutionResult{}, fmt.Errorf("合成路徑第 %d 根 OHLC 不合法", index)
+		}
+	}
+	params := input.Parameters
+	params.PositionStructure = sigmoiddca.NormalizePositionStructure(params.PositionStructure)
+	params.Spawn.Policy.MonthlyInjectUSDT = 0
+	params.Spawn.Policy.ColdSealedBTC = 0
+	if req.InitialCapital != nil {
+		params.Spawn.Policy.InitialUSDT = *req.InitialCapital
+	}
+	if err := normalizeSpawnPoint(&params.Spawn); err != nil {
+		return StandardExecutionResult{}, err
+	}
+	costs := backtestCosts(req)
+	coreSpec := backtestcore.Spec{
+		Runner: backtestcore.RunnerSigmoidDCA, InstrumentID: req.InstrumentID, Symbol: req.Symbol,
+		DataSource: req.DataSource, Interval: req.Interval, ExecutionMode: req.ExecutionMode,
+		PositionStructure: params.PositionStructure, StartTimeMs: input.Bars[0].OpenTime,
+		EndTimeMs: input.Bars[len(input.Bars)-1].OpenTime, EvaluationStartMs: input.EvaluationStartMs,
+		EvaluationEndMs: input.Bars[len(input.Bars)-1].OpenTime, PrefixMode: backtestcore.PrefixModeHistoryOnly,
+		InitialCapital: params.Spawn.Policy.InitialUSDT, MonthlyContribution: 0, InitialAssetQuantity: 0,
+		Costs: costs, CoreVersion: backtestcore.CoreVersion,
+	}
+	identity, err := backtestresult.BuildIdentity(backtestresult.SpecInput{
+		StrategyID: sigmoiddca.StrategyID, StrategyVersion: sigmoiddca.StrategyVersion,
+		ParameterSchemaVersion: backtestresult.ParameterSchemaV1, Parameters: params,
+		CoreSpec: coreSpec, DatasetVersion: "p12-generated-ohlc-v1", DatasetHash: input.PathHash,
+	}, input.Bars)
+	if err != nil {
+		return StandardExecutionResult{}, err
+	}
+	coreSpec.DatasetHash = identity.Snapshot.DatasetHash
+	return s.ensureStandardPrepared(ctx, preparedBacktest{req: req, params: params, bars: append([]quant.Bar(nil), input.Bars...), costs: costs, coreSpec: coreSpec, identity: identity})
 }
 
 func (s *Service) ensureStandardPrepared(ctx context.Context, prepared preparedBacktest) (StandardExecutionResult, error) {
@@ -658,16 +734,20 @@ func (s *Service) executePrepared(prepared preparedBacktest) (backtestresult.Art
 	pathMaxDrawdown := maxDrawdown(path.Path)
 	practicalMaxDrawdown := maxDrawdown(practicalPath(path.Path))
 	spawn := prepared.params.Spawn
-	baseline := quant.SimulateGhostDCAFrom(prepared.bars, prepared.bars[0].OpenTime, quant.GhostDCAConfig{
+	baseline := quant.SimulateGhostDCAFrom(prepared.bars, prepared.coreSpec.EvaluationStartMs, quant.GhostDCAConfig{
 		InitialUSDT:       spawn.Policy.InitialUSDT,
 		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
 		UseOpenExecution:  prepared.req.ExecutionMode == marketdata.ExecutionModeCloseNextOpen,
 		Costs:             prepared.costs,
 	})
 	alpha := path.TotalReturn - baseline.ROI
-	windows, windowDetails, err := scoreWindows(prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter)
-	if err != nil {
-		return backtestresult.Artifacts{}, err
+	windows := map[string]float64{}
+	windowDetails := []WindowResult{}
+	if prepared.coreSpec.PrefixMode != backtestcore.PrefixModeHistoryOnly {
+		windows, windowDetails, err = scoreWindows(prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter)
+		if err != nil {
+			return backtestresult.Artifacts{}, err
+		}
 	}
 	metrics := storedResponseMetrics{
 		Alpha:                 alpha,
@@ -734,6 +814,25 @@ func (s *Service) GetStandardResult(ctx context.Context, userID uint, resultID u
 			CreatedAt: report.CreatedAt.Format(time.RFC3339),
 		})
 	}
+	var klineRows []struct {
+		StudyID      uint
+		StudyName    string
+		PathID       uint
+		EvaluationID uint
+		OutcomeState string
+		Permanent    bool
+	}
+	if err := s.db.WithContext(ctx).Table("kline_inverse_evaluations").
+		Select("kline_inverse_studies.id AS study_id, kline_inverse_studies.name AS study_name, kline_inverse_evaluations.path_id, kline_inverse_evaluations.id AS evaluation_id, kline_inverse_evaluations.outcome_state, kline_inverse_evaluations.permanent").
+		Joins("JOIN kline_inverse_studies ON kline_inverse_studies.id = kline_inverse_evaluations.study_id").
+		Where("kline_inverse_studies.owner_user_id = ? AND kline_inverse_evaluations.backtest_result_id = ?", userID, resultID).
+		Order("kline_inverse_evaluations.id ASC").Scan(&klineRows).Error; err != nil {
+		return nil, err
+	}
+	klineReferences := make([]KlineInverseReference, 0, len(klineRows))
+	for _, row := range klineRows {
+		klineReferences = append(klineReferences, KlineInverseReference{StudyID: row.StudyID, StudyName: row.StudyName, PathID: row.PathID, EvaluationID: row.EvaluationID, OutcomeState: row.OutcomeState, Permanent: row.Permanent, BackLink: fmt.Sprintf("/kline-inverse?study=%d", row.StudyID)})
+	}
 	descriptor := &StandardResultDescriptor{
 		ID:                 loaded.Result.ID,
 		Status:             loaded.Result.Status,
@@ -745,6 +844,7 @@ func (s *Service) GetStandardResult(ctx context.Context, userID uint, resultID u
 		Manifest:           loaded.Manifest,
 		BacktestRunIDs:     runIDs,
 		PerformanceReports: reportReferences,
+		KlineInverseRefs:   klineReferences,
 		CreatedAt:          loaded.Result.CreatedAt.Format(time.RFC3339),
 	}
 	if loaded.Result.CompletedAt != nil {
@@ -1191,7 +1291,16 @@ func (s *Service) authorizedRunIDs(ctx context.Context, userID uint, resultID ui
 		return nil, err
 	}
 	if len(ids) == 0 {
-		return nil, ErrNotFound
+		var count int64
+		if err := s.db.WithContext(ctx).Model(&saasstore.KlineInverseEvaluation{}).
+			Joins("JOIN kline_inverse_studies ON kline_inverse_studies.id = kline_inverse_evaluations.study_id").
+			Where("kline_inverse_studies.owner_user_id = ? AND kline_inverse_evaluations.backtest_result_id = ? AND kline_inverse_evaluations.permanent = ?", userID, resultID, true).
+			Count(&count).Error; err != nil {
+			return nil, err
+		}
+		if count == 0 {
+			return nil, ErrNotFound
+		}
 	}
 	return ids, nil
 }

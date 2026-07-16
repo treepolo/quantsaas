@@ -1056,7 +1056,8 @@ function LegacyGenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeReco
               <details className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3"><summary className="cursor-pointer text-sm font-semibold text-slate-300">參數 JSON</summary><div className="mt-3"><JsonPreview value={genome.param_pack} /></div></details>
               <div className="flex flex-wrap gap-2">
                 {canPromote && !isChampion ? (confirmPromote === genome.id ? <Button loading={promoteMutation.isPending} onClick={() => promoteMutation.mutate(genome.id)}>確認採用</Button> : <Button onClick={() => setConfirmPromote(genome.id)}>設為採用</Button>) : null}
-                <Link to={`/backtesting?genome=${genome.id}`}><Button variant="secondary">回測</Button></Link>
+				<Link to={`/backtesting?genome=${genome.id}`}><Button variant="secondary">回測</Button></Link>
+				<Link to={`/kline-inverse?gene=${genome.id}`}><Button variant="secondary">建立 C 草稿</Button></Link>
               </div>
             </div>
           </Card>
@@ -1245,7 +1246,8 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                 <div className="flex flex-wrap gap-2">
                   {canPromote && !isChampion ? (confirmPromote === genome.id ? <Button loading={promoteMutation.isPending} onClick={() => promoteMutation.mutate(genome.id)}>確認採用</Button> : <Button onClick={() => setConfirmPromote(genome.id)}>設為採用</Button>) : null}
                   <Button variant="secondary" onClick={() => startEdit(genome)}>編輯資料</Button>
-                  <Link to={`/backtesting?genome=${genome.id}`}><Button variant="secondary">回測</Button></Link>
+				  <Link to={`/backtesting?genome=${genome.id}`}><Button variant="secondary">回測</Button></Link>
+				  <Link to={`/kline-inverse?gene=${genome.id}`}><Button variant="secondary">建立 C 草稿</Button></Link>
                   {confirmDelete === genome.id ? <Button icon={Trash2} variant="danger" loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(genome.id)}>確認刪除</Button> : <Button icon={Trash2} variant="danger" onClick={() => setConfirmDelete(genome.id)}>刪除</Button>}
                 </div>
               </div>

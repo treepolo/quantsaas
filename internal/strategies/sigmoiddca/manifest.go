@@ -9,19 +9,23 @@ const (
 )
 
 type Manifest struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	IsSpot      bool   `json:"is_spot"`
-	Description string `json:"description"`
+	ID                  string `json:"id"`
+	Name                string `json:"name"`
+	Version             string `json:"version"`
+	IsSpot              bool   `json:"is_spot"`
+	Description         string `json:"description"`
+	RequiredHistoryBars int    `json:"required_history_bars"`
+	RequiresVolume      bool   `json:"requires_volume"`
 }
 
 func StrategyManifest() Manifest {
 	return Manifest{
-		ID:          StrategyID,
-		Name:        StrategyName,
-		Version:     StrategyVersion,
-		IsSpot:      IsSpot,
-		Description: StrategyDescription,
+		ID:                  StrategyID,
+		Name:                StrategyName,
+		Version:             StrategyVersion,
+		IsSpot:              IsSpot,
+		Description:         StrategyDescription,
+		RequiredHistoryBars: RequiredHistoryBars,
+		RequiresVolume:      false,
 	}
 }

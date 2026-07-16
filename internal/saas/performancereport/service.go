@@ -372,7 +372,15 @@ func (s *Service) authorizeResult(ctx context.Context, userID uint, resultID uin
 		return err
 	}
 	if count == 0 {
-		return ErrAccessNotFound
+		if err := s.db.WithContext(ctx).Model(&saasstore.KlineInverseEvaluation{}).
+			Joins("JOIN kline_inverse_studies ON kline_inverse_studies.id = kline_inverse_evaluations.study_id").
+			Where("kline_inverse_studies.owner_user_id = ? AND kline_inverse_evaluations.backtest_result_id = ? AND kline_inverse_evaluations.permanent = ?", userID, resultID, true).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return ErrAccessNotFound
+		}
 	}
 	return nil
 }

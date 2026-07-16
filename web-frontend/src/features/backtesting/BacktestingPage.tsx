@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent, type HTMLAttributes } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, Legend, ReferenceArea, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
@@ -663,7 +663,7 @@ export function BacktestingPage() {
             ))}
           </div>
 
-          {result.backtest_result_id ? <PerformanceAnalysisPanel backtestResultId={result.backtest_result_id} betaBenchmarks={instruments} /> : <Card className="p-4 text-sm text-slate-500">這筆舊回測沒有可引用的標準化結果，無法建立版本化報酬分析。</Card>}
+		  {result.backtest_result_id ? <><PerformanceAnalysisPanel backtestResultId={result.backtest_result_id} betaBenchmarks={instruments} /><div className="mt-3"><Link to={`/kline-inverse?backtest=${result.backtest_result_id}`}><Button variant="secondary">以此結果建立 C 草稿</Button></Link></div></> : <Card className="p-4 text-sm text-slate-500">這筆舊回測沒有可引用的標準化結果，無法建立版本化報酬分析。</Card>}
 
           {comparisonResults.length > 1 ? (
             <Card className="p-4">
