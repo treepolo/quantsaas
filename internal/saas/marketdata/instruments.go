@@ -123,7 +123,7 @@ func (s *InstrumentStore) Instruments(ctx context.Context) ([]ResearchInstrument
 	}
 	var records []saasstore.ResearchInstrument
 	if err := s.db.WithContext(ctx).
-		Where("enabled = ?", true).
+		Where("enabled = ? AND internal_only = ?", true, false).
 		Order("sort_order ASC, display_name ASC, id ASC").
 		Find(&records).Error; err != nil {
 		return nil, err

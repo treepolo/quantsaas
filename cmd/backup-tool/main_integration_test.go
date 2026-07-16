@@ -494,6 +494,50 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	perturbationSnapshot := saasstore.PerturbationSourceSnapshot{OwnerUserID: user.ID, SourceContentHash: "p13-source-content", SchemaVersion: "p13-source-snapshot-v1", Status: marketversion.VersionStatusCompleted, SourceVersionID: sourceVersion.ID, OriginalInstrumentID: "BTCUSDT", OriginalDataSource: "binance", OriginalSymbol: "BTCUSDT", Interval: "1d", StartTimeMs: bars[0].OpenTime, EndTimeMs: bars[1].OpenTime, BarCount: 2, DirectLineage: saasstore.JSONB(`[]`), RecursiveLineage: saasstore.JSONB(`[]`), CompletedAt: &completedAt}
+	if err := source.Create(&perturbationSnapshot).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationGroup := saasstore.PerturbationGroup{OwnerUserID: user.ID, GroupKey: "p13-group:backup", Name: "P13 backup", Tags: saasstore.JSONB(`[]`), SourceSnapshotID: perturbationSnapshot.ID, MarketSeriesID: series.ID, AlgorithmVersion: "p13-local-ohlc-v1"}
+	if err := source.Create(&perturbationGroup).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationVariant := saasstore.PerturbationVariant{OwnerUserID: user.ID, GroupID: perturbationGroup.ID, SourceSnapshotID: perturbationSnapshot.ID, Seed: "42", Alpha: "0.01", GenerationRecipeHash: "p13-recipe:backup", OutputVersionID: outputVersion.ID, OutputInstrumentID: outputInstrumentID, GeneratedContentHash: marketHash, Status: marketversion.VersionStatusCompleted, IntegrityStatus: marketversion.IntegrityValid, BarCount: 2, ComputeTaskID: &computeRoot.ID, CompletedAt: &completedAt}
+	if err := source.Create(&perturbationVariant).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationTest := saasstore.PerturbationTest{OwnerUserID: user.ID, GroupID: perturbationGroup.ID, TestSpecHash: "p13-test:backup", SchemaVersion: "p13-perturbation-test-v1", Name: "P13 test backup", Tags: saasstore.JSONB(`[]`), Status: "completed", BacktestSettings: saasstore.JSONB(`{}`), CompletedAt: &completedAt}
+	if err := source.Create(&perturbationTest).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationSubject := saasstore.PerturbationTestSubject{TestID: perturbationTest.ID, Ordinal: 0, SourceKind: "gene_record", SourceID: gene.ID, SourceVersion: "gene-record-v1", SubjectHash: compute.HashBytes(gene.ParamPack), AdoptionUnit: gene.ParamPack, ExecutionInput: saasstore.JSONB(`{}`)}
+	if err := source.Create(&perturbationSubject).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationBatch := saasstore.PerturbationTestBatch{TestID: perturbationTest.ID, Ordinal: 1, ManifestHash: "p13-manifest:backup", Manifest: saasstore.JSONB(`{}`), ComputeTaskID: &computeRoot.ID, Status: "completed", PlannedCount: 1, CompletedCount: 1, CompletedAt: &completedAt}
+	if err := source.Create(&perturbationBatch).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationRun := saasstore.PerturbationTestRun{TestID: perturbationTest.ID, BatchID: perturbationBatch.ID, SubjectID: perturbationSubject.ID, DatasetVersionID: outputVersion.ID, DatasetContentHash: marketHash, Alpha: "0.01", Seed: "42", BacktestSpecHash: "p13-backtest-spec", BacktestResultID: &resultID, BacktestResultVersion: backtestresult.ResultSchemaVersion, BacktestResultContentHash: artifacts.ResultContentHash, Status: saasstore.BacktestResultStatusCompleted, Metrics: saasstore.JSONB(`{"relative":{"qualification":"qualified"}}`), MetricHash: "p13-metric", PerformanceReportID: &performanceReportID, CompletedAt: &completedAt}
+	if err := source.Create(&perturbationRun).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationAnalysis := saasstore.PerturbationAnalysisSnapshot{TestID: perturbationTest.ID, SnapshotKey: "p13-analysis:backup", SchemaVersion: "p13-analysis-v1", AnalysisSetHash: "p13-analysis-set:backup", StatisticsVersion: "p13-statistics-v1", Completeness: "complete", IncludedBatches: saasstore.JSONB(`[1]`), PlannedCount: 1, ValidCount: 1, ContentHash: "p13-analysis-content", Summary: saasstore.JSONB(`{}`)}
+	if err := source.Create(&perturbationAnalysis).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationMetric := saasstore.PerturbationMetricSummary{AnalysisSnapshotID: perturbationAnalysis.ID, SubjectID: perturbationSubject.ID, Alpha: "0.01", MetricKey: "log_final_nav_ratio", PlannedCount: 1, ValidCount: 1, Statistics: saasstore.JSONB(`{"available":true,"count":1}`), ContentHash: "p13-summary-content"}
+	if err := source.Create(&perturbationMetric).Error; err != nil {
+		t.Fatal(err)
+	}
+	perturbationQualification := saasstore.PerturbationQualificationSummary{AnalysisSnapshotID: perturbationAnalysis.ID, SubjectID: perturbationSubject.ID, Alpha: "0.01", ValidCount: 1, QualifiedCount: 1, ContentHash: "p13-qualification-content"}
+	if err := source.Create(&perturbationQualification).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Model(&perturbationTest).Update("latest_snapshot_id", perturbationAnalysis.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	backup, err := buildIncrementalBackup(source, since)
 	if err != nil {
 		t.Fatal(err)
@@ -521,6 +565,9 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if len(backup.KlineInverseStudies) != 1 || len(backup.KlineInverseCalibrations) != 1 || len(backup.KlineInverseBatches) != 1 || len(backup.KlineInversePaths) != 1 || len(backup.KlineInverseEvaluations) != 1 || len(backup.KlineInverseLineage) != 1 || len(backup.KlineInverseSnapshots) != 1 || len(backup.KlineInverseProbes) != 1 || len(backup.KlineInverseSourceLinks) != 1 {
 		t.Fatalf("incomplete P12 backup closure: studies=%d calibrations=%d batches=%d paths=%d evaluations=%d lineage=%d snapshots=%d probes=%d sources=%d", len(backup.KlineInverseStudies), len(backup.KlineInverseCalibrations), len(backup.KlineInverseBatches), len(backup.KlineInversePaths), len(backup.KlineInverseEvaluations), len(backup.KlineInverseLineage), len(backup.KlineInverseSnapshots), len(backup.KlineInverseProbes), len(backup.KlineInverseSourceLinks))
+	}
+	if len(backup.PerturbationSnapshots) != 1 || len(backup.PerturbationGroups) != 1 || len(backup.PerturbationVariants) != 1 || len(backup.PerturbationTests) != 1 || len(backup.PerturbationSubjects) != 1 || len(backup.PerturbationBatches) != 1 || len(backup.PerturbationRuns) != 1 || len(backup.PerturbationAnalyses) != 1 || len(backup.PerturbationMetrics) != 1 || len(backup.PerturbationQualifications) != 1 {
+		t.Fatalf("incomplete P13 backup closure: snapshots=%d groups=%d variants=%d tests=%d subjects=%d batches=%d runs=%d analyses=%d metrics=%d qualifications=%d", len(backup.PerturbationSnapshots), len(backup.PerturbationGroups), len(backup.PerturbationVariants), len(backup.PerturbationTests), len(backup.PerturbationSubjects), len(backup.PerturbationBatches), len(backup.PerturbationRuns), len(backup.PerturbationAnalyses), len(backup.PerturbationMetrics), len(backup.PerturbationQualifications))
 	}
 	if len(backup.MarketSeries) != 1 || len(backup.MarketDataVersions) != 2 || len(backup.MarketVersionBars) != 2 ||
 		len(backup.MarketVersionSources) != 1 || len(backup.RecompositionPlans) != 1 || len(backup.RecompositionSegments) != 1 ||
@@ -576,6 +623,13 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if restoredMarketVersion.ContentHash != marketHash || !restoredMarketVersion.Published {
 		t.Fatalf("restored market version = %+v", restoredMarketVersion)
+	}
+	var restoredPerturbationRun saasstore.PerturbationTestRun
+	if err := target.First(&restoredPerturbationRun, perturbationRun.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredPerturbationRun.BacktestResultID == nil || *restoredPerturbationRun.BacktestResultID != resultID || restoredPerturbationRun.PerformanceReportID == nil || *restoredPerturbationRun.PerformanceReportID != performanceReportID || restoredPerturbationRun.DatasetVersionID != outputVersion.ID {
+		t.Fatalf("restored P13 run = %+v", restoredPerturbationRun)
 	}
 	var restoredRobustnessPoint saasstore.RobustnessEvaluationPoint
 	if err := target.First(&restoredRobustnessPoint, robustnessPoint.ID).Error; err != nil {

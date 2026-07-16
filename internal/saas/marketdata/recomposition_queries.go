@@ -18,6 +18,7 @@ func (s *Service) RecompositionSources(ctx context.Context, userID uint) ([]Reco
 		return nil, err
 	}
 	result := make([]RecompositionSource, 0, len(instruments))
+	seenVersions := map[uint]bool{}
 	for _, instrument := range instruments {
 		if instrument.DataSource == DataSourceFRED {
 			continue
@@ -34,6 +35,7 @@ func (s *Service) RecompositionSources(ctx context.Context, userID uint) ([]Reco
 				Instrument: instrument, VersionID: version.ID, ContentHash: version.ContentHash,
 				ArtifactKind: version.ArtifactKind, Immutable: true, IntegrityStatus: version.IntegrityStatus,
 			})
+			seenVersions[version.ID] = true
 			continue
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -49,6 +51,24 @@ func (s *Service) RecompositionSources(ctx context.Context, userID uint) ([]Reco
 			artifactKind = marketversion.ArtifactKindDailyLeverage
 		}
 		result = append(result, RecompositionSource{Instrument: instrument, ArtifactKind: artifactKind})
+	}
+	// L versions are intentionally hidden from ordinary instrument selectors, but
+	// E may consume a completed, published and integrity-valid L version directly.
+	var perturbations []saasstore.MarketDataVersion
+	if err := s.db.WithContext(ctx).Where("owner_user_id = ? AND artifact_kind = ? AND status = ? AND integrity_status = ? AND published = ? AND archived_at IS NULL",
+		userID, marketversion.ArtifactKindLocalPerturbation, marketversion.VersionStatusCompleted, marketversion.IntegrityValid, true).
+		Order("created_at DESC,id DESC").Find(&perturbations).Error; err != nil {
+		return nil, err
+	}
+	for _, version := range perturbations {
+		if seenVersions[version.ID] || version.OutputInstrumentID == nil {
+			continue
+		}
+		instrument, err := s.instruments.ResolveInstrument(ctx, *version.OutputInstrumentID, "", "")
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, RecompositionSource{Instrument: instrument, VersionID: version.ID, ContentHash: version.ContentHash, ArtifactKind: version.ArtifactKind, Immutable: true, IntegrityStatus: version.IntegrityStatus})
 	}
 	return result, nil
 }

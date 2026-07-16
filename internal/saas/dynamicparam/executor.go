@@ -9,6 +9,7 @@ import (
 
 	compute "quantsaas/internal/compute"
 	core "quantsaas/internal/dynamicparam"
+	"quantsaas/internal/marketversion"
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/backtest"
 	"quantsaas/internal/saas/backtestresult"
@@ -101,6 +102,25 @@ func (executor *TrainExecutor) ValidateCachedResult(ctx context.Context, userID 
 func loadScopedBars(ctx context.Context, db *gorm.DB, scope MarketScope) ([]quant.Bar, error) {
 	if scope.InstrumentID == "" || scope.DataSource == "" || scope.Symbol == "" || scope.Interval == "" || scope.StartTimeMs <= 0 || scope.EndTimeMs < scope.StartTimeMs || scope.DatasetHash == "" {
 		return nil, ErrInvalidRequest
+	}
+	if scope.MarketDataVersionID != 0 {
+		var version saasstore.MarketDataVersion
+		if err := db.WithContext(ctx).Where("id = ? AND output_instrument_id = ? AND content_hash = ? AND status = ? AND integrity_status = ? AND published = true", scope.MarketDataVersionID, scope.InstrumentID, scope.MarketDataContentHash, marketversion.VersionStatusCompleted, marketversion.IntegrityValid).First(&version).Error; err != nil {
+			return nil, ErrInvalidRequest
+		}
+		var versionRows []saasstore.MarketDataVersionBar
+		if err := db.WithContext(ctx).Where("version_id = ? AND open_time >= ? AND open_time <= ?", version.ID, scope.StartTimeMs, scope.EndTimeMs).Order("ordinal ASC").Find(&versionRows).Error; err != nil {
+			return nil, err
+		}
+		bars := make([]quant.Bar, 0, len(versionRows))
+		for _, row := range versionRows {
+			bars = append(bars, quant.Bar{OpenTime: row.OpenTime, Open: row.Open, High: row.High, Low: row.Low, Close: row.Close, Volume: row.Volume})
+		}
+		hash, err := backtestresult.HashDataset(backtestresult.DatasetSchemaVersion, bars)
+		if err != nil || hash != scope.DatasetHash {
+			return nil, fmt.Errorf("P09 dataset hash 已改變")
+		}
+		return bars, nil
 	}
 	var rows []saasstore.KLine
 	if err := db.WithContext(ctx).Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ? AND open_time >= ? AND open_time <= ?", scope.InstrumentID, scope.DataSource, scope.Symbol, scope.Interval, scope.StartTimeMs, scope.EndTimeMs).Order("open_time ASC").Find(&rows).Error; err != nil {

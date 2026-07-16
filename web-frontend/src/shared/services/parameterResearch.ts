@@ -39,6 +39,7 @@ export const parameterResearchApi = {
   deriveCandidates: (snapshotId: number) => apiFetch<Candidate[]>(`${root}/analysis-snapshots/${snapshotId}/candidates/derive`, { method: "POST" }),
   manualCandidate: (pointId: number) => apiFetch<Candidate>(`${root}/points/${pointId}/candidates`, { method: "POST" }),
   listCandidates: (configurationId?: number) => apiFetch<Candidate[]>(`${root}/candidates${configurationId ? `?configuration_id=${configurationId}` : ""}`),
+  getCandidate: (id: number) => apiFetch<Candidate>(`${root}/candidates/${id}`),
   exportCandidate: (id: number) => apiFetch<Candidate>(`${root}/candidates/${id}/export-to-library`, { method: "POST" }),
   promoteCandidate: (id: number) => apiFetch<Candidate>(`${root}/candidates/${id}/promote`, { method: "POST" }),
   planSurrogate: (runId: number, seed = 42) => apiFetch<ComputePlanPreview>(`${root}/runs/${runId}/surrogates/plan`, { method: "POST", body: JSON.stringify({ seed }) }),

@@ -125,6 +125,13 @@ func (s *Service) reserveRecompositionGeneration(
 	if err != nil {
 		return existing, err
 	}
+	var perturbationAncestors int64
+	sourceIDs := s.db.Model(&saasstore.RecompositionPlanSegment{}).Select("source_version_id").Where("plan_id = ?", plan.ID)
+	if err := s.db.WithContext(ctx).Model(&saasstore.MarketDataVersion{}).
+		Where("(id = ? OR id IN (?)) AND (artifact_kind = ? OR has_perturbation_ancestor = ?)", plan.CalendarVersionID, sourceIDs, marketversion.ArtifactKindLocalPerturbation, true).
+		Count(&perturbationAncestors).Error; err != nil {
+		return existing, err
+	}
 	for attempt := 0; attempt < 3; attempt++ {
 		var generation saasstore.RecompositionGeneration
 		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -163,7 +170,7 @@ func (s *Service) reserveRecompositionGeneration(
 				Symbol: "pending", Market: plan.TargetMarket, Timezone: plan.TargetTimezone, Interval: plan.Interval,
 				CalendarID: fmt.Sprintf("version:%d", plan.CalendarVersionID), CalendarVersion: plan.CalendarVersion,
 				CalendarHash: plan.CalendarHash, BarCount: plan.TotalOutputBars, StartTimeMs: plan.OutputStartTimeMs,
-				EndTimeMs: plan.OutputEndTimeMs, InternalOnly: true, Published: false,
+				EndTimeMs: plan.OutputEndTimeMs, HasPerturbationAncestor: perturbationAncestors > 0, InternalOnly: true, Published: false,
 			}
 			if err := tx.Create(&version).Error; err != nil {
 				return err

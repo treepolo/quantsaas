@@ -372,6 +372,14 @@ func (s *Service) authorizeResult(ctx context.Context, userID uint, resultID uin
 		return err
 	}
 	if count == 0 {
+		if err := s.db.WithContext(ctx).Model(&saasstore.PerturbationTestRun{}).
+			Joins("JOIN perturbation_tests ON perturbation_tests.id = perturbation_test_runs.test_id").
+			Where("perturbation_tests.owner_user_id = ? AND perturbation_test_runs.backtest_result_id = ? AND perturbation_test_runs.status = ?", userID, resultID, saasstore.BacktestResultStatusCompleted).
+			Count(&count).Error; err != nil {
+			return err
+		}
+	}
+	if count == 0 {
 		if err := s.db.WithContext(ctx).Model(&saasstore.KlineInverseEvaluation{}).
 			Joins("JOIN kline_inverse_studies ON kline_inverse_studies.id = kline_inverse_evaluations.study_id").
 			Where("kline_inverse_studies.owner_user_id = ? AND kline_inverse_evaluations.backtest_result_id = ? AND kline_inverse_evaluations.permanent = ?", userID, resultID, true).
@@ -415,6 +423,14 @@ func (s *Service) descriptor(ctx context.Context, userID uint, loaded LoadedRepo
 	}
 	if loaded.Report.CompletedAt != nil {
 		descriptor.CompletedAt = loaded.Report.CompletedAt.Format(time.RFC3339)
+	}
+	if loaded.Report.Status == "completed" {
+		if err := s.db.WithContext(ctx).Model(&saasstore.PerturbationTestRun{}).
+			Where("backtest_result_id = ? AND test_id IN (?)", loaded.Report.BacktestResultID,
+				s.db.Model(&saasstore.PerturbationTest{}).Select("id").Where("owner_user_id = ?", userID)).
+			Update("performance_report_id", loaded.Report.ID).Error; err != nil {
+			return nil, err
+		}
 	}
 	return descriptor, nil
 }

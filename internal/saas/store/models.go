@@ -671,6 +671,7 @@ type ResearchInstrument struct {
 	Market              string `gorm:"size:32;not null;default:global;index"`
 	SortOrder           int    `gorm:"not null;default:1000;index"`
 	Enabled             bool   `gorm:"not null;default:true;index"`
+	InternalOnly        bool   `gorm:"not null;default:false;index"`
 	LastAutoUpdateAt    *time.Time
 	LastAutoUpdateError string `gorm:"type:text"`
 }
@@ -967,6 +968,229 @@ type RecompositionBarLineage struct {
 
 	Version       MarketDataVersion `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;"`
 	SourceVersion MarketDataVersion `gorm:"foreignKey:SourceVersionID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
+// PerturbationSourceSnapshot owns the immutable source identity used by P13.
+// Its bars live in SourceVersionID; the domain row adds source qualification,
+// previous-close and recursive lineage semantics without duplicating OHLC.
+type PerturbationSourceSnapshot struct {
+	ID                      uint `gorm:"primaryKey"`
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
+	OwnerUserID             uint    `gorm:"not null;index;uniqueIndex:idx_perturbation_snapshot_owner_hash"`
+	SourceContentHash       string  `gorm:"size:128;not null;uniqueIndex:idx_perturbation_snapshot_owner_hash"`
+	SchemaVersion           string  `gorm:"size:48;not null"`
+	Status                  string  `gorm:"size:24;not null;index"`
+	SourceVersionID         uint    `gorm:"not null;index;uniqueIndex"`
+	OriginalInstrumentID    string  `gorm:"size:32;not null;index"`
+	OriginalDataSource      string  `gorm:"size:32;not null;index"`
+	OriginalSymbol          string  `gorm:"size:64;not null"`
+	Interval                string  `gorm:"size:16;not null;index"`
+	StartTimeMs             int64   `gorm:"not null;index"`
+	EndTimeMs               int64   `gorm:"not null;index"`
+	PreviousClosePresent    bool    `gorm:"not null"`
+	PreviousClose           float64 `gorm:"type:numeric(30,10);not null;default:0"`
+	BarCount                int     `gorm:"not null"`
+	DirectLineage           JSONB   `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	RecursiveLineage        JSONB   `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	HasPerturbationAncestor bool    `gorm:"not null;default:false;index"`
+	CompletedAt             *time.Time
+	ErrorCode               string `gorm:"size:64"`
+	ErrorMessage            string `gorm:"type:text"`
+
+	SourceVersion MarketDataVersion `gorm:"foreignKey:SourceVersionID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type PerturbationGroup struct {
+	ID               uint `gorm:"primaryKey"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	OwnerUserID      uint       `gorm:"not null;index;uniqueIndex:idx_perturbation_group_owner_key"`
+	GroupKey         string     `gorm:"size:128;not null;uniqueIndex:idx_perturbation_group_owner_key"`
+	Name             string     `gorm:"size:180;not null"`
+	Notes            string     `gorm:"type:text"`
+	Tags             JSONB      `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	SourceSnapshotID uint       `gorm:"not null;index"`
+	MarketSeriesID   uint       `gorm:"not null;index"`
+	AlgorithmVersion string     `gorm:"size:64;not null;index"`
+	ArchivedAt       *time.Time `gorm:"index"`
+
+	SourceSnapshot PerturbationSourceSnapshot `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	MarketSeries   MarketSeries               `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type PerturbationVariant struct {
+	ID                   uint `gorm:"primaryKey"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	GroupID              uint    `gorm:"not null;index"`
+	SourceSnapshotID     uint    `gorm:"not null;index"`
+	Seed                 string  `gorm:"size:20;not null;index"`
+	Alpha                string  `gorm:"size:64;not null;index"`
+	GenerationRecipeHash string  `gorm:"size:128;not null;uniqueIndex:idx_perturbation_variant_owner_recipe"`
+	OwnerUserID          uint    `gorm:"not null;index;uniqueIndex:idx_perturbation_variant_owner_recipe"`
+	OutputVersionID      uint    `gorm:"not null;index;uniqueIndex"`
+	OutputInstrumentID   string  `gorm:"size:32;not null;index"`
+	GeneratedContentHash string  `gorm:"size:128;not null;default:'';index"`
+	Status               string  `gorm:"size:24;not null;index"`
+	IntegrityStatus      string  `gorm:"size:24;not null;index"`
+	BarCount             int     `gorm:"not null;default:0"`
+	DeviationMedian      float64 `gorm:"type:double precision;not null;default:0"`
+	DeviationP95         float64 `gorm:"type:double precision;not null;default:0"`
+	DeviationMaximum     float64 `gorm:"type:double precision;not null;default:0"`
+	DeviationOpenMax     float64 `gorm:"type:double precision;not null;default:0"`
+	DeviationHighMax     float64 `gorm:"type:double precision;not null;default:0"`
+	DeviationLowMax      float64 `gorm:"type:double precision;not null;default:0"`
+	DeviationCloseMax    float64 `gorm:"type:double precision;not null;default:0"`
+	ComputeTaskID        *uint   `gorm:"index"`
+	CompletedAt          *time.Time
+	ArchivedAt           *time.Time `gorm:"index"`
+	ErrorCode            string     `gorm:"size:64"`
+	ErrorMessage         string     `gorm:"type:text"`
+
+	Group          PerturbationGroup          `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	SourceSnapshot PerturbationSourceSnapshot `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	OutputVersion  MarketDataVersion          `gorm:"foreignKey:OutputVersionID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	ComputeTask    *ComputeTask               `gorm:"foreignKey:ComputeTaskID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
+}
+
+type PerturbationTest struct {
+	ID               uint `gorm:"primaryKey"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	OwnerUserID      uint       `gorm:"not null;index;uniqueIndex:idx_perturbation_test_owner_spec"`
+	GroupID          uint       `gorm:"not null;index"`
+	TestSpecHash     string     `gorm:"size:128;not null;uniqueIndex:idx_perturbation_test_owner_spec"`
+	SchemaVersion    string     `gorm:"size:48;not null"`
+	Name             string     `gorm:"size:180;not null"`
+	Notes            string     `gorm:"type:text"`
+	Tags             JSONB      `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	Status           string     `gorm:"size:32;not null;index"`
+	BacktestSettings JSONB      `gorm:"type:jsonb;not null"`
+	LatestSnapshotID *uint      `gorm:"index"`
+	ArchivedAt       *time.Time `gorm:"index"`
+	CompletedAt      *time.Time
+	ErrorMessage     string `gorm:"type:text"`
+
+	Group PerturbationGroup `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type PerturbationTestSubject struct {
+	ID             uint `gorm:"primaryKey"`
+	CreatedAt      time.Time
+	TestID         uint   `gorm:"not null;index;uniqueIndex:idx_perturbation_subject_hash;uniqueIndex:idx_perturbation_subject_order"`
+	Ordinal        int    `gorm:"not null;uniqueIndex:idx_perturbation_subject_order"`
+	SourceKind     string `gorm:"size:32;not null;index"`
+	SourceID       uint   `gorm:"not null;index"`
+	SourceVersion  string `gorm:"size:48;not null"`
+	SubjectHash    string `gorm:"size:128;not null;uniqueIndex:idx_perturbation_subject_hash"`
+	AdoptionUnit   JSONB  `gorm:"type:jsonb;not null"`
+	ExecutionInput JSONB  `gorm:"type:jsonb;not null"`
+	Dynamic        bool   `gorm:"not null;default:false;index"`
+	CandidateID    *uint  `gorm:"index"`
+
+	Test PerturbationTest `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type PerturbationTestBatch struct {
+	ID             uint `gorm:"primaryKey"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	TestID         uint   `gorm:"not null;index;uniqueIndex:idx_perturbation_batch_order;uniqueIndex:idx_perturbation_batch_manifest"`
+	Ordinal        int    `gorm:"not null;uniqueIndex:idx_perturbation_batch_order"`
+	ManifestHash   string `gorm:"size:128;not null;uniqueIndex:idx_perturbation_batch_manifest"`
+	Manifest       JSONB  `gorm:"type:jsonb;not null"`
+	ComputeTaskID  *uint  `gorm:"index"`
+	Status         string `gorm:"size:32;not null;index"`
+	PlannedCount   int    `gorm:"not null"`
+	CompletedCount int    `gorm:"not null;default:0"`
+	FailedCount    int    `gorm:"not null;default:0"`
+	MissingCount   int    `gorm:"not null;default:0"`
+	CacheHitCount  int    `gorm:"not null;default:0"`
+	CompletedAt    *time.Time
+	ErrorMessage   string `gorm:"type:text"`
+
+	Test        PerturbationTest `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	ComputeTask *ComputeTask     `gorm:"foreignKey:ComputeTaskID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
+}
+
+type PerturbationTestRun struct {
+	ID                        uint `gorm:"primaryKey"`
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	TestID                    uint   `gorm:"not null;index"`
+	BatchID                   uint   `gorm:"not null;index"`
+	SubjectID                 uint   `gorm:"not null;index;uniqueIndex:idx_perturbation_run_identity"`
+	DatasetVersionID          uint   `gorm:"not null;index"`
+	DatasetContentHash        string `gorm:"size:128;not null;index;uniqueIndex:idx_perturbation_run_identity"`
+	Alpha                     string `gorm:"size:64;not null;index"`
+	Seed                      string `gorm:"size:20;not null;index"`
+	BacktestSpecHash          string `gorm:"size:128;not null;uniqueIndex:idx_perturbation_run_identity"`
+	BacktestResultID          *uint  `gorm:"index"`
+	BacktestResultVersion     string `gorm:"size:48"`
+	BacktestResultContentHash string `gorm:"size:128;index"`
+	Status                    string `gorm:"size:24;not null;index"`
+	ReusedResult              bool   `gorm:"not null;default:false"`
+	Metrics                   JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	MetricHash                string `gorm:"size:128;index"`
+	PerformanceReportID       *uint  `gorm:"index"`
+	ErrorCode                 string `gorm:"size:64"`
+	ErrorMessage              string `gorm:"type:text"`
+	CompletedAt               *time.Time
+
+	Subject           PerturbationTestSubject `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	DatasetVersion    MarketDataVersion       `gorm:"foreignKey:DatasetVersionID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	BacktestResult    *BacktestResult         `gorm:"foreignKey:BacktestResultID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+	PerformanceReport *PerformanceReport      `gorm:"foreignKey:PerformanceReportID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type PerturbationAnalysisSnapshot struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	TestID            uint   `gorm:"not null;index"`
+	SnapshotKey       string `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion     string `gorm:"size:48;not null"`
+	AnalysisSetHash   string `gorm:"size:128;not null;uniqueIndex"`
+	StatisticsVersion string `gorm:"size:64;not null"`
+	Completeness      string `gorm:"size:24;not null;index"`
+	IncludedBatches   JSONB  `gorm:"type:jsonb;not null"`
+	PlannedCount      int    `gorm:"not null"`
+	ValidCount        int    `gorm:"not null"`
+	FailedCount       int    `gorm:"not null"`
+	MissingCount      int    `gorm:"not null"`
+	ContentHash       string `gorm:"size:128;not null;index"`
+	Summary           JSONB  `gorm:"type:jsonb;not null"`
+
+	Test PerturbationTest `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
+}
+
+type PerturbationMetricSummary struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	AnalysisSnapshotID uint   `gorm:"not null;index;uniqueIndex:idx_perturbation_metric_summary"`
+	SubjectID          uint   `gorm:"not null;index;uniqueIndex:idx_perturbation_metric_summary"`
+	Alpha              string `gorm:"size:64;not null;uniqueIndex:idx_perturbation_metric_summary"`
+	MetricKey          string `gorm:"size:80;not null;uniqueIndex:idx_perturbation_metric_summary"`
+	PlannedCount       int    `gorm:"not null"`
+	ValidCount         int    `gorm:"not null"`
+	FailedCount        int    `gorm:"not null"`
+	MissingCount       int    `gorm:"not null"`
+	Statistics         JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash        string `gorm:"size:128;not null;index"`
+}
+
+type PerturbationQualificationSummary struct {
+	ID                  uint `gorm:"primaryKey"`
+	CreatedAt           time.Time
+	AnalysisSnapshotID  uint   `gorm:"not null;index;uniqueIndex:idx_perturbation_qualification_summary"`
+	SubjectID           uint   `gorm:"not null;index;uniqueIndex:idx_perturbation_qualification_summary"`
+	Alpha               string `gorm:"size:64;not null;uniqueIndex:idx_perturbation_qualification_summary"`
+	ValidCount          int    `gorm:"not null"`
+	QualifiedCount      int    `gorm:"not null"`
+	ReturnFailedCount   int    `gorm:"not null"`
+	DrawdownFailedCount int    `gorm:"not null"`
+	BothFailedCount     int    `gorm:"not null"`
+	ContentHash         string `gorm:"size:128;not null;index"`
 }
 
 type ResearchDataset struct {

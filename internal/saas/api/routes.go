@@ -21,6 +21,7 @@ import (
 	klineinversesvc "quantsaas/internal/saas/klineinverse"
 	"quantsaas/internal/saas/marketdata"
 	parameterresearchsvc "quantsaas/internal/saas/parameterresearch"
+	perturbationsvc "quantsaas/internal/saas/perturbation"
 	robustnesssvc "quantsaas/internal/saas/robustness"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
@@ -50,6 +51,7 @@ type RouterDeps struct {
 	ParameterResearch *parameterresearchsvc.Service
 	ControlResearch   *controlresearchsvc.Service
 	KlineInverse      *klineinversesvc.Service
+	Perturbation      *perturbationsvc.Service
 	AgentStatus       AgentStatusProvider
 	WSHandler         gin.HandlerFunc
 }
@@ -120,6 +122,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		klineInverse = klineinversesvc.NewService(deps.DB, deps.ComputeTasks, nil, parameterResearch)
 	}
 	klineInverseHandler := NewKlineInverseHandler(klineInverse, deps.DB)
+	perturbationStudies := deps.Perturbation
+	if perturbationStudies == nil {
+		perturbationStudies = perturbationsvc.NewService(deps.DB, deps.ComputeTasks, parameterResearch)
+	}
+	perturbationHandler := NewPerturbationHandler(perturbationStudies)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
@@ -155,6 +162,29 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/market-data/klines/import", md.Import)
 	lab.POST("/market-data/klines/update-latest", md.UpdateLatest)
 	lab.POST("/market-data/generate/leveraged", md.GenerateLeveraged)
+	lab.GET("/market-data/perturbations/sources", perturbationHandler.Sources)
+	lab.POST("/market-data/perturbations/groups/plan", perturbationHandler.PlanGroup)
+	lab.POST("/market-data/perturbations/groups", perturbationHandler.CreateGroup)
+	lab.GET("/market-data/perturbations/groups", perturbationHandler.ListGroups)
+	lab.GET("/market-data/perturbations/groups/:id", perturbationHandler.GetGroup)
+	lab.PATCH("/market-data/perturbations/groups/:id/metadata", perturbationHandler.UpdateGroup)
+	lab.POST("/market-data/perturbations/groups/:id/archive", perturbationHandler.ArchiveGroup)
+	lab.POST("/market-data/perturbations/groups/:id/variants/plan", perturbationHandler.PlanVariants)
+	lab.POST("/market-data/perturbations/groups/:id/variants", perturbationHandler.StartVariants)
+	lab.GET("/market-data/perturbations/groups/:id/variants", perturbationHandler.ListVariants)
+	lab.GET("/market-data/perturbations/variants/:id", perturbationHandler.GetVariant)
+	lab.POST("/market-data/perturbations/variants/:id/verify", perturbationHandler.VerifyVariant)
+	lab.POST("/perturbation-tests/plan", perturbationHandler.PlanTest)
+	lab.POST("/perturbation-tests", perturbationHandler.CreateTest)
+	lab.GET("/perturbation-tests", perturbationHandler.ListTests)
+	lab.GET("/perturbation-tests/:id", perturbationHandler.GetTest)
+	lab.PATCH("/perturbation-tests/:id/metadata", perturbationHandler.UpdateTest)
+	lab.POST("/perturbation-tests/:id/archive", perturbationHandler.ArchiveTest)
+	lab.POST("/perturbation-tests/:id/batches/plan", perturbationHandler.PlanBatch)
+	lab.POST("/perturbation-tests/:id/batches", perturbationHandler.StartBatch)
+	lab.GET("/perturbation-tests/:id/runs", perturbationHandler.Runs)
+	lab.GET("/perturbation-tests/:id/analysis-snapshots", perturbationHandler.Snapshots)
+	lab.GET("/perturbation-tests/:id/analysis-snapshots/:snapshot_id", perturbationHandler.Snapshot)
 	lab.GET("/market-data/recomposition/sources", md.RecompositionSources)
 	lab.GET("/market-data/recomposition/source-bars", md.RecompositionSourceBars)
 	lab.POST("/market-data/recomposition/preview-tasks", md.CreateRecompositionPreview)

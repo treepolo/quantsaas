@@ -71,13 +71,15 @@ type StudySetting struct {
 }
 
 type MarketScope struct {
-	InstrumentID string `json:"instrument_id"`
-	DataSource   string `json:"data_source"`
-	Symbol       string `json:"symbol"`
-	Interval     string `json:"interval"`
-	StartTimeMs  int64  `json:"start_time_ms"`
-	EndTimeMs    int64  `json:"end_time_ms"`
-	DatasetHash  string `json:"dataset_hash"`
+	InstrumentID          string `json:"instrument_id"`
+	DataSource            string `json:"data_source"`
+	Symbol                string `json:"symbol"`
+	Interval              string `json:"interval"`
+	MarketDataVersionID   uint   `json:"market_data_version_id,omitempty"`
+	MarketDataContentHash string `json:"market_data_content_hash,omitempty"`
+	StartTimeMs           int64  `json:"start_time_ms"`
+	EndTimeMs             int64  `json:"end_time_ms"`
+	DatasetHash           string `json:"dataset_hash"`
 }
 
 type TrainExecutionInput struct {

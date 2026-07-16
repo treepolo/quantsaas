@@ -24,87 +24,97 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const backupVersion = 10
+const backupVersion = 11
 
 type incrementalBackup struct {
-	Version                  int                                       `json:"version"`
-	Kind                     string                                    `json:"kind"`
-	CreatedAt                string                                    `json:"created_at"`
-	Since                    string                                    `json:"since"`
-	ResearchInstruments      []saasstore.ResearchInstrument            `json:"research_instruments"`
-	KLines                   []saasstore.KLine                         `json:"k_lines"`
-	DatasetMetadata          []saasstore.DatasetMetadata               `json:"dataset_metadata"`
-	DailySnapshots           []saasstore.DailyExecutionSnapshot        `json:"daily_execution_snapshots"`
-	GeneRecords              []saasstore.GeneRecord                    `json:"gene_records"`
-	GeneObservations         []saasstore.GeneObservation               `json:"gene_observations"`
-	EvolutionTasks           []saasstore.EvolutionTask                 `json:"evolution_tasks"`
-	BacktestSpecs            []saasstore.BacktestSpec                  `json:"backtest_specs"`
-	BacktestResults          []saasstore.BacktestResult                `json:"backtest_results"`
-	BacktestSummaries        []saasstore.BacktestResultSummary         `json:"backtest_result_summaries"`
-	BacktestPathBlocks       []saasstore.BacktestPathBlock             `json:"backtest_path_blocks"`
-	BacktestRuns             []saasstore.BacktestRun                   `json:"backtest_runs"`
-	PerformanceReports       []saasstore.PerformanceReport             `json:"performance_reports"`
-	PerformanceSummaries     []saasstore.PerformanceReportSummary      `json:"performance_report_summaries"`
-	PerformanceCharts        []saasstore.PerformanceReportChartBlock   `json:"performance_report_chart_blocks"`
-	ComputeTasks             []saasstore.ComputeTask                   `json:"compute_tasks"`
-	ComputeCacheEntries      []saasstore.ComputeCacheEntry             `json:"compute_cache_entries"`
-	ComputeTaskItems         []saasstore.ComputeTaskItem               `json:"compute_task_items"`
-	ComputeDependencies      []saasstore.ComputeTaskDependency         `json:"compute_task_dependencies"`
-	RobustnessStudies        []saasstore.RobustnessStudy               `json:"robustness_studies"`
-	RobustnessPoints         []saasstore.RobustnessEvaluationPoint     `json:"robustness_evaluation_points"`
-	RobustnessSnapshots      []saasstore.RobustnessAnalysisSnapshot    `json:"robustness_analysis_snapshots"`
-	DynamicModelStudies      []saasstore.DynamicModelStudy             `json:"dynamic_model_studies"`
-	DynamicModelArtifacts    []saasstore.DynamicModelArtifact          `json:"dynamic_model_artifacts"`
-	DynamicPredictions       []saasstore.DynamicPredictionSnapshot     `json:"dynamic_prediction_snapshots"`
-	DynamicPolicies          []saasstore.DynamicPolicyArtifact         `json:"dynamic_policy_artifacts"`
-	DynamicMaterializations  []saasstore.DynamicMaterialization        `json:"dynamic_materializations"`
-	DynamicReportSnapshots   []saasstore.DynamicModelReportSnapshot    `json:"dynamic_model_report_snapshots"`
-	DynamicReportBlocks      []saasstore.DynamicReportBlock            `json:"dynamic_report_blocks"`
-	MarketSeries             []saasstore.MarketSeries                  `json:"market_series"`
-	MarketDataVersions       []saasstore.MarketDataVersion             `json:"market_data_versions"`
-	MarketVersionBars        []saasstore.MarketDataVersionBar          `json:"market_data_version_bars"`
-	MarketVersionSources     []saasstore.MarketDataVersionSource       `json:"market_data_version_sources"`
-	RecompositionPlans       []saasstore.RecompositionPlan             `json:"recomposition_plans"`
-	RecompositionSegments    []saasstore.RecompositionPlanSegment      `json:"recomposition_plan_segments"`
-	RecompositionPreviewBars []saasstore.RecompositionPreviewBar       `json:"recomposition_preview_bars"`
-	RecompositionGenerations []saasstore.RecompositionGeneration       `json:"recomposition_generations"`
-	RecompositionInstances   []saasstore.RecompositionSegmentInstance  `json:"recomposition_segment_instances"`
-	RecompositionLineage     []saasstore.RecompositionBarLineage       `json:"recomposition_bar_lineage"`
-	ResearchDatasets         []saasstore.ResearchDataset               `json:"research_datasets"`
-	ResearchDatasetSeries    []saasstore.ResearchDatasetSeries         `json:"research_dataset_series"`
-	ResearchConfigurations   []saasstore.ResearchConfiguration         `json:"research_configurations"`
-	ResearchConfigMetadata   []saasstore.ResearchConfigurationMetadata `json:"research_configuration_metadata"`
-	ResearchRuns             []saasstore.ResearchRun                   `json:"research_runs"`
-	ResearchStages           []saasstore.ResearchStage                 `json:"research_stages"`
-	ResearchPoints           []saasstore.ResearchEvaluationPoint       `json:"research_evaluation_points"`
-	ResearchPointOrigins     []saasstore.ResearchPointOrigin           `json:"research_point_origins"`
-	ResearchAnalyses         []saasstore.ResearchAnalysisSnapshot      `json:"research_analysis_snapshots"`
-	RobustRegions            []saasstore.RobustRegion                  `json:"robust_regions"`
-	RobustRegionPoints       []saasstore.RobustRegionPoint             `json:"robust_region_points"`
-	RobustCandidates         []saasstore.RobustCandidate               `json:"robust_candidates"`
-	CandidateAnalysisLinks   []saasstore.CandidateAnalysisLink         `json:"candidate_analysis_links"`
-	CandidateGeneLinks       []saasstore.CandidateGeneLink             `json:"candidate_gene_links"`
-	ResearchSeries           []saasstore.ResearchSeries                `json:"research_series"`
-	ResearchSeriesMembers    []saasstore.ResearchSeriesMember          `json:"research_series_members"`
-	ResearchComparisons      []saasstore.ResearchComparisonSnapshot    `json:"research_comparison_snapshots"`
-	SurrogateSnapshots       []saasstore.SurrogateModelSnapshot        `json:"surrogate_model_snapshots"`
-	SurrogateProposals       []saasstore.SurrogateProposal             `json:"surrogate_proposals"`
-	RandomParameterBatches   []saasstore.RandomParameterBatch          `json:"random_parameter_batches"`
-	RandomParameterRecords   []saasstore.RandomParameterRecord         `json:"random_parameter_records"`
-	ControlAnalysisTasks     []saasstore.ControlAnalysisTask           `json:"control_analysis_tasks"`
-	ControlEvaluations       []saasstore.ControlEvaluation             `json:"control_evaluations"`
-	ControlSnapshots         []saasstore.ControlAnalysisSnapshot       `json:"control_analysis_snapshots"`
-	ControlSnapshotMembers   []saasstore.ControlSnapshotMember         `json:"control_snapshot_members"`
-	KlineInverseStudies      []saasstore.KlineInverseStudy             `json:"kline_inverse_studies"`
-	KlineInverseCalibrations []saasstore.KlineInverseCalibration       `json:"kline_inverse_calibrations"`
-	KlineInverseBatches      []saasstore.KlineInverseBatch             `json:"kline_inverse_batches"`
-	KlineInversePaths        []saasstore.KlineInversePath              `json:"kline_inverse_paths"`
-	KlineInverseEvaluations  []saasstore.KlineInverseEvaluation        `json:"kline_inverse_evaluations"`
-	KlineInverseLineage      []saasstore.KlineInverseLineageEdge       `json:"kline_inverse_lineage_edges"`
-	KlineInverseSnapshots    []saasstore.KlineInverseArchiveSnapshot   `json:"kline_inverse_archive_snapshots"`
-	KlineInverseProbes       []saasstore.KlineInverseProbeBatch        `json:"kline_inverse_probe_batches"`
-	KlineInverseSourceLinks  []saasstore.KlineInverseSourceLink        `json:"kline_inverse_source_links"`
-	Counts                   map[string]int                            `json:"counts"`
+	Version                    int                                          `json:"version"`
+	Kind                       string                                       `json:"kind"`
+	CreatedAt                  string                                       `json:"created_at"`
+	Since                      string                                       `json:"since"`
+	ResearchInstruments        []saasstore.ResearchInstrument               `json:"research_instruments"`
+	KLines                     []saasstore.KLine                            `json:"k_lines"`
+	DatasetMetadata            []saasstore.DatasetMetadata                  `json:"dataset_metadata"`
+	DailySnapshots             []saasstore.DailyExecutionSnapshot           `json:"daily_execution_snapshots"`
+	GeneRecords                []saasstore.GeneRecord                       `json:"gene_records"`
+	GeneObservations           []saasstore.GeneObservation                  `json:"gene_observations"`
+	EvolutionTasks             []saasstore.EvolutionTask                    `json:"evolution_tasks"`
+	BacktestSpecs              []saasstore.BacktestSpec                     `json:"backtest_specs"`
+	BacktestResults            []saasstore.BacktestResult                   `json:"backtest_results"`
+	BacktestSummaries          []saasstore.BacktestResultSummary            `json:"backtest_result_summaries"`
+	BacktestPathBlocks         []saasstore.BacktestPathBlock                `json:"backtest_path_blocks"`
+	BacktestRuns               []saasstore.BacktestRun                      `json:"backtest_runs"`
+	PerformanceReports         []saasstore.PerformanceReport                `json:"performance_reports"`
+	PerformanceSummaries       []saasstore.PerformanceReportSummary         `json:"performance_report_summaries"`
+	PerformanceCharts          []saasstore.PerformanceReportChartBlock      `json:"performance_report_chart_blocks"`
+	ComputeTasks               []saasstore.ComputeTask                      `json:"compute_tasks"`
+	ComputeCacheEntries        []saasstore.ComputeCacheEntry                `json:"compute_cache_entries"`
+	ComputeTaskItems           []saasstore.ComputeTaskItem                  `json:"compute_task_items"`
+	ComputeDependencies        []saasstore.ComputeTaskDependency            `json:"compute_task_dependencies"`
+	RobustnessStudies          []saasstore.RobustnessStudy                  `json:"robustness_studies"`
+	RobustnessPoints           []saasstore.RobustnessEvaluationPoint        `json:"robustness_evaluation_points"`
+	RobustnessSnapshots        []saasstore.RobustnessAnalysisSnapshot       `json:"robustness_analysis_snapshots"`
+	DynamicModelStudies        []saasstore.DynamicModelStudy                `json:"dynamic_model_studies"`
+	DynamicModelArtifacts      []saasstore.DynamicModelArtifact             `json:"dynamic_model_artifacts"`
+	DynamicPredictions         []saasstore.DynamicPredictionSnapshot        `json:"dynamic_prediction_snapshots"`
+	DynamicPolicies            []saasstore.DynamicPolicyArtifact            `json:"dynamic_policy_artifacts"`
+	DynamicMaterializations    []saasstore.DynamicMaterialization           `json:"dynamic_materializations"`
+	DynamicReportSnapshots     []saasstore.DynamicModelReportSnapshot       `json:"dynamic_model_report_snapshots"`
+	DynamicReportBlocks        []saasstore.DynamicReportBlock               `json:"dynamic_report_blocks"`
+	MarketSeries               []saasstore.MarketSeries                     `json:"market_series"`
+	MarketDataVersions         []saasstore.MarketDataVersion                `json:"market_data_versions"`
+	MarketVersionBars          []saasstore.MarketDataVersionBar             `json:"market_data_version_bars"`
+	MarketVersionSources       []saasstore.MarketDataVersionSource          `json:"market_data_version_sources"`
+	RecompositionPlans         []saasstore.RecompositionPlan                `json:"recomposition_plans"`
+	RecompositionSegments      []saasstore.RecompositionPlanSegment         `json:"recomposition_plan_segments"`
+	RecompositionPreviewBars   []saasstore.RecompositionPreviewBar          `json:"recomposition_preview_bars"`
+	RecompositionGenerations   []saasstore.RecompositionGeneration          `json:"recomposition_generations"`
+	RecompositionInstances     []saasstore.RecompositionSegmentInstance     `json:"recomposition_segment_instances"`
+	RecompositionLineage       []saasstore.RecompositionBarLineage          `json:"recomposition_bar_lineage"`
+	PerturbationSnapshots      []saasstore.PerturbationSourceSnapshot       `json:"perturbation_source_snapshots"`
+	PerturbationGroups         []saasstore.PerturbationGroup                `json:"perturbation_groups"`
+	PerturbationVariants       []saasstore.PerturbationVariant              `json:"perturbation_variants"`
+	PerturbationTests          []saasstore.PerturbationTest                 `json:"perturbation_tests"`
+	PerturbationSubjects       []saasstore.PerturbationTestSubject          `json:"perturbation_test_subjects"`
+	PerturbationBatches        []saasstore.PerturbationTestBatch            `json:"perturbation_test_batches"`
+	PerturbationRuns           []saasstore.PerturbationTestRun              `json:"perturbation_test_runs"`
+	PerturbationAnalyses       []saasstore.PerturbationAnalysisSnapshot     `json:"perturbation_analysis_snapshots"`
+	PerturbationMetrics        []saasstore.PerturbationMetricSummary        `json:"perturbation_metric_summaries"`
+	PerturbationQualifications []saasstore.PerturbationQualificationSummary `json:"perturbation_qualification_summaries"`
+	ResearchDatasets           []saasstore.ResearchDataset                  `json:"research_datasets"`
+	ResearchDatasetSeries      []saasstore.ResearchDatasetSeries            `json:"research_dataset_series"`
+	ResearchConfigurations     []saasstore.ResearchConfiguration            `json:"research_configurations"`
+	ResearchConfigMetadata     []saasstore.ResearchConfigurationMetadata    `json:"research_configuration_metadata"`
+	ResearchRuns               []saasstore.ResearchRun                      `json:"research_runs"`
+	ResearchStages             []saasstore.ResearchStage                    `json:"research_stages"`
+	ResearchPoints             []saasstore.ResearchEvaluationPoint          `json:"research_evaluation_points"`
+	ResearchPointOrigins       []saasstore.ResearchPointOrigin              `json:"research_point_origins"`
+	ResearchAnalyses           []saasstore.ResearchAnalysisSnapshot         `json:"research_analysis_snapshots"`
+	RobustRegions              []saasstore.RobustRegion                     `json:"robust_regions"`
+	RobustRegionPoints         []saasstore.RobustRegionPoint                `json:"robust_region_points"`
+	RobustCandidates           []saasstore.RobustCandidate                  `json:"robust_candidates"`
+	CandidateAnalysisLinks     []saasstore.CandidateAnalysisLink            `json:"candidate_analysis_links"`
+	CandidateGeneLinks         []saasstore.CandidateGeneLink                `json:"candidate_gene_links"`
+	ResearchSeries             []saasstore.ResearchSeries                   `json:"research_series"`
+	ResearchSeriesMembers      []saasstore.ResearchSeriesMember             `json:"research_series_members"`
+	ResearchComparisons        []saasstore.ResearchComparisonSnapshot       `json:"research_comparison_snapshots"`
+	SurrogateSnapshots         []saasstore.SurrogateModelSnapshot           `json:"surrogate_model_snapshots"`
+	SurrogateProposals         []saasstore.SurrogateProposal                `json:"surrogate_proposals"`
+	RandomParameterBatches     []saasstore.RandomParameterBatch             `json:"random_parameter_batches"`
+	RandomParameterRecords     []saasstore.RandomParameterRecord            `json:"random_parameter_records"`
+	ControlAnalysisTasks       []saasstore.ControlAnalysisTask              `json:"control_analysis_tasks"`
+	ControlEvaluations         []saasstore.ControlEvaluation                `json:"control_evaluations"`
+	ControlSnapshots           []saasstore.ControlAnalysisSnapshot          `json:"control_analysis_snapshots"`
+	ControlSnapshotMembers     []saasstore.ControlSnapshotMember            `json:"control_snapshot_members"`
+	KlineInverseStudies        []saasstore.KlineInverseStudy                `json:"kline_inverse_studies"`
+	KlineInverseCalibrations   []saasstore.KlineInverseCalibration          `json:"kline_inverse_calibrations"`
+	KlineInverseBatches        []saasstore.KlineInverseBatch                `json:"kline_inverse_batches"`
+	KlineInversePaths          []saasstore.KlineInversePath                 `json:"kline_inverse_paths"`
+	KlineInverseEvaluations    []saasstore.KlineInverseEvaluation           `json:"kline_inverse_evaluations"`
+	KlineInverseLineage        []saasstore.KlineInverseLineageEdge          `json:"kline_inverse_lineage_edges"`
+	KlineInverseSnapshots      []saasstore.KlineInverseArchiveSnapshot      `json:"kline_inverse_archive_snapshots"`
+	KlineInverseProbes         []saasstore.KlineInverseProbeBatch           `json:"kline_inverse_probe_batches"`
+	KlineInverseSourceLinks    []saasstore.KlineInverseSourceLink           `json:"kline_inverse_source_links"`
+	Counts                     map[string]int                               `json:"counts"`
 }
 
 func main() {
@@ -343,6 +353,16 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	if err := createdSince(db, since, &backup.RecompositionLineage); err != nil {
 		return backup, err
 	}
+	for _, target := range []any{&backup.PerturbationSnapshots, &backup.PerturbationGroups, &backup.PerturbationVariants, &backup.PerturbationTests, &backup.PerturbationBatches, &backup.PerturbationRuns} {
+		if err := changedSinceAny(db, since, target); err != nil {
+			return backup, err
+		}
+	}
+	for _, target := range []any{&backup.PerturbationSubjects, &backup.PerturbationAnalyses, &backup.PerturbationMetrics, &backup.PerturbationQualifications} {
+		if err := createdSinceAny(db, since, target); err != nil {
+			return backup, err
+		}
+	}
 	if err := changedSince(db, since, &backup.ResearchDatasets); err != nil {
 		return backup, err
 	}
@@ -386,6 +406,9 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 		return backup, err
 	}
 	if err := hydrateParameterResearchClosure(db, &backup); err != nil {
+		return backup, err
+	}
+	if err := hydratePerturbationClosure(db, &backup); err != nil {
 		return backup, err
 	}
 	if err := hydrateMarketVersionClosure(db, &backup); err != nil {
@@ -451,6 +474,16 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	backup.Counts["recomposition_generations"] = len(backup.RecompositionGenerations)
 	backup.Counts["recomposition_segment_instances"] = len(backup.RecompositionInstances)
 	backup.Counts["recomposition_bar_lineage"] = len(backup.RecompositionLineage)
+	backup.Counts["perturbation_source_snapshots"] = len(backup.PerturbationSnapshots)
+	backup.Counts["perturbation_groups"] = len(backup.PerturbationGroups)
+	backup.Counts["perturbation_variants"] = len(backup.PerturbationVariants)
+	backup.Counts["perturbation_tests"] = len(backup.PerturbationTests)
+	backup.Counts["perturbation_test_subjects"] = len(backup.PerturbationSubjects)
+	backup.Counts["perturbation_test_batches"] = len(backup.PerturbationBatches)
+	backup.Counts["perturbation_test_runs"] = len(backup.PerturbationRuns)
+	backup.Counts["perturbation_analysis_snapshots"] = len(backup.PerturbationAnalyses)
+	backup.Counts["perturbation_metric_summaries"] = len(backup.PerturbationMetrics)
+	backup.Counts["perturbation_qualification_summaries"] = len(backup.PerturbationQualifications)
 	backup.Counts["research_datasets"] = len(backup.ResearchDatasets)
 	backup.Counts["research_dataset_series"] = len(backup.ResearchDatasetSeries)
 	backup.Counts["research_configurations"] = len(backup.ResearchConfigurations)
@@ -1013,6 +1046,100 @@ func mergeRobustnessSnapshots(left, right []saasstore.RobustnessAnalysisSnapshot
 	return rows
 }
 
+func hydratePerturbationClosure(db *gorm.DB, backup *incrementalBackup) error {
+	changed := len(backup.PerturbationSnapshots)+len(backup.PerturbationGroups)+len(backup.PerturbationVariants)+len(backup.PerturbationTests)+
+		len(backup.PerturbationSubjects)+len(backup.PerturbationBatches)+len(backup.PerturbationRuns)+len(backup.PerturbationAnalyses)+
+		len(backup.PerturbationMetrics)+len(backup.PerturbationQualifications) > 0
+	if !changed {
+		return nil
+	}
+	for _, target := range []any{&backup.PerturbationSnapshots, &backup.PerturbationGroups, &backup.PerturbationVariants, &backup.PerturbationTests,
+		&backup.PerturbationSubjects, &backup.PerturbationBatches, &backup.PerturbationRuns, &backup.PerturbationAnalyses,
+		&backup.PerturbationMetrics, &backup.PerturbationQualifications} {
+		if err := db.Find(target).Error; err != nil {
+			return err
+		}
+	}
+	versionIDs, taskIDs, resultIDs, reportIDs := map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}
+	geneIDs, candidateIDs := map[uint]struct{}{}, map[uint]struct{}{}
+	for _, row := range backup.PerturbationSnapshots {
+		versionIDs[row.SourceVersionID] = struct{}{}
+	}
+	for _, row := range backup.PerturbationVariants {
+		versionIDs[row.OutputVersionID] = struct{}{}
+		if row.ComputeTaskID != nil {
+			taskIDs[*row.ComputeTaskID] = struct{}{}
+		}
+	}
+	for _, row := range backup.PerturbationBatches {
+		if row.ComputeTaskID != nil {
+			taskIDs[*row.ComputeTaskID] = struct{}{}
+		}
+	}
+	for _, row := range backup.PerturbationRuns {
+		versionIDs[row.DatasetVersionID] = struct{}{}
+		if row.BacktestResultID != nil {
+			resultIDs[*row.BacktestResultID] = struct{}{}
+		}
+		if row.PerformanceReportID != nil {
+			reportIDs[*row.PerformanceReportID] = struct{}{}
+		}
+	}
+	for _, row := range backup.PerturbationSubjects {
+		switch row.SourceKind {
+		case "gene_record":
+			geneIDs[row.SourceID] = struct{}{}
+		case "robust_candidate":
+			candidateIDs[row.SourceID] = struct{}{}
+		case "backtest_result":
+			resultIDs[row.SourceID] = struct{}{}
+		}
+	}
+	if ids := uintSetValues(versionIDs); len(ids) > 0 {
+		var versions []saasstore.MarketDataVersion
+		if err := db.Where("id IN ?", ids).Find(&versions).Error; err != nil {
+			return err
+		}
+		backup.MarketDataVersions = mergeByUintID(backup.MarketDataVersions, versions, func(row saasstore.MarketDataVersion) uint { return row.ID })
+	}
+	if ids := uintSetValues(taskIDs); len(ids) > 0 {
+		var rows []saasstore.ComputeTask
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.ComputeTasks = mergeByUintID(backup.ComputeTasks, rows, func(row saasstore.ComputeTask) uint { return row.ID })
+	}
+	if ids := uintSetValues(resultIDs); len(ids) > 0 {
+		var rows []saasstore.BacktestResult
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.BacktestResults = mergeByUintID(backup.BacktestResults, rows, func(row saasstore.BacktestResult) uint { return row.ID })
+	}
+	if ids := uintSetValues(reportIDs); len(ids) > 0 {
+		var rows []saasstore.PerformanceReport
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.PerformanceReports = mergeByUintID(backup.PerformanceReports, rows, func(row saasstore.PerformanceReport) uint { return row.ID })
+	}
+	if ids := uintSetValues(geneIDs); len(ids) > 0 {
+		var rows []saasstore.GeneRecord
+		if err := db.Unscoped().Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.GeneRecords = mergeByUintID(backup.GeneRecords, rows, func(row saasstore.GeneRecord) uint { return row.ID })
+	}
+	if ids := uintSetValues(candidateIDs); len(ids) > 0 {
+		var rows []saasstore.RobustCandidate
+		if err := db.Unscoped().Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.RobustCandidates = mergeByUintID(backup.RobustCandidates, rows, func(row saasstore.RobustCandidate) uint { return row.ID })
+	}
+	return nil
+}
+
 func hydrateMarketVersionClosure(db *gorm.DB, backup *incrementalBackup) error {
 	changed := len(backup.MarketSeries)+len(backup.MarketDataVersions)+len(backup.MarketVersionBars)+len(backup.MarketVersionSources)+
 		len(backup.RecompositionPlans)+len(backup.RecompositionSegments)+len(backup.RecompositionPreviewBars)+
@@ -1219,6 +1346,36 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 			return err
 		}
 		if err := saveAll(tx, backup.RecompositionLineage); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationSnapshots); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationGroups); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationVariants); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationTests); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationSubjects); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationBatches); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationRuns); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationAnalyses); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationMetrics); err != nil {
+			return err
+		}
+		if err := saveAll(tx, backup.PerturbationQualifications); err != nil {
 			return err
 		}
 		if err := saveAll(tx, backup.ResearchDatasets); err != nil {
@@ -2518,6 +2675,16 @@ func resetSequences(db *gorm.DB) error {
 		"recomposition_generations":               "id",
 		"recomposition_segment_instances":         "id",
 		"recomposition_bar_lineages":              "id",
+		"perturbation_source_snapshots":           "id",
+		"perturbation_groups":                     "id",
+		"perturbation_variants":                   "id",
+		"perturbation_tests":                      "id",
+		"perturbation_test_subjects":              "id",
+		"perturbation_test_batches":               "id",
+		"perturbation_test_runs":                  "id",
+		"perturbation_analysis_snapshots":         "id",
+		"perturbation_metric_summaries":           "id",
+		"perturbation_qualification_summaries":    "id",
 		"research_datasets":                       "id",
 		"research_dataset_series":                 "id",
 		"research_configurations":                 "id",

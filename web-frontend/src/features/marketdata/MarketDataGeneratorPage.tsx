@@ -12,6 +12,7 @@ import {
 import { computeTasksApi, type ComputeTask } from "../../shared/services/computeTasks";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
+import { PerturbationWorkspace } from "./PerturbationWorkspace";
 
 const intervalLabels: Record<string, string> = {
   "1d": "日 K", "1h": "1 小時 K", "15m": "15 分 K", "5m": "5 分 K", "1m": "1 分 K", "1s": "1 秒 K", "1w": "週 K", "1M": "月 K"
@@ -47,7 +48,7 @@ function newItemID() {
 }
 
 export function MarketDataGeneratorPage() {
-  const [mode, setMode] = useState<"leverage" | "recomposition">("recomposition");
+  const [mode, setMode] = useState<"leverage" | "perturbation" | "recomposition">(() => new URLSearchParams(location.search).get("mode") === "perturbation" ? "perturbation" : "recomposition");
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
   return (
@@ -55,13 +56,15 @@ export function MarketDataGeneratorPage() {
       <div>
         <div className="flex items-center gap-3 text-sm font-medium text-[#99f6e4]"><WandSparkles className="h-4 w-4" />行情資料產生器</div>
         <h1 className="mt-2 text-2xl font-semibold text-slate-100">建立可重現的研究行情</h1>
-        <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-400">每日倍數模式維持既有覆寫行為；片段重組模式會先建立預覽，再經完整展開、日曆稽核與原子發布，成品版本不會被後續操作覆寫。</p>
+        <p className="mt-2 max-w-4xl text-sm leading-6 text-slate-400">每日倍數模式維持既有覆寫行為；局部擾動與片段重組使用不可變來源、版本化配方與內容稽核，成品不會被後續操作覆寫。</p>
       </div>
       <div className="flex gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-1">
-        <ModeButton active={mode === "recomposition"} onClick={() => setMode("recomposition")}>K 線片段重組</ModeButton>
         <ModeButton active={mode === "leverage"} onClick={() => setMode("leverage")}>每日倍數做多</ModeButton>
+        <ModeButton active={mode === "perturbation"} onClick={() => setMode("perturbation")}>局部行情擾動</ModeButton>
+        <ModeButton active={mode === "recomposition"} onClick={() => setMode("recomposition")}>K 線片段重組</ModeButton>
       </div>
       <div className={mode === "recomposition" ? "block" : "hidden"}><RecompositionEditor /></div>
+      <div className={mode === "perturbation" ? "block" : "hidden"}><PerturbationWorkspace /></div>
       <div className={mode === "leverage" ? "block" : "hidden"}><LeverageGenerator instruments={instruments} /></div>
     </div>
   );
