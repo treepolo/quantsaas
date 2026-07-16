@@ -7,6 +7,7 @@ import (
 	dynamiccore "quantsaas/internal/dynamicparam"
 	core "quantsaas/internal/parameterresearch"
 	robust "quantsaas/internal/robustness"
+	"quantsaas/internal/saas/backtest"
 	"quantsaas/internal/saas/computetask"
 	robustnesssvc "quantsaas/internal/saas/robustness"
 )
@@ -36,6 +37,16 @@ type DynamicSpaceDescriptor struct {
 	PolicyArtifactID uint                                    `json:"policy_artifact_id"`
 	Schema           dynamiccore.DynamicParameterSpaceSchema `json:"schema"`
 	BaseValues       map[string]float64                      `json:"base_values"`
+}
+
+// PointExecutionInput is the stable M-owned adapter used by downstream H. It
+// preserves K's frozen structure while allowing only M research dimensions to
+// change.
+type PointExecutionInput struct {
+	ExecutorType string                 `json:"executor_type"`
+	Input        json.RawMessage        `json:"input"`
+	Backtest     backtest.CreateRequest `json:"backtest"`
+	Dynamic      bool                   `json:"dynamic"`
 }
 
 type CreateConfigurationRequest struct {

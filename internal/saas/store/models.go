@@ -1487,3 +1487,125 @@ type SurrogateProposal struct {
 	ActualPointID       *uint  `gorm:"index"`
 	ActualError         JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
 }
+
+// RandomParameterBatch is H's immutable random-question identity. TargetCount
+// may only grow; existing records are never regenerated or overwritten.
+type RandomParameterBatch struct {
+	ID                    uint `gorm:"primaryKey"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	OwnerUserID           uint   `gorm:"not null;index"`
+	BatchKey              string `gorm:"size:128;not null;uniqueIndex"`
+	Seed                  int64  `gorm:"not null"`
+	TargetCount           int    `gorm:"not null"`
+	GeneratorVersion      string `gorm:"size:48;not null"`
+	RangeVersion          string `gorm:"size:48;not null"`
+	ParameterSpaceVersion string `gorm:"size:48;not null"`
+	ParameterSpaceHash    string `gorm:"size:128;not null;index"`
+	ParameterSpace        JSONB  `gorm:"type:jsonb;not null"`
+	FixedStructureHash    string `gorm:"size:128;not null;index"`
+	ModelArtifactHash     string `gorm:"size:128;index"`
+	PredictionSchemaHash  string `gorm:"size:128;index"`
+	DynamicPolicyHash     string `gorm:"size:128;index"`
+	AttemptCount          int    `gorm:"not null;default:0"`
+	RejectionCount        int    `gorm:"not null;default:0"`
+	RejectReasons         JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ContentHash           string `gorm:"size:128;not null;index"`
+	ArchivedAt            *time.Time
+}
+
+type RandomParameterRecord struct {
+	ID                    uint `gorm:"primaryKey"`
+	CreatedAt             time.Time
+	BatchID               uint   `gorm:"not null;index;uniqueIndex:idx_random_parameter_batch_index"`
+	SequenceIndex         int    `gorm:"not null;uniqueIndex:idx_random_parameter_batch_index"`
+	Coordinates           JSONB  `gorm:"type:jsonb;not null"`
+	Parameters            JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash           string `gorm:"size:128;not null;index"`
+	BacktestResultID      *uint  `gorm:"index"`
+	BacktestResultVersion string `gorm:"size:48"`
+	BacktestContentHash   string `gorm:"size:128;index"`
+}
+
+// ControlAnalysisTask owns H orchestration and mutable human metadata. Its
+// Canonical payload fixes every result-affecting condition except append-only
+// target counts.
+type ControlAnalysisTask struct {
+	ID                      uint `gorm:"primaryKey"`
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
+	OwnerUserID             uint   `gorm:"not null;index"`
+	TaskKey                 string `gorm:"size:128;not null;uniqueIndex:idx_control_task_owner_key"`
+	Name                    string `gorm:"size:180;not null"`
+	Notes                   string `gorm:"type:text"`
+	Tags                    JSONB  `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	Status                  string `gorm:"size:32;not null;index"`
+	SourceKind              string `gorm:"size:32;not null;index"`
+	SourceGenomeID          *uint  `gorm:"index"`
+	CandidateID             *uint  `gorm:"index"`
+	ResearchConfigurationID *uint  `gorm:"index"`
+	SourceVersion           string `gorm:"size:48;not null"`
+	SourceContentHash       string `gorm:"size:128;not null;index"`
+	RandomBatchID           uint   `gorm:"not null;index"`
+	RandomTargetCount       int    `gorm:"not null"`
+	ShuffleSeed             int64  `gorm:"not null"`
+	ShuffleTargetCount      int    `gorm:"not null"`
+	ToggleEveryNBars        int    `gorm:"not null"`
+	RuleVersion             string `gorm:"size:48;not null"`
+	StatisticsVersion       string `gorm:"size:48;not null"`
+	ParameterSpaceHash      string `gorm:"size:128;not null;index"`
+	ModelArtifactHash       string `gorm:"size:128;index"`
+	PredictionSchemaHash    string `gorm:"size:128;index"`
+	DynamicPolicyHash       string `gorm:"size:128;index"`
+	CanonicalHash           string `gorm:"size:128;not null;index"`
+	Canonical               JSONB  `gorm:"type:jsonb;not null"`
+	ComputeTaskID           *uint  `gorm:"index"`
+	LatestSnapshotID        *uint  `gorm:"index"`
+	StartedAt               *time.Time
+	CompletedAt             *time.Time
+	ArchivedAt              *time.Time
+}
+
+type ControlEvaluation struct {
+	ID                        uint `gorm:"primaryKey"`
+	CreatedAt                 time.Time
+	UpdatedAt                 time.Time
+	TaskID                    uint   `gorm:"not null;index;uniqueIndex:idx_control_evaluation_identity"`
+	Kind                      string `gorm:"size:32;not null;index;uniqueIndex:idx_control_evaluation_identity"`
+	SequenceIndex             int    `gorm:"not null;uniqueIndex:idx_control_evaluation_identity"`
+	RuleType                  string `gorm:"size:48;index"`
+	RandomParameterRecordID   *uint  `gorm:"index"`
+	BacktestResultID          uint   `gorm:"not null;index"`
+	BacktestResultVersion     string `gorm:"size:48;not null"`
+	BacktestResultContentHash string `gorm:"size:128;not null;index"`
+	PerformanceReportID       *uint  `gorm:"index"`
+	Summary                   JSONB  `gorm:"type:jsonb;not null"`
+	SummaryHash               string `gorm:"size:128;not null;index"`
+}
+
+type ControlAnalysisSnapshot struct {
+	ID                    uint `gorm:"primaryKey"`
+	CreatedAt             time.Time
+	TaskID                uint   `gorm:"not null;index"`
+	SnapshotKey           string `gorm:"size:128;not null;uniqueIndex"`
+	SchemaVersion         string `gorm:"size:48;not null"`
+	Completeness          string `gorm:"size:32;not null;index"`
+	StatisticsVersion     string `gorm:"size:48;not null"`
+	RandomCompletedCount  int    `gorm:"not null"`
+	ShuffleCompletedCount int    `gorm:"not null"`
+	RuleCompletedCount    int    `gorm:"not null"`
+	FailedCount           int    `gorm:"not null"`
+	CancelledCount        int    `gorm:"not null"`
+	CacheHitCount         int    `gorm:"not null"`
+	Summary               JSONB  `gorm:"type:jsonb;not null"`
+	DetailManifest        JSONB  `gorm:"type:jsonb;not null"`
+	ContentHash           string `gorm:"size:128;not null;index"`
+}
+
+type ControlSnapshotMember struct {
+	ID                 uint `gorm:"primaryKey"`
+	CreatedAt          time.Time
+	SnapshotID         uint   `gorm:"not null;index;uniqueIndex:idx_control_snapshot_member"`
+	EvaluationID       uint   `gorm:"not null;index;uniqueIndex:idx_control_snapshot_member"`
+	RepresentativeRole string `gorm:"size:32"`
+}

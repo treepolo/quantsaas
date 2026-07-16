@@ -24,7 +24,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const backupVersion = 8
+const backupVersion = 9
 
 type incrementalBackup struct {
 	Version                  int                                       `json:"version"`
@@ -89,6 +89,12 @@ type incrementalBackup struct {
 	ResearchComparisons      []saasstore.ResearchComparisonSnapshot    `json:"research_comparison_snapshots"`
 	SurrogateSnapshots       []saasstore.SurrogateModelSnapshot        `json:"surrogate_model_snapshots"`
 	SurrogateProposals       []saasstore.SurrogateProposal             `json:"surrogate_proposals"`
+	RandomParameterBatches   []saasstore.RandomParameterBatch          `json:"random_parameter_batches"`
+	RandomParameterRecords   []saasstore.RandomParameterRecord         `json:"random_parameter_records"`
+	ControlAnalysisTasks     []saasstore.ControlAnalysisTask           `json:"control_analysis_tasks"`
+	ControlEvaluations       []saasstore.ControlEvaluation             `json:"control_evaluations"`
+	ControlSnapshots         []saasstore.ControlAnalysisSnapshot       `json:"control_analysis_snapshots"`
+	ControlSnapshotMembers   []saasstore.ControlSnapshotMember         `json:"control_snapshot_members"`
 	Counts                   map[string]int                            `json:"counts"`
 }
 
@@ -344,6 +350,19 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 			return backup, err
 		}
 	}
+	for _, target := range []any{&backup.RandomParameterBatches, &backup.ControlAnalysisTasks, &backup.ControlEvaluations} {
+		if err := changedSinceAny(db, since, target); err != nil {
+			return backup, err
+		}
+	}
+	for _, target := range []any{&backup.RandomParameterRecords, &backup.ControlSnapshots, &backup.ControlSnapshotMembers} {
+		if err := createdSinceAny(db, since, target); err != nil {
+			return backup, err
+		}
+	}
+	if err := hydrateControlResearchClosure(db, &backup); err != nil {
+		return backup, err
+	}
 	if err := hydrateParameterResearchClosure(db, &backup); err != nil {
 		return backup, err
 	}
@@ -429,7 +448,95 @@ func buildIncrementalBackup(db *gorm.DB, since time.Time) (incrementalBackup, er
 	backup.Counts["research_comparison_snapshots"] = len(backup.ResearchComparisons)
 	backup.Counts["surrogate_model_snapshots"] = len(backup.SurrogateSnapshots)
 	backup.Counts["surrogate_proposals"] = len(backup.SurrogateProposals)
+	backup.Counts["random_parameter_batches"] = len(backup.RandomParameterBatches)
+	backup.Counts["random_parameter_records"] = len(backup.RandomParameterRecords)
+	backup.Counts["control_analysis_tasks"] = len(backup.ControlAnalysisTasks)
+	backup.Counts["control_evaluations"] = len(backup.ControlEvaluations)
+	backup.Counts["control_analysis_snapshots"] = len(backup.ControlSnapshots)
+	backup.Counts["control_snapshot_members"] = len(backup.ControlSnapshotMembers)
 	return backup, nil
+}
+
+func hydrateControlResearchClosure(db *gorm.DB, backup *incrementalBackup) error {
+	changed := len(backup.RandomParameterBatches)+len(backup.RandomParameterRecords)+len(backup.ControlAnalysisTasks)+len(backup.ControlEvaluations)+len(backup.ControlSnapshots)+len(backup.ControlSnapshotMembers) > 0
+	if !changed {
+		return nil
+	}
+	for _, target := range []any{&backup.RandomParameterBatches, &backup.RandomParameterRecords, &backup.ControlAnalysisTasks, &backup.ControlEvaluations, &backup.ControlSnapshots, &backup.ControlSnapshotMembers} {
+		if err := db.Find(target).Error; err != nil {
+			return err
+		}
+	}
+	geneIDs, candidateIDs, configurationIDs := map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}
+	taskIDs, resultIDs, reportIDs := map[uint]struct{}{}, map[uint]struct{}{}, map[uint]struct{}{}
+	for _, row := range backup.ControlAnalysisTasks {
+		if row.SourceGenomeID != nil {
+			geneIDs[*row.SourceGenomeID] = struct{}{}
+		}
+		if row.CandidateID != nil {
+			candidateIDs[*row.CandidateID] = struct{}{}
+		}
+		if row.ResearchConfigurationID != nil {
+			configurationIDs[*row.ResearchConfigurationID] = struct{}{}
+		}
+		if row.ComputeTaskID != nil {
+			taskIDs[*row.ComputeTaskID] = struct{}{}
+		}
+	}
+	for _, row := range backup.RandomParameterRecords {
+		if row.BacktestResultID != nil {
+			resultIDs[*row.BacktestResultID] = struct{}{}
+		}
+	}
+	for _, row := range backup.ControlEvaluations {
+		resultIDs[row.BacktestResultID] = struct{}{}
+		if row.PerformanceReportID != nil {
+			reportIDs[*row.PerformanceReportID] = struct{}{}
+		}
+	}
+	if ids := uintSetValues(geneIDs); len(ids) > 0 {
+		var rows []saasstore.GeneRecord
+		if err := db.Unscoped().Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.GeneRecords = mergeByUintID(backup.GeneRecords, rows, func(row saasstore.GeneRecord) uint { return row.ID })
+	}
+	if ids := uintSetValues(candidateIDs); len(ids) > 0 {
+		var rows []saasstore.RobustCandidate
+		if err := db.Unscoped().Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.RobustCandidates = mergeByUintID(backup.RobustCandidates, rows, func(row saasstore.RobustCandidate) uint { return row.ID })
+	}
+	if ids := uintSetValues(configurationIDs); len(ids) > 0 {
+		var rows []saasstore.ResearchConfiguration
+		if err := db.Unscoped().Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.ResearchConfigurations = mergeByUintID(backup.ResearchConfigurations, rows, func(row saasstore.ResearchConfiguration) uint { return row.ID })
+	}
+	if ids := uintSetValues(taskIDs); len(ids) > 0 {
+		var rows []saasstore.ComputeTask
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.ComputeTasks = mergeByUintID(backup.ComputeTasks, rows, func(row saasstore.ComputeTask) uint { return row.ID })
+	}
+	if ids := uintSetValues(resultIDs); len(ids) > 0 {
+		var rows []saasstore.BacktestResult
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.BacktestResults = mergeByUintID(backup.BacktestResults, rows, func(row saasstore.BacktestResult) uint { return row.ID })
+	}
+	if ids := uintSetValues(reportIDs); len(ids) > 0 {
+		var rows []saasstore.PerformanceReport
+		if err := db.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+			return err
+		}
+		backup.PerformanceReports = mergeByUintID(backup.PerformanceReports, rows, func(row saasstore.PerformanceReport) uint { return row.ID })
+	}
+	return nil
 }
 
 func hydrateParameterResearchClosure(db *gorm.DB, backup *incrementalBackup) error {
@@ -1042,6 +1149,12 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 			func() error { return saveAll(tx, backup.ResearchComparisons) },
 			func() error { return saveAll(tx, backup.SurrogateSnapshots) },
 			func() error { return saveAll(tx, backup.SurrogateProposals) },
+			func() error { return saveAll(tx, backup.RandomParameterBatches) },
+			func() error { return saveAll(tx, backup.RandomParameterRecords) },
+			func() error { return saveAll(tx, backup.ControlAnalysisTasks) },
+			func() error { return saveAll(tx, backup.ControlEvaluations) },
+			func() error { return saveAll(tx, backup.ControlSnapshots) },
+			func() error { return saveAll(tx, backup.ControlSnapshotMembers) },
 		} {
 			if err := save(); err != nil {
 				return err
@@ -1066,6 +1179,9 @@ func applyIncrementalBackup(db *gorm.DB, backup incrementalBackup) error {
 			return err
 		}
 		if err := verifyRestoredParameterResearch(tx, backup); err != nil {
+			return err
+		}
+		if err := verifyRestoredControlResearch(tx, backup); err != nil {
 			return err
 		}
 		return resetSequences(tx)
@@ -1134,6 +1250,81 @@ func verifyRestoredParameterResearch(db *gorm.DB, backup incrementalBackup) erro
 		}
 		if row.SnapshotKey != saved.SnapshotKey || row.TrainingPointSetHash != saved.TrainingPointSetHash || row.ContentHash != saved.ContentHash {
 			return fmt.Errorf("P10 代理模型 %d 還原後身分不一致", saved.ID)
+		}
+	}
+	return nil
+}
+
+func verifyRestoredControlResearch(db *gorm.DB, backup incrementalBackup) error {
+	for _, saved := range backup.RandomParameterBatches {
+		var row saasstore.RandomParameterBatch
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.BatchKey != saved.BatchKey || row.ParameterSpaceHash != saved.ParameterSpaceHash || row.FixedStructureHash != saved.FixedStructureHash || row.ContentHash != saved.ContentHash {
+			return fmt.Errorf("P11 隨機參數批次 %d 還原後身分不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.RandomParameterRecords {
+		var row saasstore.RandomParameterRecord
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.ContentHash != saved.ContentHash || row.BatchID != saved.BatchID || row.SequenceIndex != saved.SequenceIndex {
+			return fmt.Errorf("P11 隨機參數紀錄 %d 還原後身分不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.ControlAnalysisTasks {
+		var row saasstore.ControlAnalysisTask
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.TaskKey != saved.TaskKey || row.CanonicalHash != saved.CanonicalHash || row.RandomBatchID != saved.RandomBatchID {
+			return fmt.Errorf("P11 對照任務 %d 還原後身分不一致", saved.ID)
+		}
+		for _, reference := range []struct {
+			id    *uint
+			model any
+			name  string
+		}{{row.ComputeTaskID, &saasstore.ComputeTask{}, "計算任務"}, {row.LatestSnapshotID, &saasstore.ControlAnalysisSnapshot{}, "最新快照"}} {
+			if reference.id == nil {
+				continue
+			}
+			var count int64
+			if err := db.Model(reference.model).Where("id = ?", *reference.id).Count(&count).Error; err != nil || count != 1 {
+				return fmt.Errorf("P11 對照任務 %d 缺少%s", saved.ID, reference.name)
+			}
+		}
+	}
+	for _, saved := range backup.ControlEvaluations {
+		var row saasstore.ControlEvaluation
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.SummaryHash != saved.SummaryHash || row.BacktestResultContentHash != saved.BacktestResultContentHash {
+			return fmt.Errorf("P11 對照評估 %d 還原後 hash 不一致", saved.ID)
+		}
+		var result saasstore.BacktestResult
+		if err := db.First(&result, row.BacktestResultID).Error; err != nil || result.ContentHash != row.BacktestResultContentHash {
+			return fmt.Errorf("P11 對照評估 %d 的回測引用不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.ControlSnapshots {
+		var row saasstore.ControlAnalysisSnapshot
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.SnapshotKey != saved.SnapshotKey || row.ContentHash != saved.ContentHash || row.StatisticsVersion != saved.StatisticsVersion {
+			return fmt.Errorf("P11 對照快照 %d 還原後身分不一致", saved.ID)
+		}
+	}
+	for _, saved := range backup.ControlSnapshotMembers {
+		var row saasstore.ControlSnapshotMember
+		if err := db.First(&row, saved.ID).Error; err != nil {
+			return err
+		}
+		if row.SnapshotID != saved.SnapshotID || row.EvaluationID != saved.EvaluationID || row.RepresentativeRole != saved.RepresentativeRole {
+			return fmt.Errorf("P11 快照成員 %d 還原後不一致", saved.ID)
 		}
 	}
 	return nil
@@ -2186,6 +2377,12 @@ func resetSequences(db *gorm.DB) error {
 		"parameter_research_comparison_snapshots": "id",
 		"surrogate_model_snapshots":               "id",
 		"surrogate_proposals":                     "id",
+		"random_parameter_batches":                "id",
+		"random_parameter_records":                "id",
+		"control_analysis_tasks":                  "id",
+		"control_evaluations":                     "id",
+		"control_analysis_snapshots":              "id",
+		"control_snapshot_members":                "id",
 	}
 	for table, column := range tables {
 		sql := fmt.Sprintf("SELECT setval(pg_get_serial_sequence('%s', '%s'), COALESCE((SELECT MAX(%s) FROM %s), 1), true)", table, column, column, table)

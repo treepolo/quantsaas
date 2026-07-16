@@ -14,6 +14,7 @@ import (
 	"quantsaas/internal/saas/auth"
 	"quantsaas/internal/saas/computetask"
 	"quantsaas/internal/saas/config"
+	controlresearchsvc "quantsaas/internal/saas/controlresearch"
 	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/instance"
@@ -46,6 +47,7 @@ type RouterDeps struct {
 	Robustness        *robustnesssvc.Service
 	DynamicParameters *dynamicparamsvc.Service
 	ParameterResearch *parameterresearchsvc.Service
+	ControlResearch   *controlresearchsvc.Service
 	AgentStatus       AgentStatusProvider
 	WSHandler         gin.HandlerFunc
 }
@@ -106,6 +108,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		parameterResearch = parameterresearchsvc.NewService(deps.DB, deps.ComputeTasks, robustnessStudies)
 	}
 	parameterResearchHandler := NewParameterResearchHandler(parameterResearch)
+	controlResearch := deps.ControlResearch
+	if controlResearch == nil {
+		controlResearch = controlresearchsvc.NewService(deps.DB, deps.ComputeTasks, parameterResearch)
+	}
+	controlResearchHandler := NewControlResearchHandler(controlResearch)
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks", ev.ListTasks)
@@ -208,6 +215,26 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	parameterResearchAPI.PATCH("/candidates/:id/analyses/:kind", parameterResearchHandler.UpdateAnalysisLink)
 	parameterResearchAPI.POST("/series", parameterResearchHandler.CreateSeries)
 	parameterResearchAPI.GET("/series/:id", parameterResearchHandler.GetSeries)
+	controlResearchAPI := lab.Group("/lab/control-analysis")
+	controlResearchAPI.POST("/tasks/preview", controlResearchHandler.Preview)
+	controlResearchAPI.POST("/tasks", controlResearchHandler.Create)
+	controlResearchAPI.GET("/tasks", controlResearchHandler.List)
+	controlResearchAPI.GET("/tasks/:id", controlResearchHandler.Get)
+	controlResearchAPI.POST("/tasks/:id/start-next", controlResearchHandler.StartNext)
+	controlResearchAPI.POST("/tasks/:id/cancel", controlResearchHandler.Cancel)
+	controlResearchAPI.POST("/tasks/:id/retry", controlResearchHandler.Retry)
+	controlResearchAPI.POST("/tasks/:id/extensions/preview", controlResearchHandler.PreviewExtension)
+	controlResearchAPI.POST("/tasks/:id/extensions", controlResearchHandler.Extend)
+	controlResearchAPI.GET("/tasks/:id/snapshots", controlResearchHandler.Snapshots)
+	controlResearchAPI.GET("/tasks/:id/snapshots/:snapshotID/detail", controlResearchHandler.Detail)
+	controlResearchAPI.GET("/tasks/:id/snapshots/:snapshotID/comparison", controlResearchHandler.Comparison)
+	controlResearchAPI.PATCH("/tasks/:id", controlResearchHandler.UpdateMetadata)
+	controlResearchAPI.GET("/tasks/:id/delete-impact", controlResearchHandler.DeleteImpact)
+	controlResearchAPI.DELETE("/tasks/:id", controlResearchHandler.DeleteTask)
+	controlResearchAPI.DELETE("/tasks/:id/path-details", controlResearchHandler.DeletePathDetails)
+	controlResearchAPI.GET("/random-batches/:id/records", controlResearchHandler.RandomRecords)
+	controlResearchAPI.DELETE("/random-batches/:id", controlResearchHandler.DeleteUnusedBatch)
+	controlResearchAPI.GET("/evaluations/:evaluationID/path", controlResearchHandler.PathBlock)
 	if deps.ComputeTasks != nil {
 		computeTasks := NewComputeTaskHandler(deps.ComputeTasks)
 		lab.GET("/compute-tasks/limits", computeTasks.Limits)

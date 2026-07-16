@@ -426,6 +426,34 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	randomBatch := saasstore.RandomParameterBatch{OwnerUserID: user.ID, BatchKey: "p11-batch:backup", Seed: 42, TargetCount: 1, GeneratorVersion: "p11-discrete-uniform-v1", RangeVersion: "p11-source-research-range-v1", ParameterSpaceVersion: "p08-grid-v1", ParameterSpaceHash: configuration.ParameterSpaceHash, ParameterSpace: configuration.ParameterSpace, FixedStructureHash: candidate.AdoptionUnitHash, AttemptCount: 1, RejectReasons: saasstore.JSONB(`{}`), ContentHash: "p11-batch-content"}
+	if err := source.Create(&randomBatch).Error; err != nil {
+		t.Fatal(err)
+	}
+	randomRecord := saasstore.RandomParameterRecord{BatchID: randomBatch.ID, SequenceIndex: 0, Coordinates: saasstore.JSONB(`[0]`), Parameters: parameters, ContentHash: compute.HashBytes(parameters), BacktestResultID: &resultID, BacktestResultVersion: backtestresult.ResultSchemaVersion, BacktestContentHash: artifacts.ResultContentHash}
+	if err := source.Create(&randomRecord).Error; err != nil {
+		t.Fatal(err)
+	}
+	controlTask := saasstore.ControlAnalysisTask{OwnerUserID: user.ID, TaskKey: "p11-task:backup", Name: "P11 backup control", Tags: saasstore.JSONB(`[]`), Status: "completed", SourceKind: "m_candidate", CandidateID: &candidate.ID, ResearchConfigurationID: &configuration.ID, SourceVersion: candidate.Version, SourceContentHash: candidate.AdoptionUnitHash, RandomBatchID: randomBatch.ID, RandomTargetCount: 1, ShuffleSeed: 84, ShuffleTargetCount: 1, ToggleEveryNBars: 7, RuleVersion: "p11-four-rules-v1", StatisticsVersion: "p11-empirical-midrank-v1", ParameterSpaceHash: configuration.ParameterSpaceHash, CanonicalHash: "p11-canonical-hash", Canonical: saasstore.JSONB(`{"schema_version":"p11-control-task-v1"}`), ComputeTaskID: &computeRoot.ID, StartedAt: &completedAt, CompletedAt: &completedAt}
+	if err := source.Create(&controlTask).Error; err != nil {
+		t.Fatal(err)
+	}
+	controlEvaluation := saasstore.ControlEvaluation{TaskID: controlTask.ID, Kind: "baseline", SequenceIndex: 0, BacktestResultID: resultID, BacktestResultVersion: backtestresult.ResultSchemaVersion, BacktestResultContentHash: artifacts.ResultContentHash, PerformanceReportID: &performanceReportID, Summary: saasstore.JSONB(`{"roi":-0.01}`), SummaryHash: "p11-summary-hash"}
+	if err := source.Create(&controlEvaluation).Error; err != nil {
+		t.Fatal(err)
+	}
+	controlSnapshot := saasstore.ControlAnalysisSnapshot{TaskID: controlTask.ID, SnapshotKey: "p11-snapshot:backup", SchemaVersion: "p11-control-snapshot-v1", Completeness: "completed", StatisticsVersion: "p11-empirical-midrank-v1", RandomCompletedCount: 1, ShuffleCompletedCount: 1, RuleCompletedCount: 4, Summary: saasstore.JSONB(`{}`), DetailManifest: saasstore.JSONB(`[]`), ContentHash: "p11-snapshot-content"}
+	if err := source.Create(&controlSnapshot).Error; err != nil {
+		t.Fatal(err)
+	}
+	controlMember := saasstore.ControlSnapshotMember{SnapshotID: controlSnapshot.ID, EvaluationID: controlEvaluation.ID, RepresentativeRole: "baseline"}
+	if err := source.Create(&controlMember).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := source.Model(&controlTask).Update("latest_snapshot_id", controlSnapshot.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	backup, err := buildIncrementalBackup(source, since)
 	if err != nil {
 		t.Fatal(err)
@@ -447,6 +475,9 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if len(backup.ResearchConfigurations) != 1 || len(backup.ResearchRuns) != 1 || len(backup.ResearchPoints) != 1 || len(backup.RobustCandidates) != 1 || len(backup.ResearchComparisons) != 1 || len(backup.SurrogateSnapshots) != 1 || len(backup.SurrogateProposals) != 1 {
 		t.Fatalf("incomplete P10 backup closure: configurations=%d runs=%d points=%d candidates=%d comparisons=%d surrogates=%d proposals=%d", len(backup.ResearchConfigurations), len(backup.ResearchRuns), len(backup.ResearchPoints), len(backup.RobustCandidates), len(backup.ResearchComparisons), len(backup.SurrogateSnapshots), len(backup.SurrogateProposals))
+	}
+	if len(backup.RandomParameterBatches) != 1 || len(backup.RandomParameterRecords) != 1 || len(backup.ControlAnalysisTasks) != 1 || len(backup.ControlEvaluations) != 1 || len(backup.ControlSnapshots) != 1 || len(backup.ControlSnapshotMembers) != 1 {
+		t.Fatalf("incomplete P11 backup closure: batches=%d records=%d tasks=%d evaluations=%d snapshots=%d members=%d", len(backup.RandomParameterBatches), len(backup.RandomParameterRecords), len(backup.ControlAnalysisTasks), len(backup.ControlEvaluations), len(backup.ControlSnapshots), len(backup.ControlSnapshotMembers))
 	}
 	if len(backup.MarketSeries) != 1 || len(backup.MarketDataVersions) != 2 || len(backup.MarketVersionBars) != 2 ||
 		len(backup.MarketVersionSources) != 1 || len(backup.RecompositionPlans) != 1 || len(backup.RecompositionSegments) != 1 ||
@@ -523,6 +554,20 @@ func TestIncrementalBackupRestoresStandardizedResultGraph(t *testing.T) {
 	}
 	if restoredCandidate.AdoptionUnitHash != candidate.AdoptionUnitHash || restoredCandidate.PointID != researchPoint.ID {
 		t.Fatalf("restored P10 candidate = %+v", restoredCandidate)
+	}
+	var restoredControlTask saasstore.ControlAnalysisTask
+	if err := target.First(&restoredControlTask, controlTask.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredControlTask.CanonicalHash != controlTask.CanonicalHash || restoredControlTask.LatestSnapshotID == nil || *restoredControlTask.LatestSnapshotID != controlSnapshot.ID {
+		t.Fatalf("restored P11 control task = %+v", restoredControlTask)
+	}
+	var restoredControlEvaluation saasstore.ControlEvaluation
+	if err := target.First(&restoredControlEvaluation, controlEvaluation.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if restoredControlEvaluation.BacktestResultContentHash != artifacts.ResultContentHash || restoredControlEvaluation.PerformanceReportID == nil || *restoredControlEvaluation.PerformanceReportID != performanceReportID {
+		t.Fatalf("restored P11 evaluation = %+v", restoredControlEvaluation)
 	}
 }
 

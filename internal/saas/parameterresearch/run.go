@@ -305,6 +305,101 @@ func backtestRequest(settings robustnesssvc.BacktestSettings, custom json.RawMes
 	return backtest.CreateRequest{StrategyID: sigmoiddca.StrategyID, InstrumentID: settings.InstrumentID, DataSource: settings.DataSource, MarketDataVersionID: settings.MarketDataVersionID, MarketDataContentHash: settings.MarketDataContentHash, ExecutionMode: settings.ExecutionMode, StartTimeMs: settings.StartTimeMs, EndTimeMs: settings.EndTimeMs, Symbol: settings.Symbol, Pair: settings.Symbol, Interval: settings.Interval, Source: backtest.SourceCustom, CustomParams: custom, InitialCapital: settings.InitialCapital, MonthlyDCA: settings.MonthlyDCA, FeeRate: settings.FeeRate, SpreadRate: settings.SpreadRate, LongTermFilterEnabled: settings.LongTermFilterEnabled, LongTermFilterMonths: settings.LongTermFilterMonths}
 }
 
+// BuildPointExecutionInput exposes M's exact static/K execution adapter to H
+// without copying dynamic-policy materialization rules into the control system.
+func (s *Service) BuildPointExecutionInput(ctx context.Context, userID, configurationID uint, parameters map[string]float64) (PointExecutionInput, error) {
+	_, canonical, err := s.loadConfiguration(ctx, userID, configurationID)
+	if err != nil {
+		return PointExecutionInput{}, err
+	}
+	var gene saasstore.GeneRecord
+	if err := s.db.WithContext(ctx).Where("id = ? AND strategy_id = ?", canonical.GenomeID, sigmoiddca.StrategyID).First(&gene).Error; err != nil {
+		return PointExecutionInput{}, ErrInvalidRequest
+	}
+	base := sigmoiddca.ParseParamsFromParamPack(gene.ParamPack)
+	point := core.PlannedPoint{Parameters: parameters}
+	if canonical.DynamicPackage == nil {
+		chromosome, err := robust.ChromosomeWithValues(base.Chromosome, parameters)
+		if err != nil {
+			return PointExecutionInput{}, err
+		}
+		base.Chromosome = chromosome
+		customRaw, err := compute.CanonicalJSON(base)
+		if err != nil {
+			return PointExecutionInput{}, err
+		}
+		bt := backtestRequest(canonical.Backtest, customRaw)
+		inputRaw, err := compute.CanonicalJSON(robustnesssvc.PointExecutionInput{SchemaVersion: robustnesssvc.PointSchemaVersion, Backtest: bt})
+		return PointExecutionInput{ExecutorType: robustnesssvc.PointExecutorType, Input: inputRaw, Backtest: bt}, err
+	}
+	dynamicInput, err := s.dynamicInputForPoint(ctx, userID, canonical, point, base)
+	if err != nil {
+		return PointExecutionInput{}, err
+	}
+	inputRaw, err := compute.CanonicalJSON(dynamicInput)
+	return PointExecutionInput{ExecutorType: dynamicparamsvc.MaterializeExecutorType, Input: inputRaw, Backtest: dynamicInput.Backtest, Dynamic: true}, err
+}
+
+// BuildPointValidator loads M/K structure once and returns a pure validator
+// suitable for deterministic random sampling. The returned closure performs no
+// database, network, file or time access.
+func (s *Service) BuildPointValidator(ctx context.Context, userID, configurationID uint) (func(map[string]float64) error, error) {
+	_, canonical, err := s.loadConfiguration(ctx, userID, configurationID)
+	if err != nil {
+		return nil, err
+	}
+	var gene saasstore.GeneRecord
+	if err := s.db.WithContext(ctx).Where("id = ? AND strategy_id = ?", canonical.GenomeID, sigmoiddca.StrategyID).First(&gene).Error; err != nil {
+		return nil, ErrInvalidRequest
+	}
+	base := sigmoiddca.ParseParamsFromParamPack(gene.ParamPack)
+	if canonical.DynamicPackage == nil {
+		return func(parameters map[string]float64) error {
+			_, err := robust.ChromosomeWithValues(base.Chromosome, parameters)
+			return err
+		}, nil
+	}
+	var policyRow saasstore.DynamicPolicyArtifact
+	if err := s.db.WithContext(ctx).Where("id = ? AND owner_user_id = ?", canonical.DynamicPackage.PolicyArtifactID, userID).First(&policyRow).Error; err != nil {
+		return nil, ErrInvalidRequest
+	}
+	var bundle dynamicparamsvc.PolicyBundle
+	var schema dynamiccore.DynamicParameterSpaceSchema
+	if err := json.Unmarshal(policyRow.Payload, &bundle); err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(policyRow.ParameterSpace, &schema); err != nil {
+		return nil, err
+	}
+	baseRaw, err := compute.CanonicalJSON(bundle)
+	if err != nil {
+		return nil, err
+	}
+	variables := map[string]dynamiccore.ParameterVariable{}
+	for _, variable := range schema.Variables {
+		variables[variable.StableID] = variable
+	}
+	return func(parameters map[string]float64) error {
+		var candidate dynamicparamsvc.PolicyBundle
+		if err := json.Unmarshal(baseRaw, &candidate); err != nil {
+			return err
+		}
+		for stableID, value := range parameters {
+			variable, ok := variables[stableID]
+			if !ok {
+				continue
+			}
+			if !finite(value) || value < variable.Lower-1e-9 || value > variable.Upper+1e-9 {
+				return ErrInvalidRequest
+			}
+			if err := applyDynamicVariable(&candidate.Policy, variable, value); err != nil {
+				return err
+			}
+		}
+		return dynamiccore.ValidatePolicy(candidate.Policy)
+	}, nil
+}
+
 func (s *Service) dynamicInputForPoint(ctx context.Context, userID uint, canonical ConfigurationCanonical, point core.PlannedPoint, base sigmoiddca.Params) (dynamicparamsvc.MaterializeExecutionInput, error) {
 	ref := canonical.DynamicPackage
 	var policyRow saasstore.DynamicPolicyArtifact
