@@ -23,22 +23,28 @@ Write-Host "啟動 Postgres..."
 Invoke-DockerCompose -Root $root -Arguments @("up", "-d", "postgres")
 
 Write-Host "建立 PostgreSQL 全量備份..."
-Invoke-DockerCompose -Root $root -Arguments @(
-    "exec", "-T", "postgres",
-    "sh", "-c",
-    "pg_dump -U quantsaas -d quantsaas --format=plain --no-owner --no-privileges > /tmp/quantsaas-full.sql"
-)
-
-$containerId = (& docker compose --project-name quantsaas ps -q postgres).Trim()
-if ([string]::IsNullOrWhiteSpace($containerId)) {
-    throw "找不到 postgres container。"
+$previousDockerConfig = $env:DOCKER_CONFIG
+try {
+    $env:DOCKER_CONFIG = Join-Path $root ".docker-codex-config"
+    docker run --rm `
+        --network quantsaas_default `
+        -e PGPASSWORD=quantsaas `
+        -v "${work}:/backup" `
+        postgres:15 `
+        pg_dump -h postgres -U quantsaas -d quantsaas --format=plain --no-owner --no-privileges -f /backup/quantsaas-full.sql
+    if ($LASTEXITCODE -ne 0) {
+        throw "pg_dump client container failed."
+    }
+} finally {
+    if ($null -eq $previousDockerConfig) {
+        Remove-Item Env:DOCKER_CONFIG -ErrorAction SilentlyContinue
+    } else {
+        $env:DOCKER_CONFIG = $previousDockerConfig
+    }
 }
-$containerSource = "$($containerId):/tmp/quantsaas-full.sql"
-docker cp $containerSource $sqlPath
-if ($LASTEXITCODE -ne 0) {
-    throw "docker cp failed."
+if (!(Test-Path -LiteralPath $sqlPath) -or (Get-Item -LiteralPath $sqlPath).Length -eq 0) {
+    throw "pg_dump did not create a usable SQL file."
 }
-Invoke-DockerCompose -Root $root -Arguments @("exec", "-T", "postgres", "rm", "-f", "/tmp/quantsaas-full.sql")
 
 $manifest = @{
     version = 1
@@ -72,7 +78,16 @@ This archive intentionally excludes exchange API credentials.
 "@
 
 Write-Host "壓縮全量備份..."
-Compress-Archive -Path (Join-Path $work "*") -DestinationPath $zipPath -Force
+if (Test-Path -LiteralPath $zipPath) {
+    Remove-Item -LiteralPath $zipPath -Force
+}
+# Compress-Archive cannot write archives once an entry stream exceeds 2 GiB.
+# The Windows bsdtar client writes a ZIP64 archive that remains compatible with
+# Expand-Archive and the existing encrypted .zip.enc restore workflow.
+tar.exe -a -cf $zipPath -C $work .
+if ($LASTEXITCODE -ne 0 -or !(Test-Path -LiteralPath $zipPath)) {
+    throw "ZIP64 archive creation failed."
+}
 
 Write-Host "加密全量備份..."
 Protect-BackupArchive -Root $root -ZipPath $zipPath -EncryptedPath $encryptedPath -Passphrase $passphrase

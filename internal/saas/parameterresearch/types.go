@@ -327,3 +327,35 @@ type SeriesDescriptor struct {
 	SnapshotID       uint                       `json:"snapshot_id"`
 	ContentHash      string                     `json:"content_hash"`
 }
+
+const ComparisonSourceVersion = "p14-m-comparison-source-v1"
+
+type ComparisonDescriptor struct {
+	SourceKind       string   `json:"source_kind"`
+	SourceID         uint     `json:"source_id"`
+	SourceVersion    string   `json:"source_version"`
+	SnapshotID       uint     `json:"snapshot_id"`
+	ContentHash      string   `json:"content_hash"`
+	CanonicalSubject string   `json:"canonical_subject_ref,omitempty"`
+	DisplayName      string   `json:"display_name"`
+	SourceStatus     string   `json:"source_status"`
+	Archived         bool     `json:"archived"`
+	CreatedAt        string   `json:"created_at"`
+	SourceLink       string   `json:"source_link"`
+	AvailableBlocks  []string `json:"available_blocks"`
+}
+
+type ComparisonBlockDescriptor struct {
+	BlockID            string          `json:"block_id"`
+	BlockKind          string          `json:"block_kind"`
+	SchemaID           string          `json:"schema_id"`
+	SchemaVersion      string          `json:"schema_version"`
+	FormulaVersion     string          `json:"formula_version,omitempty"`
+	Unit               string          `json:"unit,omitempty"`
+	Axes               []string        `json:"axes"`
+	ContextFingerprint json.RawMessage `json:"context_fingerprint"`
+	ContentHash        string          `json:"content_hash"`
+	Availability       string          `json:"availability"`
+	PayloadLocator     string          `json:"payload_locator"`
+	Payload            json.RawMessage `json:"payload"`
+}

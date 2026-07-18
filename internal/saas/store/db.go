@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"quantsaas/internal/saas/config"
@@ -41,7 +42,7 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 // AutoMigrate keeps the GORM model list as the only schema source for the
 // service and maintenance tools.
 func AutoMigrate(gdb *gorm.DB) error {
-	return gdb.AutoMigrate(
+	if err := gdb.AutoMigrate(
 		&User{},
 		&StrategyTemplate{},
 		&StrategyInstance{},
@@ -135,7 +136,47 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&ResearchDataset{},
 		&ResearchDatasetSeries{},
 		&DailyExecutionSnapshot{},
-	)
+	); err != nil {
+		return err
+	}
+	return repairResearchSeriesOwnerKey(gdb)
+}
+
+// GORM does not replace an existing index when its name is unchanged but its
+// columns change. P10 originally created idx_research_series_owner_key on
+// series_key alone; keep the model as the schema source and repair that legacy
+// AutoMigrate result through GORM's migrator.
+func repairResearchSeriesOwnerKey(gdb *gorm.DB) error {
+	const indexName = "idx_research_series_owner_key"
+	indexes, err := gdb.Migrator().GetIndexes(&ResearchSeries{})
+	if err != nil {
+		return fmt.Errorf("inspect %s: %w", indexName, err)
+	}
+	indexExists := false
+	for _, index := range indexes {
+		if index.Name() != indexName {
+			continue
+		}
+		indexExists = true
+		unique, _ := index.Unique()
+		columns := append([]string(nil), index.Columns()...)
+		sort.Strings(columns)
+		if unique && len(columns) == 2 && columns[0] == "owner_user_id" && columns[1] == "series_key" {
+			return nil
+		}
+		break
+	}
+	return gdb.Transaction(func(tx *gorm.DB) error {
+		if indexExists {
+			if err := tx.Migrator().DropIndex(&ResearchSeries{}, indexName); err != nil {
+				return fmt.Errorf("drop legacy %s: %w", indexName, err)
+			}
+		}
+		if err := tx.Migrator().CreateIndex(&ResearchSeries{}, indexName); err != nil {
+			return fmt.Errorf("create composite %s: %w", indexName, err)
+		}
+		return nil
+	})
 }
 
 func applyPoolConfig(db *sql.DB, cfg config.DatabaseConfig) {

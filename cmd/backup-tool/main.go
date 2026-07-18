@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -137,6 +139,10 @@ func run(args []string) error {
 		return runVerifyBacktests(args[1:])
 	case "verify-compute-tasks":
 		return runVerifyComputeTasks(args[1:])
+	case "audit-gene-observations":
+		return runAuditGeneObservations(args[1:])
+	case "purge-gene-observations":
+		return runPurgeGeneObservations(args[1:])
 	case "backtest-references", "archive-backtest", "invalidate-backtest", "delete-backtest-path", "delete-failed-backtest":
 		return runBacktestMaintenance(args[0], args[1:])
 	case "help", "-h", "--help":
@@ -144,6 +150,191 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("未知指令: %s", args[0])
 	}
+}
+
+type geneObservationAudit struct {
+	Count           int64            `json:"count"`
+	ExportSHA256    string           `json:"export_sha256"`
+	EarliestCreated string           `json:"earliest_created_at,omitempty"`
+	LatestCreated   string           `json:"latest_created_at,omitempty"`
+	ProtectedCounts map[string]int64 `json:"protected_counts"`
+	GeneRoleCounts  map[string]int64 `json:"gene_role_counts"`
+}
+
+type geneObservationExportRow struct {
+	ID            uint            `json:"id"`
+	CreatedAt     string          `json:"created_at"`
+	StrategyID    string          `json:"strategy_id"`
+	InstrumentID  string          `json:"instrument_id"`
+	DataSource    string          `json:"data_source"`
+	Interval      string          `json:"interval"`
+	ExecutionMode string          `json:"execution_mode"`
+	TrainStartMs  int64           `json:"train_start_ms"`
+	TrainEndMs    int64           `json:"train_end_ms"`
+	SpawnMode     string          `json:"spawn_mode"`
+	SearchHash    string          `json:"search_hash"`
+	TaskID        uint            `json:"task_id"`
+	Generation    int             `json:"generation"`
+	Individual    int             `json:"individual"`
+	Fingerprint   string          `json:"fingerprint"`
+	ParamPack     json.RawMessage `json:"param_pack"`
+	ScoreTotal    float64         `json:"score_total"`
+	MaxDrawdown   float64         `json:"max_drawdown"`
+	Fatal         bool            `json:"fatal"`
+}
+
+func runAuditGeneObservations(args []string) error {
+	fs := flag.NewFlagSet("audit-gene-observations", flag.ContinueOnError)
+	dsn := fs.String("dsn", "", "PostgreSQL DSN，留空時讀 DATABASE_DSN 或 config")
+	configPath := fs.String("config", "config.yaml", "設定檔路徑")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	db, err := openDB(*dsn, *configPath)
+	if err != nil {
+		return err
+	}
+	if sqlDB, openErr := db.DB(); openErr == nil {
+		defer sqlDB.Close()
+	}
+	audit, err := buildGeneObservationAudit(db)
+	if err != nil {
+		return err
+	}
+	return writeJSON(os.Stdout, audit)
+}
+
+func runPurgeGeneObservations(args []string) error {
+	fs := flag.NewFlagSet("purge-gene-observations", flag.ContinueOnError)
+	dsn := fs.String("dsn", "", "PostgreSQL DSN，留空時讀 DATABASE_DSN 或 config")
+	configPath := fs.String("config", "config.yaml", "設定檔路徑")
+	backupID := fs.String("backup-id", "", "已完成還原演練的全量備份 ID")
+	expectedCount := fs.Int64("expected-count", -1, "audit 顯示的 observation 筆數")
+	expectedHash := fs.String("expected-sha256", "", "audit 顯示的 canonical export SHA-256")
+	confirm := fs.String("confirm", "", "必須精確填入 DELETE_GENE_OBSERVATIONS")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*backupID) == "" {
+		return fmt.Errorf("purge 需要 --backup-id")
+	}
+	if *expectedCount < 0 || strings.TrimSpace(*expectedHash) == "" {
+		return fmt.Errorf("purge 需要 --expected-count 與 --expected-sha256")
+	}
+	if *confirm != "DELETE_GENE_OBSERVATIONS" {
+		return fmt.Errorf("確認字串不符；未清除任何資料")
+	}
+	db, err := openDB(*dsn, *configPath)
+	if err != nil {
+		return err
+	}
+	if sqlDB, openErr := db.DB(); openErr == nil {
+		defer sqlDB.Close()
+	}
+	var after geneObservationAudit
+	err = db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("LOCK TABLE gene_observations IN ACCESS EXCLUSIVE MODE").Error; err != nil {
+			return err
+		}
+		before, auditErr := buildGeneObservationAudit(tx)
+		if auditErr != nil {
+			return auditErr
+		}
+		if before.Count != *expectedCount || !strings.EqualFold(before.ExportSHA256, strings.TrimSpace(*expectedHash)) {
+			return fmt.Errorf("observation audit 已改變：目前 count=%d sha256=%s", before.Count, before.ExportSHA256)
+		}
+		if err := tx.Exec("DELETE FROM gene_observations").Error; err != nil {
+			return err
+		}
+		after, auditErr = buildGeneObservationAudit(tx)
+		if auditErr != nil {
+			return auditErr
+		}
+		if after.Count != 0 {
+			return fmt.Errorf("清除後仍有 %d 筆 observation", after.Count)
+		}
+		if !equalInt64Maps(before.ProtectedCounts, after.ProtectedCounts) || !equalInt64Maps(before.GeneRoleCounts, after.GeneRoleCounts) {
+			return fmt.Errorf("保護資料筆數改變，交易已回滾")
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return writeJSON(os.Stdout, map[string]any{"status": "completed", "backup_id": strings.TrimSpace(*backupID), "removed_count": *expectedCount, "removed_export_sha256": strings.ToLower(strings.TrimSpace(*expectedHash)), "after": after})
+}
+
+func buildGeneObservationAudit(db *gorm.DB) (geneObservationAudit, error) {
+	result := geneObservationAudit{ProtectedCounts: map[string]int64{}, GeneRoleCounts: map[string]int64{}}
+	rows, err := db.Model(&saasstore.GeneObservation{}).Order("id ASC").Rows()
+	if err != nil {
+		return result, err
+	}
+	defer rows.Close()
+	hasher := sha256.New()
+	for rows.Next() {
+		var row saasstore.GeneObservation
+		if err := db.ScanRows(rows, &row); err != nil {
+			return result, err
+		}
+		canonicalPack, err := compute.CanonicalRawJSON([]byte(row.ParamPack))
+		if err != nil {
+			return result, fmt.Errorf("gene observation #%d param_pack 無效: %w", row.ID, err)
+		}
+		exported := geneObservationExportRow{ID: row.ID, CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339Nano), StrategyID: row.StrategyID, InstrumentID: row.InstrumentID, DataSource: row.DataSource, Interval: row.Interval, ExecutionMode: row.ExecutionMode, TrainStartMs: row.TrainStartMs, TrainEndMs: row.TrainEndMs, SpawnMode: row.SpawnMode, SearchHash: row.SearchHash, TaskID: row.TaskID, Generation: row.Generation, Individual: row.Individual, Fingerprint: row.Fingerprint, ParamPack: canonicalPack, ScoreTotal: row.ScoreTotal, MaxDrawdown: row.MaxDrawdown, Fatal: row.Fatal}
+		raw, err := json.Marshal(exported)
+		if err != nil {
+			return result, err
+		}
+		_, _ = hasher.Write(raw)
+		_, _ = hasher.Write([]byte("\n"))
+		result.Count++
+		if result.EarliestCreated == "" {
+			result.EarliestCreated = exported.CreatedAt
+		}
+		result.LatestCreated = exported.CreatedAt
+	}
+	if err := rows.Err(); err != nil {
+		return result, err
+	}
+	result.ExportSHA256 = hex.EncodeToString(hasher.Sum(nil))
+	protected := map[string]any{"gene_records": &saasstore.GeneRecord{}, "evolution_tasks": &saasstore.EvolutionTask{}, "research_configurations": &saasstore.ResearchConfiguration{}, "research_runs": &saasstore.ResearchRun{}, "research_evaluation_points": &saasstore.ResearchEvaluationPoint{}, "robust_candidates": &saasstore.RobustCandidate{}, "candidate_analysis_links": &saasstore.CandidateAnalysisLink{}, "candidate_gene_links": &saasstore.CandidateGeneLink{}}
+	for name, model := range protected {
+		var count int64
+		if err := db.Model(model).Count(&count).Error; err != nil {
+			return result, err
+		}
+		result.ProtectedCounts[name] = count
+	}
+	var roles []struct {
+		Role  string
+		Count int64
+	}
+	if err := db.Model(&saasstore.GeneRecord{}).Select("role, count(*) AS count").Group("role").Order("role ASC").Scan(&roles).Error; err != nil {
+		return result, err
+	}
+	for _, role := range roles {
+		result.GeneRoleCounts[role.Role] = role.Count
+	}
+	return result, nil
+}
+
+func equalInt64Maps(left, right map[string]int64) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key, value := range left {
+		if right[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func writeJSON(target *os.File, value any) error {
+	encoder := json.NewEncoder(target)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
 }
 
 func runExportIncremental(args []string) error {
@@ -2778,6 +2969,8 @@ func usage() error {
   backup-tool import-incremental --in backups/work/incremental.json
   backup-tool verify-backtests
   backup-tool verify-compute-tasks
+  backup-tool audit-gene-observations
+  backup-tool purge-gene-observations --backup-id P14-... --expected-count 123 --expected-sha256 abc... --confirm DELETE_GENE_OBSERVATIONS
   backup-tool backtest-references --id 123
   backup-tool archive-backtest --id 123
   backup-tool invalidate-backtest --id 123 --reason "dataset superseded"

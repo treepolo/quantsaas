@@ -61,7 +61,7 @@ export function AppRouter() {
             <Route path="/" element={<AppShell />}>
               <Route index element={<ResearchHomePage />} />
               <Route element={<FeatureGate feature="strategies" />}>
-                <Route path="evolution" element={<EvolutionPage />} />
+                <Route path="parameter-library" element={<EvolutionPage />} />
               </Route>
               <Route element={<FeatureGate feature="backtesting" />}>
                 <Route path="data" element={<MarketDataPage />} />
@@ -73,6 +73,7 @@ export function AppRouter() {
 				<Route path="kline-inverse" element={<KlineInversePage />} />
                 <Route path="robustness" element={<RobustnessPage />} />
                 <Route path="dynamic-parameters" element={<DynamicParametersPage />} />
+                <Route path="evolution" element={<ParameterResearchPage />} />
                 <Route path="parameter-research" element={<ParameterResearchPage />} />
                 <Route path="tasks" element={<ComputeTasksPage />} />
               </Route>

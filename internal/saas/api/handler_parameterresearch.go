@@ -202,6 +202,22 @@ func (h *ParameterResearchHandler) GetCandidate(c *gin.Context) {
 	result, err := h.service.GetCandidate(c.Request.Context(), currentUserID(c), id)
 	h.respond(c, http.StatusOK, result, err)
 }
+func (h *ParameterResearchHandler) CandidateComparison(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.CandidateComparison(c.Request.Context(), currentUserID(c), id)
+	h.respond(c, http.StatusOK, result, err)
+}
+func (h *ParameterResearchHandler) CandidateComparisonBlock(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.CandidateComparisonBlock(c.Request.Context(), currentUserID(c), id, c.Param("blockID"), c.Query("content_hash"))
+	h.respond(c, http.StatusOK, result, err)
+}
 func (h *ParameterResearchHandler) ArchiveCandidate(c *gin.Context) {
 	id, ok := parseIDParam(c)
 	if !ok {
@@ -318,6 +334,48 @@ func (h *ParameterResearchHandler) GetSeries(c *gin.Context) {
 	}
 	result, err := h.service.GetSeries(c.Request.Context(), currentUserID(c), id)
 	h.respond(c, http.StatusOK, result, err)
+}
+func (h *ParameterResearchHandler) AnalysisComparison(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.AnalysisComparison(c.Request.Context(), currentUserID(c), id)
+	h.respond(c, http.StatusOK, result, err)
+}
+func (h *ParameterResearchHandler) AnalysisComparisonBlock(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.AnalysisComparisonBlock(c.Request.Context(), currentUserID(c), id, c.Param("blockID"), c.Query("content_hash"))
+	h.respond(c, http.StatusOK, result, err)
+}
+func (h *ParameterResearchHandler) SeriesComparison(c *gin.Context) {
+	seriesID, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	snapshotID, err := strconv.ParseUint(c.Param("snapshotID"), 10, 64)
+	if err != nil || snapshotID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "comparison snapshot id 無效"})
+		return
+	}
+	result, serviceErr := h.service.SeriesComparison(c.Request.Context(), currentUserID(c), seriesID, uint(snapshotID))
+	h.respond(c, http.StatusOK, result, serviceErr)
+}
+func (h *ParameterResearchHandler) SeriesComparisonBlock(c *gin.Context) {
+	seriesID, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	snapshotID, err := strconv.ParseUint(c.Param("snapshotID"), 10, 64)
+	if err != nil || snapshotID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "comparison snapshot id 無效"})
+		return
+	}
+	result, serviceErr := h.service.SeriesComparisonBlock(c.Request.Context(), currentUserID(c), seriesID, uint(snapshotID), c.Param("blockID"), c.Query("content_hash"))
+	h.respond(c, http.StatusOK, result, serviceErr)
 }
 
 func (h *ParameterResearchHandler) respond(c *gin.Context, success int, value any, err error) {

@@ -3,6 +3,7 @@ package parameterresearch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -162,6 +163,50 @@ func TestStaticResearchRunsStandardBacktestsAndPromotesCandidate(t *testing.T) {
 	if len(candidate.AnalysisLinks) != 4 {
 		t.Fatalf("candidate does not have G/H/L/C slots: %+v", candidate)
 	}
+	seenKinds := map[string]bool{}
+	for _, link := range candidate.AnalysisLinks {
+		seenKinds[link.Kind] = true
+	}
+	for _, kind := range []string{"G", "H", "L", "C"} {
+		if !seenKinds[kind] {
+			t.Fatalf("candidate is missing %s analysis link: %+v", kind, candidate.AnalysisLinks)
+		}
+	}
+	if seenKinds["E"] || configuration.DatasetHash == "" {
+		t.Fatalf("E must remain an immutable dataset identity, not an analysis link: dataset=%q links=%+v", configuration.DatasetHash, candidate.AnalysisLinks)
+	}
+	statuses := []string{"not_calculated", "running", "partially_completed", "completed", "failed", "cancelled", "not_applicable"}
+	for _, kind := range []string{"G", "H", "L", "C"} {
+		for _, status := range statuses {
+			updated, updateErr := service.UpdateAnalysisLink(ctx, user.ID, candidate.ID, kind, UpdateAnalysisLinkRequest{Status: status, SourceID: "p14-" + strings.ToLower(kind), SourceVersion: "p14-fixed-v1", SourceContentHash: "p14-fixed-hash-" + strings.ToLower(kind), PartialSnapshot: json.RawMessage(`{"checkpoint":1}`)})
+			if updateErr != nil {
+				t.Fatalf("%s status %s failed: %v", kind, status, updateErr)
+			}
+			for _, link := range updated.AnalysisLinks {
+				if link.Kind == kind && link.Status != status {
+					t.Fatalf("%s status=%s, want %s", kind, link.Status, status)
+				}
+			}
+		}
+		if _, updateErr := service.UpdateAnalysisLink(ctx, user.ID, candidate.ID, kind, UpdateAnalysisLinkRequest{Status: "completed", SourceID: "p14-" + strings.ToLower(kind), SourceVersion: "p14-fixed-v1", SourceContentHash: "p14-fixed-hash-" + strings.ToLower(kind), PartialSnapshot: json.RawMessage(`{"checkpoint":2}`)}); updateErr != nil {
+			t.Fatal(updateErr)
+		}
+	}
+	candidateComparison, err := service.CandidateComparison(ctx, user.ID, candidate.ID)
+	if err != nil || candidateComparison.ContentHash != candidate.AdoptionUnitHash || candidateComparison.SnapshotID != 0 {
+		t.Fatalf("candidate comparison identity is not fixed: %+v err=%v", candidateComparison, err)
+	}
+	analysisComparison, err := service.AnalysisComparison(ctx, user.ID, analysis.ID)
+	if err != nil || analysisComparison.ContentHash != analysis.ContentHash || analysisComparison.SnapshotID != analysis.ID {
+		t.Fatalf("analysis comparison identity is not fixed: %+v err=%v", analysisComparison, err)
+	}
+	landscapeBlock, err := service.AnalysisComparisonBlock(ctx, user.ID, analysis.ID, "performance_landscape", analysis.ContentHash)
+	if err != nil || landscapeBlock.ContentHash == "" || len(landscapeBlock.Payload) == 0 {
+		t.Fatalf("analysis comparison block is unavailable: %+v err=%v", landscapeBlock, err)
+	}
+	if _, err := service.AnalysisComparisonBlock(ctx, user.ID, analysis.ID, "performance_landscape", "stale-hash"); !errors.Is(err, ErrPlanStale) {
+		t.Fatalf("stale comparison hash was accepted: %v", err)
+	}
 	exported, err := service.ExportCandidate(ctx, user.ID, candidate.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -250,6 +295,18 @@ func TestStaticResearchRunsStandardBacktestsAndPromotesCandidate(t *testing.T) {
 	if json.Unmarshal(storedCandidate.AdoptionUnit, &adoption) != nil || adoption["model_artifact_hash"] == "" || adoption["policy_bundle"] == nil {
 		t.Fatalf("dynamic adoption unit is incomplete: %s", storedCandidate.AdoptionUnit)
 	}
+	series, err := service.CreateSeries(ctx, user.ID, CreateSeriesRequest{Name: "P14 fixed comparison", ConfigurationIDs: []uint{configuration.ID, dynamicConfiguration.ID}, ChangedFactors: []string{"dynamic_mode"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seriesComparison, err := service.SeriesComparison(ctx, user.ID, series.ID, series.SnapshotID)
+	if err != nil || seriesComparison.ContentHash != series.ContentHash || seriesComparison.SnapshotID != series.SnapshotID {
+		t.Fatalf("series comparison identity is not fixed: %+v err=%v", seriesComparison, err)
+	}
+	seriesBlock, err := service.SeriesComparisonBlock(ctx, user.ID, series.ID, series.SnapshotID, "comparison_context", series.ContentHash)
+	if err != nil || seriesBlock.ContentHash == "" || len(seriesBlock.Payload) == 0 {
+		t.Fatalf("series comparison block is unavailable: %+v err=%v", seriesBlock, err)
+	}
 }
 
 func waitParameterResearchTask(t *testing.T, tasks *computetask.Service, userID, taskID uint) *computetask.TaskDescriptor {
@@ -317,12 +374,51 @@ func openParameterResearchIntegrationDB(t *testing.T) *gorm.DB {
 	if err := saasstore.AutoMigrate(db); err != nil {
 		t.Fatal(err)
 	}
+	verifyResearchSeriesIndexUpgrade(t, db)
 	t.Cleanup(func() {
 		if sqlDB, err := db.DB(); err == nil {
 			_ = sqlDB.Close()
 		}
 	})
 	return db
+}
+
+type legacyResearchSeriesIndex struct {
+	SeriesKey string `gorm:"size:128;not null;uniqueIndex:idx_research_series_owner_key"`
+}
+
+func (legacyResearchSeriesIndex) TableName() string { return "parameter_research_series" }
+
+func verifyResearchSeriesIndexUpgrade(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	const indexName = "idx_research_series_owner_key"
+	if err := db.Migrator().DropIndex(&saasstore.ResearchSeries{}, indexName); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrator().CreateIndex(&legacyResearchSeriesIndex{}, indexName); err != nil {
+		t.Fatal(err)
+	}
+	if err := saasstore.AutoMigrate(db); err != nil {
+		t.Fatalf("upgrade legacy research series index: %v", err)
+	}
+	indexes, err := db.Migrator().GetIndexes(&saasstore.ResearchSeries{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range indexes {
+		if index.Name() != indexName {
+			continue
+		}
+		unique, _ := index.Unique()
+		columns := map[string]bool{}
+		for _, column := range index.Columns() {
+			columns[column] = true
+		}
+		if unique && len(columns) == 2 && columns["owner_user_id"] && columns["series_key"] {
+			return
+		}
+	}
+	t.Fatalf("%s was not upgraded to unique(owner_user_id, series_key)", indexName)
 }
 
 func withParameterResearchSearchPath(dsn, schema string) (string, error) {

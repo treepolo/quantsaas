@@ -1627,7 +1627,7 @@ type ResearchSeries struct {
 	ID                   uint `gorm:"primaryKey"`
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
-	OwnerUserID          uint   `gorm:"not null;index"`
+	OwnerUserID          uint   `gorm:"not null;index;uniqueIndex:idx_research_series_owner_key"`
 	SeriesKey            string `gorm:"size:128;not null;uniqueIndex:idx_research_series_owner_key"`
 	Name                 string `gorm:"size:180;not null"`
 	SchemaVersion        string `gorm:"size:48;not null"`

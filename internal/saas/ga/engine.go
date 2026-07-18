@@ -17,8 +17,6 @@ import (
 type GenomeStore interface {
 	LoadEliteGenes(ctx context.Context, scope GeneScope, limit int) ([][]byte, error)
 	SaveChallenger(ctx context.Context, scope GeneScope, paramPack []byte, result FitnessResult, searchConfig []byte) (uint, error)
-	LoadObservedFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte) (map[uint64]bool, error)
-	SaveObservedGenes(ctx context.Context, scope GeneScope, searchConfig []byte, observations []GeneObservation) error
 	LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error)
 }
 
@@ -96,15 +94,6 @@ type EpochProgress struct {
 	BestParamPack       []byte
 	MutationProbability float64
 	MutationScale       float64
-}
-
-type GeneObservation struct {
-	TaskID      uint
-	Generation  int
-	Individual  int
-	Fingerprint uint64
-	ParamPack   []byte
-	Fitness     FitnessResult
 }
 
 type EpochResult struct {
@@ -186,10 +175,9 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		Interval:      cfg.Interval,
 		ExecutionMode: cfg.ExecutionMode,
 	}
-	knownFingerprints, err := e.store.LoadObservedFingerprints(ctx, scope, searchConfig)
-	if err != nil {
-		return EpochResult{}, err
-	}
+	// P14 retired the historical observation table. De-duplicate only within
+	// this run; durable research point identity now belongs to M.
+	knownFingerprints := make(map[uint64]bool)
 
 	population, err := e.initializePopulation(ctx, cfg, rng)
 	if err != nil {
@@ -200,7 +188,6 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	}
 	population = e.deduplicatePopulation(population, knownFingerprints, rng, true, cfg)
 	population = e.evaluatePopulation(ctx, population, plan, 0, cfg)
-	e.saveObservedPopulation(ctx, scope, searchConfig, population, plan, 0, cfg, knownFingerprints)
 
 	best := bestIndividual(population)
 	bestScore := best.Fitness.ScoreTotal
@@ -265,7 +252,6 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 
 		population = e.nextGeneration(population, mutProb, mutScale, rng, cfg, generation+1, knownFingerprints)
 		population = e.evaluatePopulation(ctx, population, plan, generation+1, cfg)
-		e.saveObservedPopulation(ctx, scope, searchConfig, population, plan, generation+1, cfg, knownFingerprints)
 	}
 
 	sortPopulation(population)
@@ -599,40 +585,6 @@ func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []i
 		"population": len(population),
 	})
 	return population
-}
-
-func (e *EvolutionEngine) saveObservedPopulation(ctx context.Context, scope GeneScope, searchConfig []byte, population []individual, plan EvaluablePlan, generation int, cfg EpochConfig, knownFingerprints map[uint64]bool) {
-	if len(population) == 0 {
-		return
-	}
-	observations := make([]GeneObservation, 0, len(population))
-	for i, item := range population {
-		fingerprint := e.evolvable.Fingerprint(item.Gene)
-		paramPack, err := e.evolvable.EncodeResult(item.Gene, plan.Spawn, cfg.GeneOptions)
-		if err != nil {
-			continue
-		}
-		observations = append(observations, GeneObservation{
-			TaskID:      cfg.TaskID,
-			Generation:  generation,
-			Individual:  i,
-			Fingerprint: fingerprint,
-			ParamPack:   paramPack,
-			Fitness:     item.Fitness,
-		})
-		if knownFingerprints != nil {
-			knownFingerprints[fingerprint] = true
-		}
-	}
-	if len(observations) == 0 {
-		return
-	}
-	if err := e.store.SaveObservedGenes(ctx, scope, searchConfig, observations); err != nil {
-		e.trace(cfg, TraceModeSummary, "evolution", "gene_observations.save_failed", "failed to save gene observations", map[string]any{
-			"generation": generation,
-			"error":      err.Error(),
-		})
-	}
 }
 
 func (e *EvolutionEngine) deduplicatePopulation(population []individual, knownFingerprints map[uint64]bool, rng RandomSource, preserveFirst bool, cfg EpochConfig) []individual {

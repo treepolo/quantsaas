@@ -2,17 +2,13 @@ package ga
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"quantsaas/internal/quant"
 	saasstore "quantsaas/internal/saas/store"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type GormGenomeStore struct {
@@ -71,78 +67,6 @@ func (s *GormGenomeStore) SaveChallenger(ctx context.Context, scope GeneScope, p
 		return 0, err
 	}
 	return record.ID, nil
-}
-
-func (s *GormGenomeStore) LoadObservedFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte) (map[uint64]bool, error) {
-	var rows []saasstore.GeneObservation
-	if err := s.db.WithContext(ctx).
-		Select("fingerprint").
-		Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND search_hash = ?",
-			scope.StrategyID, scope.InstrumentID, scope.DataSource, scope.Interval, scope.ExecutionMode, searchHash(searchConfig)).
-		Find(&rows).Error; err != nil {
-		return nil, err
-	}
-	out := make(map[uint64]bool, len(rows))
-	for _, row := range rows {
-		value, err := strconv.ParseUint(row.Fingerprint, 10, 64)
-		if err == nil {
-			out[value] = true
-		}
-	}
-	return out, nil
-}
-
-func (s *GormGenomeStore) SaveObservedGenes(ctx context.Context, scope GeneScope, searchConfig []byte, observations []GeneObservation) error {
-	if len(observations) == 0 {
-		return nil
-	}
-	var cfg struct {
-		TrainStartMs int64  `json:"train_start_ms"`
-		TrainEndMs   int64  `json:"train_end_ms"`
-		SpawnMode    string `json:"spawn_mode"`
-	}
-	_ = json.Unmarshal(searchConfig, &cfg)
-	if cfg.SpawnMode == "" {
-		cfg.SpawnMode = "inherit"
-	}
-	hash := searchHash(searchConfig)
-	rows := make([]saasstore.GeneObservation, 0, len(observations))
-	for _, observation := range observations {
-		paramPack := observation.ParamPack
-		if !json.Valid(paramPack) {
-			paramPack = []byte(`{}`)
-		}
-		rows = append(rows, saasstore.GeneObservation{
-			StrategyID:    scope.StrategyID,
-			InstrumentID:  scope.InstrumentID,
-			DataSource:    scope.DataSource,
-			Interval:      scope.Interval,
-			ExecutionMode: scope.ExecutionMode,
-			TrainStartMs:  cfg.TrainStartMs,
-			TrainEndMs:    cfg.TrainEndMs,
-			SpawnMode:     cfg.SpawnMode,
-			SearchHash:    hash,
-			TaskID:        observation.TaskID,
-			Generation:    observation.Generation,
-			Individual:    observation.Individual,
-			Fingerprint:   strconv.FormatUint(observation.Fingerprint, 10),
-			ParamPack:     saasstore.JSONB(paramPack),
-			ScoreTotal:    observation.Fitness.ScoreTotal,
-			MaxDrawdown:   observation.Fitness.MaxDrawdown,
-			Fatal:         observation.Fitness.Fatal,
-		})
-	}
-	return s.db.WithContext(ctx).
-		Clauses(clause.OnConflict{DoNothing: true}).
-		CreateInBatches(rows, 300).Error
-}
-
-func searchHash(raw []byte) string {
-	if !json.Valid(raw) {
-		raw = []byte(`{}`)
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
 }
 
 func (s *GormGenomeStore) LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error) {
