@@ -189,10 +189,18 @@ func PlanGlobal(space robust.ParameterSpace, base []int, requestedSobol int, sta
 }
 
 func PlanLocalRefinement(space robust.ParameterSpace, center []int, radius int, existing map[string]bool) ([]PlannedPoint, error) {
+	return PlanLocalRefinementLimited(space, center, radius, existing, 0)
+}
+
+// PlanLocalRefinementLimited rejects an oversized Cartesian neighborhood before
+// allocating its coordinate list. A zero limit keeps the original core API
+// behavior for small, trusted callers.
+func PlanLocalRefinementLimited(space robust.ParameterSpace, center []int, radius int, existing map[string]bool, maximumPoints int) ([]PlannedPoint, error) {
 	if err := robust.ValidateSpace(space); err != nil || len(center) != len(space.Axes) || radius < 1 {
 		return nil, ErrInvalidPlan
 	}
 	ranges := make([][]int, len(space.Axes))
+	candidateCount := 1
 	for i, axis := range space.Axes {
 		start, end := center[i]-radius, center[i]+radius
 		if start < axis.StudyStart {
@@ -204,6 +212,10 @@ func PlanLocalRefinement(space robust.ParameterSpace, center []int, radius int, 
 		for value := start; value <= end; value++ {
 			ranges[i] = append(ranges[i], value)
 		}
+		if maximumPoints > 0 && (len(ranges[i]) == 0 || candidateCount > maximumPoints/len(ranges[i])) {
+			return nil, fmt.Errorf("%w: 局部細化預計超過 %d 個參數組合，請減少細化格數或改用追加全域探索", ErrInvalidPlan, maximumPoints)
+		}
+		candidateCount *= len(ranges[i])
 	}
 	coordinates, err := enumerateCoordinates(space, ranges, 0)
 	if err != nil {

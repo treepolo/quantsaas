@@ -82,7 +82,11 @@ func (s *Service) PlanNextStage(ctx context.Context, userID, runID uint, req Sta
 		if err := json.Unmarshal(point.Coordinates, &coordinates); err != nil {
 			return PlanDescriptor{}, err
 		}
-		points, err := core.PlanLocalRefinement(canonical.ParameterSpace, coordinates, req.Radius, existing)
+		maximumPoints := 0
+		if s.computeTasks != nil {
+			maximumPoints = s.computeTasks.Limits().HardItemLimit
+		}
+		points, err := core.PlanLocalRefinementLimited(canonical.ParameterSpace, coordinates, req.Radius, existing, maximumPoints)
 		if err != nil {
 			return PlanDescriptor{}, err
 		}

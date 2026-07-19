@@ -1,6 +1,7 @@
 package parameterresearch
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -51,6 +52,26 @@ func TestSobolContinuationIsDeterministicAndInUnitCube(t *testing.T) {
 	}
 }
 
+func TestGlobalPlanSupportsAllStaticStrategyDimensions(t *testing.T) {
+	space := robust.ParameterSpace{SchemaVersion: robust.GridVersion, Fixed: map[string]float64{}}
+	base := make([]int, 18)
+	for dimension := 0; dimension < 18; dimension++ {
+		space.Axes = append(space.Axes, robust.ParameterAxis{
+			Name: fmt.Sprintf("parameter_%d", dimension), Label: "參數", Type: robust.ParameterFloat,
+			Values: []float64{0, 1, 2}, LegalMin: 0, LegalMax: 2, Step: 1, StudyStart: 0, StudyEnd: 2,
+		})
+		base[dimension] = 1
+	}
+	requested := InitialSobolCount(len(space.Axes))
+	plan, err := PlanGlobal(space, base, requested, 0, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.RequestedSobol != 512 || plan.UniquePointCount < requested {
+		t.Fatalf("unexpected all-parameter plan: %+v", plan)
+	}
+}
+
 func TestLocalRefinementNeverRepeatsExistingPoint(t *testing.T) {
 	space := testSpace()
 	centerPoint, _ := plannedPoint(space, []int{1, 1}, "manual", "manual", nil)
@@ -60,6 +81,21 @@ func TestLocalRefinementNeverRepeatsExistingPoint(t *testing.T) {
 	}
 	if len(points) != 8 {
 		t.Fatalf("expected 8 missing points, got %d", len(points))
+	}
+}
+
+func TestLocalRefinementRejectsOversizedHighDimensionalGridBeforeAllocation(t *testing.T) {
+	space := robust.ParameterSpace{SchemaVersion: robust.GridVersion, Fixed: map[string]float64{}}
+	center := make([]int, 10)
+	for dimension := 0; dimension < 10; dimension++ {
+		space.Axes = append(space.Axes, robust.ParameterAxis{
+			Name: fmt.Sprintf("parameter_%d", dimension), Label: "參數", Type: robust.ParameterFloat,
+			Values: []float64{0, 1, 2, 3, 4, 5, 6}, LegalMin: 0, LegalMax: 6, Step: 1, StudyStart: 0, StudyEnd: 6,
+		})
+		center[dimension] = 3
+	}
+	if _, err := PlanLocalRefinementLimited(space, center, 3, nil, 300000); err == nil {
+		t.Fatal("expected oversized local refinement to be rejected")
 	}
 }
 
