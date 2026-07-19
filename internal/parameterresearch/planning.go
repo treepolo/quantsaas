@@ -94,6 +94,13 @@ func CombinationCount(space robust.ParameterSpace) (uint64, error) {
 }
 
 func PlanGlobal(space robust.ParameterSpace, base []int, requestedSobol int, startIndex int64, existing map[string]bool, includeAnchors bool) (GlobalPlan, error) {
+	return PlanGlobalValidated(space, base, requestedSobol, startIndex, existing, includeAnchors, nil)
+}
+
+// PlanGlobalValidated keeps sampling until it has the requested number of
+// unique points that satisfy both the generic parameter space and the
+// strategy-specific structural rules.
+func PlanGlobalValidated(space robust.ParameterSpace, base []int, requestedSobol int, startIndex int64, existing map[string]bool, includeAnchors bool, validator func(map[string]float64) error) (GlobalPlan, error) {
 	if err := robust.ValidateSpace(space); err != nil || len(base) != len(space.Axes) || requestedSobol < 0 || startIndex < 0 {
 		return GlobalPlan{}, ErrInvalidPlan
 	}
@@ -114,6 +121,10 @@ func PlanGlobal(space robust.ParameterSpace, base []int, requestedSobol int, sta
 	appendCoordinate := func(coordinate []int, origin, originKey string, sobolIndex *int64) {
 		point, pointErr := plannedPoint(space, coordinate, origin, originKey, sobolIndex)
 		if pointErr != nil {
+			plan.RejectedCount++
+			return
+		}
+		if validator != nil && validator(point.Parameters) != nil {
 			plan.RejectedCount++
 			return
 		}

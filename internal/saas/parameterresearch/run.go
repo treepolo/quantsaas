@@ -40,7 +40,11 @@ func (s *Service) PlanInitialRun(ctx context.Context, userID, configurationID ui
 	if requested == 0 {
 		requested = core.InitialSobolCount(len(canonical.ParameterSpace.Axes))
 	}
-	global, err := core.PlanGlobal(canonical.ParameterSpace, canonical.BaseCoordinates, requested, 0, nil, true)
+	validator, err := s.BuildPointValidator(ctx, userID, configurationID)
+	if err != nil {
+		return PlanDescriptor{}, err
+	}
+	global, err := core.PlanGlobalValidated(canonical.ParameterSpace, canonical.BaseCoordinates, requested, 0, nil, true, validator)
 	if err != nil {
 		return PlanDescriptor{}, err
 	}
@@ -59,13 +63,17 @@ func (s *Service) PlanNextStage(ctx context.Context, userID, runID uint, req Sta
 	if err != nil {
 		return PlanDescriptor{}, err
 	}
+	validator, err := s.BuildPointValidator(ctx, userID, configuration.ID)
+	if err != nil {
+		return PlanDescriptor{}, err
+	}
 	switch req.Kind {
 	case "append_global":
 		requested := req.RequestedSobol
 		if requested == 0 {
 			requested = core.InitialSobolCount(len(canonical.ParameterSpace.Axes)) << run.GlobalBatchCount
 		}
-		global, err := core.PlanGlobal(canonical.ParameterSpace, canonical.BaseCoordinates, requested, run.NextSobolIndex, existing, false)
+		global, err := core.PlanGlobalValidated(canonical.ParameterSpace, canonical.BaseCoordinates, requested, run.NextSobolIndex, existing, false, validator)
 		if err != nil {
 			return PlanDescriptor{}, err
 		}
@@ -89,6 +97,10 @@ func (s *Service) PlanNextStage(ctx context.Context, userID, runID uint, req Sta
 		points, err := core.PlanLocalRefinementLimited(canonical.ParameterSpace, coordinates, req.Radius, existing, maximumPoints)
 		if err != nil {
 			return PlanDescriptor{}, err
+		}
+		points, _ = validPlannedPoints(points, validator)
+		if len(points) == 0 {
+			return PlanDescriptor{}, ErrInvalidRequest
 		}
 		return s.previewStage(ctx, userID, configuration, canonical, "local_refinement", points, nil)
 	case "surrogate_proposals":
@@ -115,10 +127,30 @@ func (s *Service) PlanNextStage(ctx context.Context, userID, runID uint, req Sta
 			}
 			points = append(points, core.PlannedPoint{Coordinates: coordinates, Parameters: parameters, VectorHash: proposal.VectorHash, OriginType: "surrogate_proposal", OriginKey: fmt.Sprintf("surrogate:%d:proposal:%d", surrogate.ID, proposal.ID)})
 		}
+		points, _ = validPlannedPoints(points, validator)
+		if len(points) == 0 {
+			return PlanDescriptor{}, ErrInvalidRequest
+		}
 		return s.previewStage(ctx, userID, configuration, canonical, "surrogate_proposals", points, nil)
 	default:
 		return PlanDescriptor{}, ErrInvalidRequest
 	}
+}
+
+func validPlannedPoints(points []core.PlannedPoint, validator func(map[string]float64) error) ([]core.PlannedPoint, int) {
+	if validator == nil {
+		return points, 0
+	}
+	valid := make([]core.PlannedPoint, 0, len(points))
+	rejected := 0
+	for _, point := range points {
+		if validator(point.Parameters) != nil {
+			rejected++
+			continue
+		}
+		valid = append(valid, point)
+	}
+	return valid, rejected
 }
 
 func (s *Service) previewStage(ctx context.Context, userID uint, configuration saasstore.ResearchConfiguration, canonical ConfigurationCanonical, stageType string, points []core.PlannedPoint, global *core.GlobalPlan) (PlanDescriptor, error) {

@@ -72,6 +72,43 @@ func TestGlobalPlanSupportsAllStaticStrategyDimensions(t *testing.T) {
 	}
 }
 
+func TestGlobalPlanSkipsStructurallyInvalidPointsAndKeepsSampling(t *testing.T) {
+	values := make([]float64, 21)
+	for index := range values {
+		values[index] = float64(index)
+	}
+	space := robust.ParameterSpace{SchemaVersion: robust.GridVersion, Fixed: map[string]float64{}, Axes: []robust.ParameterAxis{
+		{Name: "alpha", Label: "Alpha", Type: robust.ParameterFloat, Values: values, LegalMin: 0, LegalMax: 20, Step: 1, StudyStart: 0, StudyEnd: 20},
+		{Name: "beta", Label: "Beta", Type: robust.ParameterFloat, Values: values, LegalMin: 0, LegalMax: 20, Step: 1, StudyStart: 0, StudyEnd: 20},
+	}}
+	validator := func(parameters map[string]float64) error {
+		if parameters["alpha"] > parameters["beta"] {
+			return fmt.Errorf("alpha must not exceed beta")
+		}
+		return nil
+	}
+	requested := InitialSobolCount(len(space.Axes))
+	plan, err := PlanGlobalValidated(space, []int{1, 1}, requested, 0, nil, true, validator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.RejectedCount == 0 {
+		t.Fatal("expected structurally invalid anchors or Sobol points to be rejected")
+	}
+	sobolCount := 0
+	for _, point := range plan.Points {
+		if err := validator(point.Parameters); err != nil {
+			t.Fatalf("invalid point remained in plan: %+v", point)
+		}
+		if point.SobolIndex != nil {
+			sobolCount++
+		}
+	}
+	if sobolCount != requested {
+		t.Fatalf("valid Sobol count = %d, want %d", sobolCount, requested)
+	}
+}
+
 func TestLocalRefinementNeverRepeatsExistingPoint(t *testing.T) {
 	space := testSpace()
 	centerPoint, _ := plannedPoint(space, []int{1, 1}, "manual", "manual", nil)
