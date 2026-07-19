@@ -1,10 +1,22 @@
 package klineinverse
 
 import (
+	"strings"
 	"testing"
 
 	core "quantsaas/internal/klineinverse"
 )
+
+func TestKlineInverseBatchKeyFitsPersistentColumn(t *testing.T) {
+	first := klineInverseBatchKey("sha256:" + strings.Repeat("a", 64))
+	second := klineInverseBatchKey("sha256:" + strings.Repeat("b", 64))
+	if len(first) > 128 {
+		t.Fatalf("batch key length=%d", len(first))
+	}
+	if first == second || first != "p12-batch:"+strings.Repeat("a", 64) {
+		t.Fatalf("unexpected batch keys: %q %q", first, second)
+	}
+}
 
 func TestOperationSchedulesPreserveFiniteQuotas(t *testing.T) {
 	schedule := operationSchedule(17)

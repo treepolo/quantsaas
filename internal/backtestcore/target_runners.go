@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	RuleAlwaysExposed    = "always_exposed"
 	RuleOddBuyEvenSell   = "odd_buy_even_sell"
 	RuleEvenBuyOddSell   = "even_buy_odd_sell"
 	RuleFixedDayToggle   = "fixed_day_toggle"
@@ -80,6 +81,8 @@ func RunExposureReplay(request ExposureReplayRequest) (Result, error) {
 
 func ruleTargetProvider(rule RuleConfig) (targetProvider, error) {
 	switch rule.Type {
+	case RuleAlwaysExposed:
+		return func(_ int, _ quant.Bar) (float64, error) { return 1, nil }, nil
 	case RuleOddBuyEvenSell:
 		return func(_ int, bar quant.Bar) (float64, error) {
 			if time.UnixMilli(bar.OpenTime).UTC().Day()%2 == 1 {

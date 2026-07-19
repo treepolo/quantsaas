@@ -15,6 +15,7 @@ import (
 	"quantsaas/internal/marketversion"
 	"quantsaas/internal/saas/backtest"
 	"quantsaas/internal/saas/computetask"
+	"quantsaas/internal/saas/marketdata"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -132,6 +133,25 @@ func TestPerturbationEndToEndAndIntegrity(t *testing.T) {
 	}
 	if reusable, err := service.PlanVariants(ctx, user.ID, group.ID, variantInput); err != nil || reusable.ExistingVariants != 4 || reusable.PendingVariants != 0 {
 		t.Fatalf("variant reuse failed: %+v err=%v", reusable, err)
+	}
+	marketService := marketdata.NewService(db, nil)
+	chartSources, err := marketService.MarketChartSources(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chartVersion *marketdata.MarketChartSource
+	for index := range chartSources {
+		if chartSources[index].VersionID == variants[0].OutputVersionID {
+			chartVersion = &chartSources[index]
+			break
+		}
+	}
+	if chartVersion == nil || chartVersion.ArtifactKind != marketversion.ArtifactKindLocalPerturbation || !chartVersion.CanBacktest || !chartVersion.Immutable {
+		t.Fatalf("published perturbation version missing from chart/backtest sources: %+v", chartVersion)
+	}
+	chartBars, err := marketService.MarketChartBars(ctx, user.ID, "", chartVersion.VersionID, chartVersion.Interval, chartVersion.StartTimeMs, chartVersion.EndTimeMs, 5000)
+	if err != nil || int64(len(chartBars)) != chartVersion.BarCount {
+		t.Fatalf("chart bars=%d want=%d err=%v", len(chartBars), chartVersion.BarCount, err)
 	}
 
 	initial, monthly, fee, spread, filter := 10_000.0, 100.0, .001, .001, false

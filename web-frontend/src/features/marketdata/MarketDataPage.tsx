@@ -5,6 +5,7 @@ import { marketDataApi, type DatasetSummary, type InstrumentSummary, type Resear
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
+import { MarketPriceExplorer } from "./MarketPriceExplorer";
 
 const intervalLabels: Record<string, string> = {
   "1d": "日 K",
@@ -416,6 +417,8 @@ export function MarketDataPage() {
           </div>
         ) : null}
       </Card>
+
+      <MarketPriceExplorer />
 
       <Card>
         <CardHeader>

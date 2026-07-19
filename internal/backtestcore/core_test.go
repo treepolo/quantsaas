@@ -378,6 +378,33 @@ func TestSigmoidPositionStructureReachesCoreUnchanged(t *testing.T) {
 	coreAssertNear(t, "floating-only dead asset", floating.DeadBTC, 0)
 }
 
+func TestAlwaysExposedRuleRunsWithoutStrategyParameters(t *testing.T) {
+	bars := flatCoreBars(40)
+	result, err := RunRule(RuleRequest{
+		Spec: Spec{
+			Symbol:              "TEST",
+			Interval:            "1d",
+			ExecutionMode:       ExecutionModeCloseSameBar,
+			InitialCapital:      1000,
+			MonthlyContribution: 0,
+		},
+		Bars: bars,
+		Rule: RuleConfig{Type: RuleAlwaysExposed},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Path) != len(bars) {
+		t.Fatalf("path points = %d, want %d", len(result.Path), len(bars))
+	}
+	for index, point := range result.Path {
+		if point.ActualExposureWeight < 0.999999 {
+			t.Fatalf("point %d exposure = %.8f, want full exposure", index, point.ActualExposureWeight)
+		}
+	}
+	coreAssertNear(t, "flat-market return", result.TotalReturn, 0)
+}
+
 func flatCoreBars(count int) []quant.Bar {
 	start := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	bars := make([]quant.Bar, count)

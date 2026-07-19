@@ -156,6 +156,8 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.DELETE("/market-data/instruments/:id", md.DeleteInstrument)
 	lab.GET("/market-data/klines/status", md.Status)
 	lab.GET("/market-data/klines/overview", md.Overview)
+	lab.GET("/market-data/charts/sources", md.MarketChartSources)
+	lab.GET("/market-data/charts/bars", md.MarketChartBars)
 	lab.POST("/market-data/klines/import", md.Import)
 	lab.POST("/market-data/klines/update-latest", md.UpdateLatest)
 	lab.POST("/market-data/generate/leveraged", md.GenerateLeveraged)

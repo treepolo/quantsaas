@@ -3,7 +3,6 @@ package backtest
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"quantsaas/internal/backtestcore"
 	"quantsaas/internal/quant"
@@ -34,6 +33,22 @@ type controlPrepared struct {
 	coreSpec backtestcore.Spec
 	identity backtestresult.Identity
 	run      func() (backtestcore.Result, error)
+}
+
+func (s *Service) prepareBaseline(ctx context.Context, req CreateRequest) (controlPrepared, error) {
+	rule := backtestcore.RuleConfig{Type: backtestcore.RuleAlwaysExposed}
+	prepared, err := s.prepareControl(ctx, req, backtestcore.RunnerRule, ControlRuleStrategyVersion, map[string]any{
+		"schema_version": ControlParameterSchemaVersion,
+		"analysis_mode":  "market_baseline",
+		"rule":           rule,
+	})
+	if err != nil {
+		return controlPrepared{}, err
+	}
+	prepared.run = func() (backtestcore.Result, error) {
+		return backtestcore.RunRule(backtestcore.RuleRequest{Spec: prepared.coreSpec, Bars: prepared.bars, Rule: rule})
+	}
+	return prepared, nil
 }
 
 func (s *Service) EnsureRuleStandardResult(ctx context.Context, userID uint, req CreateRequest, rule backtestcore.RuleConfig) (StandardExecutionResult, error) {
@@ -108,25 +123,13 @@ func (s *Service) ensureControlPrepared(ctx context.Context, _ uint, prepared co
 	if err := s.results.MarkRunning(ctx, reservation.Result.ID); err != nil {
 		return StandardExecutionResult{}, err
 	}
-	path, err := prepared.run()
+	artifacts, err := s.executeControlPrepared(prepared)
 	if err != nil {
 		_ = s.results.Fail(context.Background(), reservation.Result.ID, err)
 		return StandardExecutionResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		_ = s.results.Cancel(context.Background(), reservation.Result.ID, err.Error())
-		return StandardExecutionResult{}, err
-	}
-	baseline := quant.SimulateGhostDCAFrom(prepared.bars, prepared.bars[0].OpenTime, quant.GhostDCAConfig{InitialUSDT: prepared.coreSpec.InitialCapital, MonthlyInjectUSDT: prepared.coreSpec.MonthlyContribution, UseOpenExecution: prepared.request.ExecutionMode == backtestcore.ExecutionModeCloseNextOpen, Costs: prepared.coreSpec.Costs})
-	extra := map[string]any{"benchmark_final_equity": baseline.FinalEquity, "benchmark_return": baseline.ROI, "benchmark_max_drawdown": baseline.MaxDrawdown, "runner": prepared.coreSpec.Runner, "strategy_version": strings.TrimSpace(prepared.identity.Snapshot.StrategyVersion)}
-	summary, err := backtestresult.BuildSummary(path, maxDrawdown(path.Path), backtestresult.SummaryOptions{Extra: extra})
-	if err != nil {
-		_ = s.results.Fail(context.Background(), reservation.Result.ID, err)
-		return StandardExecutionResult{}, err
-	}
-	artifacts, err := backtestresult.BuildArtifacts(prepared.identity.SpecContentHash, summary, standardizedPath(path.Path, baseline), backtestresult.DefaultPathBlockSize)
-	if err != nil {
-		_ = s.results.Fail(context.Background(), reservation.Result.ID, err)
 		return StandardExecutionResult{}, err
 	}
 	if err := s.results.Complete(ctx, reservation.Result.ID, artifacts); err != nil {
@@ -138,4 +141,38 @@ func (s *Service) ensureControlPrepared(ctx context.Context, _ uint, prepared co
 		return StandardExecutionResult{}, err
 	}
 	return s.loadStandardExecution(ctx, reservation.Result.ID, false)
+}
+
+func (s *Service) executeControlPrepared(prepared controlPrepared) (backtestresult.Artifacts, error) {
+	path, err := prepared.run()
+	if err != nil {
+		return backtestresult.Artifacts{}, err
+	}
+	baseline := quant.SimulateGhostDCAFrom(prepared.bars, prepared.bars[0].OpenTime, quant.GhostDCAConfig{InitialUSDT: prepared.coreSpec.InitialCapital, MonthlyInjectUSDT: prepared.coreSpec.MonthlyContribution, UseOpenExecution: prepared.request.ExecutionMode == backtestcore.ExecutionModeCloseNextOpen, Costs: prepared.coreSpec.Costs})
+	extra := storedResponseMetrics{
+		Runner:               prepared.coreSpec.Runner,
+		StrategyVersion:      prepared.identity.Snapshot.StrategyVersion,
+		Alpha:                path.TotalReturn - baseline.ROI,
+		Benchmark:            baseline.FinalEquity,
+		BenchmarkReturn:      baseline.ROI,
+		BenchmarkMaxDrawdown: baseline.MaxDrawdown,
+		BenchmarkFinalEquity: baseline.FinalEquity,
+		FeeRate:              prepared.coreSpec.Costs.FeeRate,
+		SpreadRate:           prepared.coreSpec.Costs.SpreadRate,
+		FeeCost:              path.Costs.FeeCost,
+		SlippageCost:         path.Costs.SlippageCost,
+		TotalExecutionCost:   path.Costs.TotalCost,
+		PositionStructure:    "market_baseline",
+		Windows:              map[string]float64{},
+		WindowDetails:        []WindowResult{},
+		PracticalTotalReturn: path.PracticalTotalReturn,
+		PracticalMaxDrawdown: maxDrawdown(path.Path),
+		PracticalFinalEquity: path.PracticalFinalAssets,
+		PracticalTradeCount:  path.PracticalTradeCount,
+	}
+	summary, err := backtestresult.BuildSummary(path, maxDrawdown(path.Path), backtestresult.SummaryOptions{Extra: extra})
+	if err != nil {
+		return backtestresult.Artifacts{}, err
+	}
+	return backtestresult.BuildArtifacts(prepared.identity.SpecContentHash, summary, standardizedPath(path.Path, baseline), backtestresult.DefaultPathBlockSize)
 }

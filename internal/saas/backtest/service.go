@@ -25,6 +25,7 @@ const (
 	SourceChampion  = "champion"
 	SourceCandidate = "candidate"
 	SourceCustom    = "custom"
+	SourceBaseline  = "baseline"
 )
 
 var (
@@ -204,6 +205,8 @@ type StandardPathBlockResponse struct {
 }
 
 type storedResponseMetrics struct {
+	Runner                string             `json:"runner,omitempty"`
+	StrategyVersion       string             `json:"strategy_version,omitempty"`
 	Alpha                 float64            `json:"alpha"`
 	Benchmark             float64            `json:"benchmark"`
 	BenchmarkReturn       float64            `json:"benchmark_return"`
@@ -295,6 +298,9 @@ func (s *Service) EnsureStandardResult(ctx context.Context, userID uint, req Cre
 	if err := s.validateBasicRequest(ctx, req); err != nil {
 		return StandardExecutionResult{}, err
 	}
+	if err := s.validateMarketDataVersionOwner(ctx, userID, req); err != nil {
+		return StandardExecutionResult{}, err
+	}
 	prepared, err := s.prepare(ctx, userID, req)
 	if err != nil {
 		return StandardExecutionResult{}, err
@@ -308,6 +314,9 @@ func (s *Service) EnsureDynamicStandardResult(ctx context.Context, userID uint, 
 	}
 	req = s.normalizeRequest(ctx, req)
 	if err := s.validateBasicRequest(ctx, req); err != nil {
+		return StandardExecutionResult{}, err
+	}
+	if err := s.validateMarketDataVersionOwner(ctx, userID, req); err != nil {
 		return StandardExecutionResult{}, err
 	}
 	prepared, err := s.prepareWithDynamic(ctx, userID, req, &dynamic)
@@ -450,6 +459,9 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*
 	if err := s.validateBasicRequest(ctx, req); err != nil {
 		return nil, err
 	}
+	if err := s.validateMarketDataVersionOwner(ctx, userID, req); err != nil {
+		return nil, err
+	}
 
 	requestRaw, err := json.Marshal(req)
 	if err != nil {
@@ -480,13 +492,27 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*
 	if err := s.db.WithContext(ctx).Create(&run).Error; err != nil {
 		return nil, err
 	}
-
-	prepared, err := s.prepare(ctx, userID, req)
-	if err != nil {
-		s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
-		return nil, err
+	var identity backtestresult.Identity
+	var execute func() (backtestresult.Artifacts, error)
+	if req.Source == SourceBaseline {
+		prepared, prepareErr := s.prepareBaseline(ctx, req)
+		if prepareErr != nil {
+			s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, prepareErr.Error())
+			return nil, prepareErr
+		}
+		identity = prepared.identity
+		execute = func() (backtestresult.Artifacts, error) { return s.executeControlPrepared(prepared) }
+	} else {
+		prepared, prepareErr := s.prepare(ctx, userID, req)
+		if prepareErr != nil {
+			s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, prepareErr.Error())
+			return nil, prepareErr
+		}
+		identity = prepared.identity
+		execute = func() (backtestresult.Artifacts, error) { return s.executePrepared(prepared) }
 	}
-	reservation, err := s.results.Reserve(ctx, prepared.identity)
+
+	reservation, err := s.results.Reserve(ctx, identity)
 	if err != nil {
 		s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
 		return nil, err
@@ -531,7 +557,7 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*
 		s.finishRunFailure(ctx, run.ID, saasstore.BacktestStatusFailed, err.Error())
 		return nil, err
 	}
-	artifacts, err := s.executePrepared(prepared)
+	artifacts, err := execute()
 	if err != nil {
 		s.finishOwnedResultFailure(ctx, resultID, err)
 		return nil, err
@@ -1469,6 +1495,11 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateRequest) Creat
 		req.Source = SourceChampion
 	}
 	req.Source = strings.ToLower(strings.TrimSpace(req.Source))
+	if req.Source == SourceBaseline {
+		disabled := false
+		req.LongTermFilterEnabled = &disabled
+		req.LongTermFilterMonths = 0
+	}
 	if req.LongTermFilterEnabled == nil {
 		enabled := true
 		req.LongTermFilterEnabled = &enabled
@@ -1531,9 +1562,24 @@ func (s *Service) validateBasicRequest(ctx context.Context, req CreateRequest) e
 		return fmt.Errorf("尚不支援的策略: %s", req.StrategyID)
 	}
 	switch req.Source {
-	case SourceChampion, SourceCandidate, SourceCustom:
+	case SourceChampion, SourceCandidate, SourceCustom, SourceBaseline:
 	default:
 		return fmt.Errorf("不支援的回測來源: %s", req.Source)
+	}
+	return nil
+}
+
+func (s *Service) validateMarketDataVersionOwner(ctx context.Context, userID uint, req CreateRequest) error {
+	if req.MarketDataVersionID == 0 {
+		return nil
+	}
+	var count int64
+	if err := s.db.WithContext(ctx).Model(&saasstore.MarketDataVersion{}).
+		Where("id = ? AND owner_user_id = ?", req.MarketDataVersionID, userID).Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("無權使用這份行情版本")
 	}
 	return nil
 }

@@ -183,6 +183,23 @@ export type RecompositionSource = {
   archived: boolean;
 };
 
+export type MarketChartSource = {
+  instrument: ResearchInstrument;
+  version_id?: number;
+  version_number?: number;
+  content_hash?: string;
+  artifact_kind: string;
+  display_name: string;
+  series_name?: string;
+  interval: string;
+  start_time_ms: number;
+  end_time_ms: number;
+  bar_count: number;
+  immutable: boolean;
+  integrity_status?: string;
+  can_backtest: boolean;
+};
+
 export type RecompositionSegmentInput = {
   item_id: string;
   source_instrument_id?: string;
@@ -344,6 +361,20 @@ export const marketDataApi = {
   },
   updateLatest() {
     return apiFetch<{ results: AutoUpdateResult[] }>("/market-data/klines/update-latest", { method: "POST" });
+  },
+  chartSources() {
+    return apiFetch<{ items: MarketChartSource[] }>("/market-data/charts/sources");
+  },
+  chartBars(input: { instrumentId?: string; versionId?: number; interval: string; startTimeMs: number; endTimeMs: number; limit?: number }) {
+    const query = new URLSearchParams({
+      interval: input.interval,
+      start_time_ms: String(input.startTimeMs),
+      end_time_ms: String(input.endTimeMs),
+      limit: String(input.limit ?? 5000)
+    });
+    if (input.instrumentId) query.set("instrument_id", input.instrumentId);
+    if (input.versionId) query.set("version_id", String(input.versionId));
+    return apiFetch<{ rows: MarketVersionBar[] }>(`/market-data/charts/bars?${query.toString()}`);
   },
   auditMaintenance(id?: string) {
     const suffix = id ? `/${encodeURIComponent(id)}` : "";

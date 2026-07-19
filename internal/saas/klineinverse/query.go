@@ -46,7 +46,7 @@ func (s *Service) Map(ctx context.Context, userID, studyID, snapshotID uint, axi
 	if !validFeatureName(axisX) || !validFeatureName(axisY) || axisX == axisY {
 		return MapResponse{}, ErrInvalidRequest
 	}
-	if target != "A" && target != "B" {
+	if target != "all" && target != "failed" && target != "A" && target != "B" {
 		return MapResponse{}, ErrInvalidRequest
 	}
 	allowedColors := []string{"evaluation_count", "target_count", "best_q_rel", "median_q_rel", "best_q_abs", "median_q_abs", "nearest_d_total", "active_pareto_count"}

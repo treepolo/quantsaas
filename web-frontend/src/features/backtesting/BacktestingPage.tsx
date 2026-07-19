@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, Legend, ReferenceArea, ReferenceLine, R
 import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
 import { datasetStartDate } from "../../shared/lib/datasetDates";
+import { groupMarketSources, marketSourceCategoryLabels, marketSourceCategory, marketSourceKey, marketSourceLabel } from "../../shared/lib/marketChartSources";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
 import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
@@ -321,13 +322,18 @@ export function BacktestingPage() {
   const initialGenome = Number(params.get("genome")) || 0;
   const initialRun = Number(params.get("run")) || 0;
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
+  const marketSourcesQuery = useQuery({ queryKey: ["market-chart-sources"], queryFn: marketDataApi.chartSources });
   const instruments = instrumentsQuery.data?.instruments ?? [];
   const instrumentNames = useMemo(() => Object.fromEntries(instruments.map((item) => [item.id, item.display_name])), [instruments]);
+  const marketSources = (marketSourcesQuery.data?.items ?? []).filter((item) => item.can_backtest);
+  const groupedMarketSources = useMemo(() => groupMarketSources(marketSources), [marketSources]);
+  const [datasetKey, setDatasetKey] = useState("");
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
-  const selectedInstrument = instruments.find((item) => item.id === instrumentId);
   const [interval, setInterval] = useState("1d");
+  const selectedMarketSource = marketSources.find((item) => marketSourceKey(item) === datasetKey) ?? marketSources.find((item) => item.instrument.id === instrumentId && item.interval === interval && !item.version_id) ?? marketSources.find((item) => item.instrument.id === "BTCUSDT" && item.interval === "1d" && !item.version_id) ?? marketSources[0];
+  const selectedInstrument = selectedMarketSource?.instrument ?? instruments.find((item) => item.id === instrumentId);
   const [executionMode, setExecutionMode] = useState("close_next_open");
-  const [source, setSource] = useState<"champion" | "candidate" | "custom">(initialGenome ? "candidate" : "champion");
+  const [source, setSource] = useState<"champion" | "candidate" | "custom" | "baseline">(initialGenome ? "candidate" : "champion");
   const [candidateId, setCandidateId] = useState(initialGenome);
   const [selectedGenomeIds, setSelectedGenomeIds] = useState<number[]>(initialGenome ? [initialGenome] : []);
   const [customJson, setCustomJson] = useState("{\n  \n}");
@@ -352,10 +358,17 @@ export function BacktestingPage() {
   const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];
   const selectedGenomes = selectableGenomes.filter((genome) => selectedGenomeIds.includes(genome.id));
   const crossInstrumentCount = selectedGenomes.filter((genome) => genome.instrument_id && genome.instrument_id !== instrumentId).length;
-  const selectedDatasetStart = datasetStartDate(selectedInstrument, interval);
+  const selectedDatasetStart = selectedMarketSource?.start_time_ms ? new Date(selectedMarketSource.start_time_ms).toISOString().slice(0, 10) : datasetStartDate(selectedInstrument, interval);
   useEffect(() => {
     if (selectedDatasetStart) setBacktestStart(selectedDatasetStart);
   }, [selectedDatasetStart]);
+  useEffect(() => {
+    if (!selectedMarketSource) return;
+    const key = marketSourceKey(selectedMarketSource);
+    if (!datasetKey) setDatasetKey(key);
+    if (instrumentId !== selectedMarketSource.instrument.id) setInstrumentId(selectedMarketSource.instrument.id);
+    if (interval !== selectedMarketSource.interval) setInterval(selectedMarketSource.interval);
+  }, [datasetKey, selectedMarketSource, instrumentId, interval]);
 
   const startMutation = useMutation({
     mutationFn: async () => {
@@ -363,15 +376,17 @@ export function BacktestingPage() {
         instrument_id: instrumentId,
         data_source: selectedInstrument?.data_source,
         symbol: selectedInstrument?.symbol ?? instrumentId,
+        market_data_version_id: selectedMarketSource?.version_id,
+        market_data_content_hash: selectedMarketSource?.content_hash,
         interval,
         execution_mode: executionMode,
-        long_term_filter_enabled: interval === "1d" && longTermFilterEnabled,
+        long_term_filter_enabled: source !== "baseline" && interval === "1d" && longTermFilterEnabled,
         long_term_filter_months: longTermFilterMonths,
         start_time_ms: dateStartMs(backtestStart),
         end_time_ms: dateEndMs(backtestEnd),
         source
       };
-      const payload = overrideBacktestAssumptions
+      const payload = (overrideBacktestAssumptions || source === "baseline")
         ? {
             ...basePayload,
             initial_capital: initialCapital,
@@ -412,8 +427,8 @@ export function BacktestingPage() {
             name: shortGenomeLabel(item.genome),
             color: item.color
           }))
-        : [{ key: "strategy", dataKey: "strategy_value", name: result?.long_term_filter_enabled ? "過濾模型" : "實務模型", color: "#2dd4bf" }],
-    [comparisonResults, result?.long_term_filter_enabled]
+        : [{ key: "strategy", dataKey: "strategy_value", name: result?.source === "baseline" ? "無參數結果" : result?.long_term_filter_enabled ? "過濾模型" : "實務模型", color: "#2dd4bf" }],
+    [comparisonResults, result?.long_term_filter_enabled, result?.source]
   );
   const modelWeightSeries = useMemo(
     () => buildMetricSeries(comparisonResults, "model_target_weight", { dataKey: "model_target_weight", name: "基準模型", color: "#38bdf8" }),
@@ -495,10 +510,15 @@ export function BacktestingPage() {
     startMutation.mutate();
   }
 
-  function changeInstrument(nextId: string) {
-    const next = instruments.find((item) => item.id === nextId);
-    setInstrumentId(nextId);
-    setInterval(next?.supported_intervals[0] ?? "1d");
+  function changeDataset(nextKey: string) {
+    const next = marketSources.find((item) => marketSourceKey(item) === nextKey);
+    if (!next) return;
+    setDatasetKey(nextKey);
+    setInstrumentId(next.instrument.id);
+    setInterval(next.interval);
+    setBacktestStart(new Date(next.start_time_ms).toISOString().slice(0, 10));
+    setBacktestEnd(new Date(next.end_time_ms).toISOString().slice(0, 10));
+    if (next.version_id && source === "champion") setSource("candidate");
   }
 
   function resetRange() {
@@ -536,19 +556,18 @@ export function BacktestingPage() {
     <section className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold text-slate-100">回測</h1>
-        <p className="mt-1 text-sm text-slate-400">選擇標的、參數來源與執行設定，檢查同一組參數在不同市場中的表現。</p>
+        <p className="mt-1 text-sm text-slate-400">可以測試策略參數，也可以完全不套用參數，只分析標的本身績效；每月投入沿用現有設定。</p>
       </div>
 
       <Card>
         <CardHeader>
           <div>
             <CardTitle>{selectedInstrument?.display_name ?? "研究標的"}</CardTitle>
-            <CardDescription>可使用本標的採用參數，也可指定候選參數做跨商品回測。</CardDescription>
+            <CardDescription>可選擇完全不套用策略參數；資金與每月投入仍使用現有回測設定。</CardDescription>
           </div>
         </CardHeader>
         <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
-          <Select label="回測商品" value={instrumentId} onChange={changeInstrument} options={instruments.map((item) => [item.id, item.display_name])} />
-          <Select label="資料週期" value={interval} onChange={setInterval} options={(selectedInstrument?.supported_intervals ?? ["1d"]).map((item) => [item, intervalLabels[item] ?? item])} />
+          <label className="md:col-span-2"><span className="mb-2 block text-sm text-slate-300">回測使用的行情資料</span><select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={selectedMarketSource ? marketSourceKey(selectedMarketSource) : ""} onChange={(event) => changeDataset(event.target.value)}>{groupedMarketSources.map((group) => <optgroup key={group.category} label={group.label}>{group.items.map((item) => <option key={marketSourceKey(item)} value={marketSourceKey(item)}>{marketSourceLabel(item)}</option>)}</optgroup>)}</select><span className="mt-1 block text-xs text-slate-500">目前分類：{selectedMarketSource ? marketSourceCategoryLabels[marketSourceCategory(selectedMarketSource)] : "載入中"}。各類行情分組顯示，不會混在原始商品清單中。</span></label>
           <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes} />
           <Select
             label="參數來源"
@@ -557,25 +576,27 @@ export function BacktestingPage() {
             options={[
               ["champion", "使用此商品採用參數"],
               ["candidate", "指定任一參數包"],
-              ["custom", "自訂 JSON"]
+              ["custom", "自訂 JSON"],
+              ["baseline", "不使用策略參數"]
             ]}
           />
           <DateInput label="回測開始日" value={backtestStart} onChange={setBacktestStart} />
           <DateInput label="回測結束日" value={backtestEnd} onChange={setBacktestEnd} />
           <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-300 md:col-span-2">
             <input type="checkbox" checked={overrideBacktestAssumptions} onChange={(event) => setOverrideBacktestAssumptions(event.target.checked)} />
-            覆蓋資金與交易成本設定
+            {source === "baseline" ? "目前為無參數分析，資金與成本可直接設定" : "覆蓋參數包內的資金與交易成本設定"}
           </label>
-          <NumberInput label="初始資金" value={initialCapital} min={1} disabled={!overrideBacktestAssumptions} onChange={setInitialCapital} />
-          <NumberInput label="每月投入 / 定投金額" value={monthlyDCA} min={0} disabled={!overrideBacktestAssumptions} onChange={setMonthlyDCA} />
-          <NumberInput label="手續費率" value={feeRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setFeeRate} />
-          <NumberInput label="價差 / 滑價率" value={spreadRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions} onChange={setSpreadRate} />
+          <NumberInput label="初始資金" value={initialCapital} min={1} disabled={!overrideBacktestAssumptions && source !== "baseline"} onChange={setInitialCapital} />
+          <NumberInput label="每月投入 / 定投金額" value={monthlyDCA} min={0} disabled={!overrideBacktestAssumptions && source !== "baseline"} onChange={setMonthlyDCA} />
+          <NumberInput label="手續費率" value={feeRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions && source !== "baseline"} onChange={setFeeRate} />
+          <NumberInput label="價差 / 滑價率" value={spreadRate} min={0} step={0.0001} disabled={!overrideBacktestAssumptions && source !== "baseline"} onChange={setSpreadRate} />
           <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-3 text-sm text-slate-300">
-            <input type="checkbox" checked={interval === "1d" && longTermFilterEnabled} disabled={interval !== "1d"} onChange={(event) => setLongTermFilterEnabled(event.target.checked)} />
+            <input type="checkbox" checked={source !== "baseline" && interval === "1d" && longTermFilterEnabled} disabled={interval !== "1d" || source === "baseline"} onChange={(event) => setLongTermFilterEnabled(event.target.checked)} />
             啟用長週期風險濾網
           </label>
           <NumberInput label="N 月線長度" value={longTermFilterMonths} min={1} onChange={setLongTermFilterMonths} />
           {interval !== "1d" ? <div className="text-xs text-[#fde68a] md:col-span-2">長週期風險濾網以日 K 組成月收盤；非日 K 回測會自動關閉。</div> : null}
+          {source === "baseline" ? <div className="rounded-lg border border-teal-400/20 bg-teal-400/10 p-3 text-sm text-teal-100 md:col-span-2">不會讀取或套用任何策略參數。仍沿用上方既有的初始資金、每月投入與交易成本設定；長週期風險濾網不會套用。</div> : null}
 
           {source === "candidate" ? (
             <div className="md:col-span-2">
@@ -629,7 +650,14 @@ export function BacktestingPage() {
       {result ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {[
+            {(result.source === "baseline" ? [
+              ["無參數總報酬", formatPercent(result.total_return), "text-[#bbf7d0]"],
+              ["最大回撤", formatPercent(result.max_drawdown), "text-[#fecaca]"],
+              ["期末權益", formatMoney(result.final_equity), "text-slate-100"],
+              ["交易次數", (result.trade_count ?? 0).toLocaleString("zh-TW"), "text-slate-100"],
+              ["手續費率", formatPercent(result.fee_rate ?? 0), "text-slate-100"],
+              ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"]
+            ] : [
               ["總報酬", formatPercent(result.total_return), "text-[#bbf7d0]"],
               ["超額報酬", formatPercent(result.alpha), "text-[#99f6e4]"],
               ["最大回撤", formatPercent(result.max_drawdown), "text-[#fecaca]"],
@@ -641,14 +669,14 @@ export function BacktestingPage() {
               ["價差 / 滑價率", formatPercent(result.spread_rate ?? 0), "text-slate-100"],
               ["調倉門檻", formatPercent(result.rebalance_threshold ?? 0), "text-slate-100"],
               ["濾網設定", result.long_term_filter_enabled ? `${result.long_term_filter_months ?? longTermFilterMonths} 月線` : "關閉", "text-slate-100"]
-            ].map(([label, value, color]) => (
+            ]).map(([label, value, color]) => (
               <Card key={label} className="p-4">
                 <div className="text-sm text-slate-500">{label}</div>
                 <div className={cn("mt-2 font-mono text-2xl font-semibold", color)}>{value}</div>
               </Card>
             ))}
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {result.source !== "baseline" ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             {[
               ["強制滿倉門檻", formatPercent(result.force_full_threshold ?? 1), "text-slate-100"],
               ["強制空倉門檻", formatPercent(result.force_empty_threshold ?? 0), "text-slate-100"],
@@ -666,9 +694,9 @@ export function BacktestingPage() {
                 <div className={cn("mt-2 font-mono text-2xl font-semibold", color)}>{value}</div>
               </Card>
             ))}
-          </div>
+          </div> : null}
 
-		  {result.backtest_result_id ? <><PerformanceAnalysisPanel backtestResultId={result.backtest_result_id} betaBenchmarks={instruments} /><div className="mt-3"><Link to={`/kline-inverse?backtest=${result.backtest_result_id}`}><Button variant="secondary">以此結果建立 C 草稿</Button></Link></div></> : <Card className="p-4 text-sm text-slate-500">這筆舊回測沒有可引用的標準化結果，無法建立版本化報酬分析。</Card>}
+		  {result.backtest_result_id ? <><PerformanceAnalysisPanel backtestResultId={result.backtest_result_id} betaBenchmarks={instruments} />{result.source!=="baseline"?<div className="mt-3"><Link to={`/kline-inverse?backtest=${result.backtest_result_id}`}><Button variant="secondary">以此結果建立行情樣貌反推研究</Button></Link></div>:null}</> : <Card className="p-4 text-sm text-slate-500">這筆舊回測沒有可引用的標準化結果，無法建立版本化報酬分析。</Card>}
 
           {comparisonResults.length > 1 ? (
             <Card className="p-4">
@@ -754,7 +782,7 @@ export function BacktestingPage() {
                     <Area key={series.dataKey} name={series.name} type="monotone" dataKey={series.dataKey} stroke={series.color} strokeWidth={2} fill={seriesDefs.length === 1 ? `url(#${series.dataKey}Fill)` : "transparent"} isAnimationActive={false} connectNulls />
                   ))}
                   {comparisonResults.length === 0 && result.long_term_filter_enabled ? <Area name="實務模型" type="monotone" dataKey="practical_value" stroke="#38bdf8" strokeDasharray="4 3" fill="transparent" isAnimationActive={false} connectNulls /> : null}
-                  <Area name="基準" type="monotone" dataKey="benchmark_value" stroke="#64748b" strokeDasharray="5 5" fill="transparent" isAnimationActive={false} />
+                  {result.source!=="baseline"?<Area name="定期投入基準" type="monotone" dataKey="benchmark_value" stroke="#64748b" strokeDasharray="5 5" fill="transparent" isAnimationActive={false} />:null}
                 </AreaChart>
               </ResponsiveContainer>
               <div

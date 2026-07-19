@@ -33,7 +33,7 @@ export type BacktestResult = {
   rebalance_threshold?: number;
   force_full_threshold?: number;
   force_empty_threshold?: number;
-  position_structure?: "dual_layer" | "floating_only";
+  position_structure?: "dual_layer" | "floating_only" | "market_baseline";
   trade_count?: number;
   long_term_filter_enabled?: boolean;
   long_term_filter_months?: number;

@@ -108,7 +108,7 @@ func (s *Service) planAppendBatch(ctx context.Context, userID uint, study saasst
 	}
 	manifestHash := compute.HashBytes(manifestRaw)
 	compatibilityRaw, _ := compute.CanonicalJSON(manifest.Compatibility)
-	batchKey := "p12-batch:" + study.StudyHash + ":" + batchType + ":" + manifestHash
+	batchKey := klineInverseBatchKey(manifestHash)
 	batch := saasstore.KlineInverseBatch{
 		StudyID: study.ID, Ordinal: ordinal, BatchKey: batchKey, BatchType: batchType,
 		SchemaVersion: BatchSchemaVersion, ManifestHash: manifestHash, Manifest: manifestRaw,
@@ -143,6 +143,10 @@ func (s *Service) planAppendBatch(ctx context.Context, userID uint, study saasst
 		return BatchPlanResponse{}, err
 	}
 	return BatchPlanResponse{BatchID: batch.ID, BatchType: batchType, Plan: preview, ManifestHash: manifestHash, CompatibilityHash: batch.CompatibilityHash, BacktestEvaluations: budget}, nil
+}
+
+func klineInverseBatchKey(manifestHash string) string {
+	return "p12-batch:" + strings.TrimPrefix(strings.TrimSpace(manifestHash), "sha256:")
 }
 
 func (s *Service) StartAppendBatch(ctx context.Context, userID, studyID uint, request BatchStartRequest) (StudyDescriptor, error) {

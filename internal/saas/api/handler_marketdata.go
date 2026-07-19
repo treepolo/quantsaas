@@ -277,6 +277,28 @@ func (h *MarketDataHandler) RecompositionSources(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"items": rows})
 }
 
+func (h *MarketDataHandler) MarketChartSources(c *gin.Context) {
+	rows, err := h.service.MarketChartSources(c.Request.Context(), currentUserID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": rows})
+}
+
+func (h *MarketDataHandler) MarketChartBars(c *gin.Context) {
+	versionID, _ := strconv.ParseUint(strings.TrimSpace(c.Query("version_id")), 10, 64)
+	startMs, _ := strconv.ParseInt(strings.TrimSpace(c.Query("start_time_ms")), 10, 64)
+	endMs, _ := strconv.ParseInt(strings.TrimSpace(c.Query("end_time_ms")), 10, 64)
+	limit, _ := strconv.Atoi(strings.TrimSpace(c.Query("limit")))
+	rows, err := h.service.MarketChartBars(c.Request.Context(), currentUserID(c), c.Query("instrument_id"), uint(versionID), c.Query("interval"), startMs, endMs, limit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"rows": rows})
+}
+
 func (h *MarketDataHandler) RecompositionSourceBars(c *gin.Context) {
 	versionID, _ := strconv.ParseUint(strings.TrimSpace(c.Query("version_id")), 10, 64)
 	startMs, _ := strconv.ParseInt(strings.TrimSpace(c.Query("start_time_ms")), 10, 64)

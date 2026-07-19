@@ -284,6 +284,29 @@ func TestCreatePersistsAndReusesStandardizedResult(t *testing.T) {
 	if !summaryOnly.Valid || !summaryOnly.SummaryOnly || summaryOnly.PathVerified {
 		t.Fatalf("summary-only integrity report = %+v", summaryOnly)
 	}
+
+	initial := 10000.0
+	monthly := 0.0
+	baselineRequest := request
+	baselineRequest.Source = SourceBaseline
+	baselineRequest.CustomParams = nil
+	baselineRequest.InitialCapital = &initial
+	baselineRequest.MonthlyDCA = &monthly
+	baselineRun, err := service.Create(ctx, user.ID, baselineRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baselineRun.Source != SourceBaseline || baselineRun.PositionStructure != "market_baseline" {
+		t.Fatalf("baseline identity = source %q, position %q", baselineRun.Source, baselineRun.PositionStructure)
+	}
+	if baselineRun.LongTermFilterEnabled || len(baselineRun.NAV) == 0 {
+		t.Fatalf("baseline result filter=%v nav=%d", baselineRun.LongTermFilterEnabled, len(baselineRun.NAV))
+	}
+	for index, point := range baselineRun.NAV {
+		if point.ActualExposureWeight < 0.999999 {
+			t.Fatalf("baseline NAV %d exposure = %.8f", index, point.ActualExposureWeight)
+		}
+	}
 }
 
 func openBacktestIntegrationDB(t *testing.T) *gorm.DB {
