@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, LogOut } from "lucide-react";
 import { AppBackground } from "./AppBackground";
@@ -11,6 +11,7 @@ import { cn } from "../shared/lib/cn";
 import { systemApi } from "../shared/services/system";
 import { Button } from "../shared/ui/Button";
 import { defaultSystemStatus, useSystemStatusStore } from "../stores/systemStatusStore";
+import { PageErrorBoundary } from "./PageErrorBoundary";
 
 function Sidebar() {
   const { t } = useI18n();
@@ -78,6 +79,7 @@ function Topbar() {
 
 export function AppShell() {
   const setStatus = useSystemStatusStore((state) => state.setStatus);
+  const location = useLocation();
 
   const { data } = useQuery({
     queryKey: ["system-status"],
@@ -97,7 +99,9 @@ export function AppShell() {
         <Topbar />
         <main className="custom-scrollbar min-h-0 flex-1 overflow-y-auto p-4 lg:p-6">
           <div className="mx-auto max-w-[1800px]">
-            <Outlet />
+            <PageErrorBoundary resetKey={location.pathname}>
+              <Outlet />
+            </PageErrorBoundary>
           </div>
         </main>
       </div>

@@ -27,7 +27,10 @@ export function ComputeStatusBadge({ status }: { status: ComputeTaskStatus }) {
 }
 
 export function ComputeProgress({ task, compact = false }: { task: ComputeTask; compact?: boolean }) {
-  const percent = Math.max(0, Math.min(100, task.progress * 100));
+  const progress = Number.isFinite(task.progress) ? task.progress : 0;
+  const completed = finiteCount(task.valid_result_count);
+  const total = finiteCount(task.total_items);
+  const percent = Math.max(0, Math.min(100, progress * 100));
   return (
     <div className="space-y-2">
       <div className="h-2 overflow-hidden rounded-full bg-white/[0.05]">
@@ -35,19 +38,23 @@ export function ComputeProgress({ task, compact = false }: { task: ComputeTask; 
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
         <span>
-          {task.valid_result_count.toLocaleString()} / {task.total_items.toLocaleString()} 已完成
+          {completed.toLocaleString()} / {total.toLocaleString()} 已完成
         </span>
         <span>{percent.toFixed(percent >= 10 ? 0 : 1)}%</span>
       </div>
       {!compact && (
         <div className="grid grid-cols-3 gap-2 text-xs">
-          <Count label="錯誤" value={task.failed_count} tone="text-rose-300" />
-          <Count label="缺漏" value={task.missing_count} />
-          <Count label="快取" value={task.cache_hit_count} tone="text-teal-300" />
+          <Count label="錯誤" value={finiteCount(task.failed_count)} tone="text-rose-300" />
+          <Count label="缺漏" value={finiteCount(task.missing_count)} />
+          <Count label="快取" value={finiteCount(task.cache_hit_count)} tone="text-teal-300" />
         </div>
       )}
     </div>
   );
+}
+
+function finiteCount(value: number | undefined) {
+  return Number.isFinite(value) ? Math.max(0, value as number) : 0;
 }
 
 export function ComputePlanSummary({ preview }: { preview: ComputePlanPreview }) {
