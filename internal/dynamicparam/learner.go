@@ -1,6 +1,7 @@
 package dynamicparam
 
 import (
+	"context"
 	"fmt"
 	"math"
 )
@@ -34,6 +35,13 @@ type GAMModel struct {
 }
 
 func TrainGAM(examples []SupervisedExample, outputs int, loss string, config GAMConfig) (GAMModel, error) {
+	return TrainGAMContext(context.Background(), examples, outputs, loss, config)
+}
+
+func TrainGAMContext(ctx context.Context, examples []SupervisedExample, outputs int, loss string, config GAMConfig) (GAMModel, error) {
+	if err := ctx.Err(); err != nil {
+		return GAMModel{}, err
+	}
 	if err := validateExamples(examples, outputs, loss); err != nil {
 		return GAMModel{}, err
 	}
@@ -51,7 +59,13 @@ func TrainGAM(examples []SupervisedExample, outputs int, loss string, config GAM
 	model.BasisNames = names
 	model.Weights = makeMatrix(outputs, len(first))
 	for epoch := 0; epoch < config.Epochs; epoch++ {
+		if err := ctx.Err(); err != nil {
+			return GAMModel{}, err
+		}
 		for _, example := range examples {
+			if err := ctx.Err(); err != nil {
+				return GAMModel{}, err
+			}
 			basis, _, basisErr := gamBasis(example.Feature, config.Interactions)
 			if basisErr != nil {
 				return GAMModel{}, basisErr
@@ -113,6 +127,13 @@ type TCNModel struct {
 }
 
 func TrainTCN(examples []SupervisedExample, outputs int, loss string, config TCNConfig) (TCNModel, error) {
+	return TrainTCNContext(context.Background(), examples, outputs, loss, config)
+}
+
+func TrainTCNContext(ctx context.Context, examples []SupervisedExample, outputs int, loss string, config TCNConfig) (TCNModel, error) {
+	if err := ctx.Err(); err != nil {
+		return TCNModel{}, err
+	}
 	if err := validateExamples(examples, outputs, loss); err != nil {
 		return TCNModel{}, err
 	}
@@ -141,7 +162,13 @@ func TrainTCN(examples []SupervisedExample, outputs int, loss string, config TCN
 	}
 	model := newTCNModel(outputs, loss, config)
 	for epoch := 0; epoch < config.Epochs; epoch++ {
+		if err := ctx.Err(); err != nil {
+			return TCNModel{}, err
+		}
 		for _, example := range examples {
+			if err := ctx.Err(); err != nil {
+				return TCNModel{}, err
+			}
 			if err := model.trainExample(example); err != nil {
 				return TCNModel{}, err
 			}

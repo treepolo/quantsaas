@@ -47,7 +47,7 @@ func (executor *TrainExecutor) Execute(ctx context.Context, execution computetas
 			return nil, err
 		}
 	}
-	model, err := core.TrainHorizon(bars, input.Horizon, input.Training)
+	model, err := core.TrainHorizonContext(ctx, bars, input.Horizon, input.Training)
 	if err != nil {
 		return nil, err
 	}

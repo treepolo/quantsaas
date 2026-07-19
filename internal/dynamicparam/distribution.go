@@ -1,6 +1,7 @@
 package dynamicparam
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -36,6 +37,13 @@ type LearnerConfig struct {
 }
 
 func TrainDistribution(features []FeaturePoint, targets []TargetPoint, config LearnerConfig, regionRule RegionRule) (DistributionModel, error) {
+	return TrainDistributionContext(context.Background(), features, targets, config, regionRule)
+}
+
+func TrainDistributionContext(ctx context.Context, features []FeaturePoint, targets []TargetPoint, config LearnerConfig, regionRule RegionRule) (DistributionModel, error) {
+	if err := ctx.Err(); err != nil {
+		return DistributionModel{}, err
+	}
 	if regionRule.DirectionBoundary <= 0 || regionRule.DirectionBoundary >= 1 || regionRule.MagnitudeBoundary <= 0 {
 		return DistributionModel{}, fmt.Errorf("invalid six-region boundaries")
 	}
@@ -44,6 +52,9 @@ func TrainDistribution(features []FeaturePoint, targets []TargetPoint, config Le
 	upExamples := make([]SupervisedExample, 0)
 	downExamples := make([]SupervisedExample, 0)
 	for _, target := range targets {
+		if err := ctx.Err(); err != nil {
+			return DistributionModel{}, err
+		}
 		if target.Index < 0 || target.Index >= len(features) || !features[target.Index].Available || !target.Normalized {
 			continue
 		}
@@ -63,13 +74,13 @@ func TrainDistribution(features []FeaturePoint, targets []TargetPoint, config Le
 	if len(zeroExamples) < 8 {
 		return DistributionModel{}, fmt.Errorf("insufficient normalized samples for joint distribution")
 	}
-	zeroModel, err := trainLearner(zeroExamples, 4, LossSoftmax, config)
+	zeroModel, err := trainLearner(ctx, zeroExamples, 4, LossSoftmax, config)
 	if err != nil {
 		return DistributionModel{}, err
 	}
 	model := DistributionModel{SchemaVersion: DistributionModelVersion, ZeroType: zeroModel, RegionRule: regionRule}
 	if len(bothExamples) >= 4 {
-		learner, trainErr := trainLearner(bothExamples, 2, LossMSE, config)
+		learner, trainErr := trainLearner(ctx, bothExamples, 2, LossMSE, config)
 		if trainErr != nil {
 			return DistributionModel{}, trainErr
 		}
@@ -77,7 +88,7 @@ func TrainDistribution(features []FeaturePoint, targets []TargetPoint, config Le
 		model.BothResiduals = selectBivariateResidualMixture(bothExamples, learner, 3)
 	}
 	if len(upExamples) >= 3 {
-		learner, trainErr := trainLearner(upExamples, 1, LossMSE, config)
+		learner, trainErr := trainLearner(ctx, upExamples, 1, LossMSE, config)
 		if trainErr != nil {
 			return DistributionModel{}, trainErr
 		}
@@ -85,7 +96,7 @@ func TrainDistribution(features []FeaturePoint, targets []TargetPoint, config Le
 		model.UpResiduals = selectUnivariateResidualMixture(upExamples, learner, 3)
 	}
 	if len(downExamples) >= 3 {
-		learner, trainErr := trainLearner(downExamples, 1, LossMSE, config)
+		learner, trainErr := trainLearner(ctx, downExamples, 1, LossMSE, config)
 		if trainErr != nil {
 			return DistributionModel{}, trainErr
 		}
@@ -159,16 +170,19 @@ func (model LearnerModel) Predict(feature FeaturePoint) ([]float64, error) {
 	}
 }
 
-func trainLearner(examples []SupervisedExample, outputs int, loss string, config LearnerConfig) (LearnerModel, error) {
+func trainLearner(ctx context.Context, examples []SupervisedExample, outputs int, loss string, config LearnerConfig) (LearnerModel, error) {
+	if err := ctx.Err(); err != nil {
+		return LearnerModel{}, err
+	}
 	switch config.Route {
 	case RouteExplainable:
-		model, err := TrainGAM(examples, outputs, loss, config.GAM)
+		model, err := TrainGAMContext(ctx, examples, outputs, loss, config.GAM)
 		if err != nil {
 			return LearnerModel{}, err
 		}
 		return LearnerModel{Route: config.Route, GAM: &model}, nil
 	case RouteTCN:
-		model, err := TrainTCN(examples, outputs, loss, config.TCN)
+		model, err := TrainTCNContext(ctx, examples, outputs, loss, config.TCN)
 		if err != nil {
 			return LearnerModel{}, err
 		}

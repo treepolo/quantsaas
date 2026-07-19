@@ -284,6 +284,40 @@ func TestComputeTaskCancellationPreservesResultsAndRetriesMissing(t *testing.T) 
 	}
 }
 
+func TestComputeTaskRecoveryFinishesPersistedCancellation(t *testing.T) {
+	db := openComputeIntegrationDB(t)
+	user := createComputeIntegrationUser(t, db, "cancel-recovery")
+	executor := newIntegrationExecutor()
+	service := newComputeIntegrationService(t, db, executor, 1)
+	ctx := context.Background()
+	task, err := service.Create(ctx, user.ID, integrationCreateSpec("cancelled-before-restart", "a"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	future := now.Add(time.Hour)
+	if err := db.Model(&saasstore.ComputeTask{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"status": compute.TaskStatusRunning, "started_at": now, "cancel_requested_at": now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&saasstore.ComputeTaskItem{}).Where("compute_task_id = ?", task.ID).Updates(map[string]any{
+		"status": compute.ItemStatusRunning, "lease_owner": "stopped-worker", "lease_expires_at": future,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := service.recoverExpired(ctx); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := service.Get(ctx, user.ID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Status != compute.TaskStatusCancelled || recovered.CancelledCount != 1 || recovered.CancelledAt == "" {
+		t.Fatalf("persisted cancellation did not converge after recovery: %+v", recovered)
+	}
+}
+
 func TestCompositeStagesRequireExplicitStart(t *testing.T) {
 	db := openComputeIntegrationDB(t)
 	user := createComputeIntegrationUser(t, db, "composite")

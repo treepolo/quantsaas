@@ -1,6 +1,7 @@
 package dynamicparam
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -101,19 +102,26 @@ func ValidateTrainingConfig(config TrainingConfig) error {
 }
 
 func TrainHorizon(bars []quant.Bar, horizon int, config TrainingConfig) (HorizonModel, error) {
+	return TrainHorizonContext(context.Background(), bars, horizon, config)
+}
+
+func TrainHorizonContext(ctx context.Context, bars []quant.Bar, horizon int, config TrainingConfig) (HorizonModel, error) {
+	if err := ctx.Err(); err != nil {
+		return HorizonModel{}, err
+	}
 	targets, err := BuildTargets(bars, horizon)
 	if err != nil {
 		return HorizonModel{}, err
 	}
-	direction, err := selectAndFitTarget(bars, targets, TargetDirection, horizon, config)
+	direction, err := selectAndFitTarget(ctx, bars, targets, TargetDirection, horizon, config)
 	if err != nil {
 		return HorizonModel{}, err
 	}
-	joint, err := selectAndFitTarget(bars, targets, TargetJointSpace, horizon, config)
+	joint, err := selectAndFitTarget(ctx, bars, targets, TargetJointSpace, horizon, config)
 	if err != nil {
 		return HorizonModel{}, err
 	}
-	activity, err := selectAndFitTarget(bars, targets, TargetPathActivity, horizon, config)
+	activity, err := selectAndFitTarget(ctx, bars, targets, TargetPathActivity, horizon, config)
 	if err != nil {
 		return HorizonModel{}, err
 	}
@@ -126,6 +134,9 @@ func TrainHorizon(bars []quant.Bar, horizon int, config TrainingConfig) (Horizon
 		return HorizonModel{}, err
 	}
 	oof := combineOOF(horizon, direction.OOF, joint.OOF, activity.OOF, scale, scaleFeatures)
+	if err := ctx.Err(); err != nil {
+		return HorizonModel{}, err
+	}
 	regionRule, spaceRules, spaceReport, err := SearchSpaceStateRules(oof, targets)
 	if err != nil {
 		return HorizonModel{}, err
@@ -136,11 +147,17 @@ func TrainHorizon(bars []quant.Bar, horizon int, config TrainingConfig) (Horizon
 		return HorizonModel{}, err
 	}
 	for index := range oof {
+		if err := ctx.Err(); err != nil {
+			return HorizonModel{}, err
+		}
 		oof[index].SixRegions = IntegrateSixRegions(oof[index].JointDistribution, regionRule, 512)
 		oof[index].SpaceState = spaceEngine.Step(oof[index].SixRegions)
 	}
 	result := HorizonModel{Horizon: horizon, Direction: direction, Joint: joint, Activity: activity, ActivityScale: scale, RegionRule: regionRule, SpaceRules: spaceRules, SpaceReport: spaceReport, OOF: oof}
 	if horizon == HorizonTwentyDay {
+		if err := ctx.Err(); err != nil {
+			return HorizonModel{}, err
+		}
 		activityKappa := config.ActivityKappa
 		if activityKappa <= 0 {
 			activityKappa = 20
@@ -228,19 +245,25 @@ func BuildPurgedFolds(total, folds, minimumTrain, purge int) ([]FoldWindow, erro
 	return result, nil
 }
 
-func selectAndFitTarget(bars []quant.Bar, targets []TargetPoint, targetKind string, horizon int, config TrainingConfig) (TargetModel, error) {
+func selectAndFitTarget(ctx context.Context, bars []quant.Bar, targets []TargetPoint, targetKind string, horizon int, config TrainingConfig) (TargetModel, error) {
 	type candidate struct {
 		lookback int
 		report   ModelReport
 	}
 	candidates := make([]candidate, 0, len(config.Lookbacks))
 	for _, lookback := range uniqueSorted(config.Lookbacks) {
+		if err := ctx.Err(); err != nil {
+			return TargetModel{}, err
+		}
 		features, err := BuildFeaturePoints(bars, lookback)
 		if err != nil {
 			return TargetModel{}, err
 		}
-		report, err := validateCandidate(features, targets, targetKind, horizon, config)
+		report, err := validateCandidate(ctx, features, targets, targetKind, horizon, config)
 		if err != nil {
+			if ctx.Err() != nil {
+				return TargetModel{}, ctx.Err()
+			}
 			continue
 		}
 		candidates = append(candidates, candidate{lookback: lookback, report: report})
@@ -266,13 +289,13 @@ func selectAndFitTarget(bars []quant.Bar, targets []TargetPoint, targetKind stri
 	}
 	examples := targetExamples(features, targets, targetKind)
 	model := TargetModel{TargetKind: targetKind, Lookback: selected.lookback, Report: selected.report}
-	model.OOF, err = materializeTargetOOF(features, targets, targetKind, horizon, config)
+	model.OOF, err = materializeTargetOOF(ctx, features, targets, targetKind, horizon, config)
 	if err != nil {
 		return TargetModel{}, err
 	}
 	switch targetKind {
 	case TargetDirection:
-		learner, trainErr := trainLearner(examples, 1, LossBinary, config.Learner)
+		learner, trainErr := trainLearner(ctx, examples, 1, LossBinary, config.Learner)
 		if trainErr != nil {
 			return TargetModel{}, trainErr
 		}
@@ -284,13 +307,13 @@ func selectAndFitTarget(bars []quant.Bar, targets []TargetPoint, targetKind stri
 		}
 		model.Calibrator = &calibrator
 	case TargetPathActivity:
-		learner, trainErr := trainLearner(examples, 6, LossMSE, config.Learner)
+		learner, trainErr := trainLearner(ctx, examples, 6, LossMSE, config.Learner)
 		if trainErr != nil {
 			return TargetModel{}, trainErr
 		}
 		model.Learner = &learner
 	case TargetJointSpace:
-		distribution, trainErr := TrainDistribution(features, targets, config.Learner, config.RegionRule)
+		distribution, trainErr := TrainDistributionContext(ctx, features, targets, config.Learner, config.RegionRule)
 		if trainErr != nil {
 			return TargetModel{}, trainErr
 		}
@@ -301,7 +324,7 @@ func selectAndFitTarget(bars []quant.Bar, targets []TargetPoint, targetKind stri
 	return model, nil
 }
 
-func materializeTargetOOF(features []FeaturePoint, targets []TargetPoint, targetKind string, horizon int, config TrainingConfig) ([]TargetOOFPoint, error) {
+func materializeTargetOOF(ctx context.Context, features []FeaturePoint, targets []TargetPoint, targetKind string, horizon int, config TrainingConfig) ([]TargetOOFPoint, error) {
 	examples := targetExamples(features, targets, targetKind)
 	folds, err := BuildPurgedFolds(len(examples), config.Folds, config.MinimumTrain, horizon)
 	if err != nil {
@@ -309,11 +332,14 @@ func materializeTargetOOF(features []FeaturePoint, targets []TargetPoint, target
 	}
 	result := make([]TargetOOFPoint, 0)
 	for _, fold := range folds {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		train := examples[fold.TrainStart : fold.TrainEnd+1]
 		validation := examples[fold.ValidationStart : fold.ValidationEnd+1]
 		switch targetKind {
 		case TargetDirection:
-			learner, trainErr := trainLearner(train, 1, LossBinary, config.Learner)
+			learner, trainErr := trainLearner(ctx, train, 1, LossBinary, config.Learner)
 			if trainErr != nil {
 				return nil, trainErr
 			}
@@ -323,6 +349,9 @@ func materializeTargetOOF(features []FeaturePoint, targets []TargetPoint, target
 				return nil, calibrationErr
 			}
 			for _, example := range validation {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				values, predictErr := learner.Predict(example.Feature)
 				if predictErr != nil {
 					return nil, predictErr
@@ -334,11 +363,14 @@ func materializeTargetOOF(features []FeaturePoint, targets []TargetPoint, target
 				result = append(result, TargetOOFPoint{Index: example.Feature.Index, TimeMs: example.Feature.TimeMs, Values: values})
 			}
 		case TargetPathActivity:
-			learner, trainErr := trainLearner(train, 6, LossMSE, config.Learner)
+			learner, trainErr := trainLearner(ctx, train, 6, LossMSE, config.Learner)
 			if trainErr != nil {
 				return nil, trainErr
 			}
 			for _, example := range validation {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				values, predictErr := learner.Predict(example.Feature)
 				if predictErr != nil {
 					return nil, predictErr
@@ -347,11 +379,14 @@ func materializeTargetOOF(features []FeaturePoint, targets []TargetPoint, target
 			}
 		case TargetJointSpace:
 			trainTargets := examplesToTargets(train, targets)
-			distributionModel, trainErr := TrainDistribution(features, trainTargets, config.Learner, config.RegionRule)
+			distributionModel, trainErr := TrainDistributionContext(ctx, features, trainTargets, config.Learner, config.RegionRule)
 			if trainErr != nil {
 				return nil, trainErr
 			}
 			for _, example := range validation {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
 				distribution, regions, predictErr := distributionModel.Predict(example.Feature)
 				if predictErr != nil {
 					return nil, predictErr
@@ -411,7 +446,7 @@ func decodeActivityPrediction(values []float64) ActivityVector {
 	return ActivityVector{TRMean: decode(values[0]), TRStdDev: decode(values[1]), HighLowMean: decode(values[2]), HighLowStdDev: decode(values[3]), Parkinson: decode(values[4]), YangZhang: decode(values[5])}
 }
 
-func validateCandidate(features []FeaturePoint, targets []TargetPoint, targetKind string, horizon int, config TrainingConfig) (ModelReport, error) {
+func validateCandidate(ctx context.Context, features []FeaturePoint, targets []TargetPoint, targetKind string, horizon int, config TrainingConfig) (ModelReport, error) {
 	examples := targetExamples(features, targets, targetKind)
 	folds, err := BuildPurgedFolds(len(examples), config.Folds, config.MinimumTrain, horizon)
 	if err != nil {
@@ -422,9 +457,12 @@ func validateCandidate(features []FeaturePoint, targets []TargetPoint, targetKin
 	marginalUp, marginalDown, zeroBrier, regionBrier, reliability := []float64{}, []float64{}, []float64{}, []float64{}, []float64{}
 	allCriteriaPassed := true
 	for _, fold := range folds {
+		if err := ctx.Err(); err != nil {
+			return ModelReport{}, err
+		}
 		train := examples[fold.TrainStart : fold.TrainEnd+1]
 		validation := examples[fold.ValidationStart : fold.ValidationEnd+1]
-		evaluation, foldErr := fitAndScoreFold(features, targets, train, validation, targetKind, config)
+		evaluation, foldErr := fitAndScoreFold(ctx, features, targets, train, validation, targetKind, config)
 		if foldErr != nil {
 			return ModelReport{}, foldErr
 		}
@@ -451,7 +489,10 @@ func validateCandidate(features []FeaturePoint, targets []TargetPoint, targetKin
 		report.PredictiveStatus = "not_proven_predictive"
 	}
 	if targetKind == TargetDirection {
-		oof, materializeErr := materializeTargetOOF(features, targets, targetKind, horizon, config)
+		oof, materializeErr := materializeTargetOOF(ctx, features, targets, targetKind, horizon, config)
+		if ctx.Err() != nil {
+			return ModelReport{}, ctx.Err()
+		}
 		if materializeErr == nil {
 			labels := targetLabelsByIndex(targets)
 			probabilities, actual := make([]float64, 0, len(oof)), make([]float64, 0, len(oof))
@@ -476,10 +517,13 @@ type foldEvaluation struct {
 	CriteriaPassed                               bool
 }
 
-func fitAndScoreFold(features []FeaturePoint, targets []TargetPoint, train, validation []SupervisedExample, targetKind string, config TrainingConfig) (foldEvaluation, error) {
+func fitAndScoreFold(ctx context.Context, features []FeaturePoint, targets []TargetPoint, train, validation []SupervisedExample, targetKind string, config TrainingConfig) (foldEvaluation, error) {
+	if err := ctx.Err(); err != nil {
+		return foldEvaluation{}, err
+	}
 	switch targetKind {
 	case TargetDirection:
-		model, err := trainLearner(train, 1, LossBinary, config.Learner)
+		model, err := trainLearner(ctx, train, 1, LossBinary, config.Learner)
 		if err != nil {
 			return foldEvaluation{}, err
 		}
@@ -514,7 +558,7 @@ func fitAndScoreFold(features []FeaturePoint, targets []TargetPoint, train, vali
 		result.CriteriaPassed = result.CalibrationError <= result.BaselineCalibrationError
 		return result, nil
 	case TargetPathActivity:
-		model, err := trainLearner(train, 6, LossMSE, config.Learner)
+		model, err := trainLearner(ctx, train, 6, LossMSE, config.Learner)
 		if err != nil {
 			return foldEvaluation{}, err
 		}
@@ -540,7 +584,7 @@ func fitAndScoreFold(features []FeaturePoint, targets []TargetPoint, train, vali
 		return foldEvaluation{Loss: loss / denominator, BaselineLoss: baseline / denominator, CriteriaPassed: loss <= baseline}, nil
 	case TargetJointSpace:
 		trainTargets := examplesToTargets(train, targets)
-		model, err := TrainDistribution(features, trainTargets, config.Learner, config.RegionRule)
+		model, err := TrainDistributionContext(ctx, features, trainTargets, config.Learner, config.RegionRule)
 		if err != nil {
 			return foldEvaluation{}, err
 		}

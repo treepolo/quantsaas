@@ -621,7 +621,27 @@ func (s *Service) finishWithError(claim *claimedItem, cacheEntry *saasstore.Comp
 
 func (s *Service) recoverExpired(ctx context.Context) error {
 	now := time.Now().UTC()
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	var cancelledTasks []saasstore.ComputeTask
+	if err := s.db.WithContext(ctx).Where("kind <> ? AND cancel_requested_at IS NOT NULL AND status IN ?", compute.TaskKindComposite, []string{compute.TaskStatusQueued, compute.TaskStatusRunning}).Find(&cancelledTasks).Error; err != nil {
+		return err
+	}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if len(cancelledTasks) > 0 {
+			taskIDs := make([]uint, 0, len(cancelledTasks))
+			for _, task := range cancelledTasks {
+				taskIDs = append(taskIDs, task.ID)
+			}
+			if err := tx.Model(&saasstore.ComputeTaskItem{}).
+				Where("compute_task_id IN ? AND status IN ?", taskIDs, []string{compute.ItemStatusPending, compute.ItemStatusRunning}).
+				Updates(map[string]any{"status": compute.ItemStatusCancelled, "cancelled_at": now, "lease_owner": "", "lease_expires_at": nil}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&saasstore.ComputeCacheEntry{}).
+				Where("status = ? AND source_task_item_id IN (SELECT id FROM compute_task_items WHERE compute_task_id IN ?)", compute.CacheStatusRunning, taskIDs).
+				Updates(map[string]any{"status": compute.CacheStatusFailed, "active_key": nil, "error_message": "cancelled", "lease_owner": "", "lease_expires_at": nil}).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Model(&saasstore.ComputeTaskItem{}).
 			Where("status = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)", compute.ItemStatusRunning, now).
 			Updates(map[string]any{"status": compute.ItemStatusPending, "lease_owner": "", "lease_expires_at": nil}).Error; err != nil {
@@ -636,6 +656,20 @@ func (s *Service) recoverExpired(ctx context.Context) error {
 			Where("status = ? AND NOT EXISTS (SELECT 1 FROM compute_task_items WHERE compute_task_items.compute_task_id = compute_tasks.id AND compute_task_items.status = ? AND compute_task_items.lease_expires_at > ?)", compute.TaskStatusRunning, compute.ItemStatusRunning, now).
 			Update("status", compute.TaskStatusQueued).Error
 	})
+	if err != nil {
+		return err
+	}
+	for _, task := range cancelledTasks {
+		if err := s.refreshAtomicTask(ctx, task.ID); err != nil {
+			return err
+		}
+		if task.ParentTaskID != nil {
+			if err := s.refreshCompositeTask(ctx, *task.ParentTaskID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) validateRecoverableTasks(ctx context.Context) error {

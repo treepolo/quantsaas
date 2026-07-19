@@ -1,11 +1,43 @@
 package dynamicparam
 
 import (
+	"context"
+	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"quantsaas/internal/quant"
 )
+
+func TestTrainGAMContextStopsActiveTrainingAfterCancellation(t *testing.T) {
+	features, err := BuildFeaturePoints(testBars(400), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	examples := make([]SupervisedExample, 0, len(features))
+	for _, feature := range features {
+		if feature.Available {
+			examples = append(examples, SupervisedExample{Feature: feature, Target: []float64{1}})
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, trainErr := TrainGAMContext(ctx, examples, 1, LossBinary, GAMConfig{Epochs: 1_000_000, LearningRate: 0.01})
+		done <- trainErr
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case trainErr := <-done:
+		if !errors.Is(trainErr, context.Canceled) {
+			t.Fatalf("training cancellation error = %v", trainErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("active training did not stop after cancellation")
+	}
+}
 
 func TestTargetsUseCompleteFuturePathAndCausalMedian(t *testing.T) {
 	bars := testBars(30)
