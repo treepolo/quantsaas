@@ -3,7 +3,6 @@ package marketdata
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 
 	"quantsaas/internal/marketversion"
@@ -39,35 +38,62 @@ func (s *Service) MarketChartSources(ctx context.Context, userID uint) ([]Market
 	if err != nil {
 		return nil, err
 	}
+	type liveBounds struct {
+		InstrumentID string
+		Source       string
+		Symbol       string
+		Interval     string
+		BarCount     int64
+		StartTimeMs  int64
+		EndTimeMs    int64
+	}
+	instrumentIDs := make([]string, 0, len(instruments))
+	for _, instrument := range instruments {
+		instrumentIDs = append(instrumentIDs, instrument.ID)
+	}
+	liveRows := make([]liveBounds, 0)
+	if len(instrumentIDs) > 0 {
+		if err := s.db.WithContext(ctx).Model(&saasstore.KLine{}).
+			Select("instrument_id, source, symbol, interval, COUNT(*) AS bar_count, MIN(open_time) AS start_time_ms, MAX(open_time) AS end_time_ms").
+			Where("instrument_id IN ?", instrumentIDs).
+			Group("instrument_id, source, symbol, interval").
+			Scan(&liveRows).Error; err != nil {
+			return nil, err
+		}
+	}
+	liveByIdentity := make(map[string]liveBounds, len(liveRows))
+	for _, row := range liveRows {
+		liveByIdentity[marketChartIdentity(row.InstrumentID, row.Source, row.Symbol, row.Interval)] = row
+	}
+	generatedKinds := map[string]string{}
+	if len(instrumentIDs) > 0 {
+		var metadata []saasstore.DatasetMetadata
+		if err := s.db.WithContext(ctx).
+			Where("instrument_id IN ? AND price_adjustment = ?", instrumentIDs, PriceAdjustmentGeneratedDailyLeverage).
+			Find(&metadata).Error; err != nil {
+			return nil, err
+		}
+		for _, item := range metadata {
+			generatedKinds[marketChartIdentity(item.InstrumentID, item.DataSource, item.Symbol, item.Interval)] = marketversion.ArtifactKindDailyLeverage
+		}
+	}
 	result := make([]MarketChartSource, 0, len(instruments))
 	for _, instrument := range instruments {
 		for _, interval := range instrument.SupportedIntervals {
-			var bounds struct {
-				Count       int64
-				StartTimeMs int64
-				EndTimeMs   int64
-			}
-			if err := s.db.WithContext(ctx).Model(&saasstore.KLine{}).
-				Select("COUNT(*) AS count, COALESCE(MIN(open_time), 0) AS start_time_ms, COALESCE(MAX(open_time), 0) AS end_time_ms").
-				Where("instrument_id=? AND source=? AND symbol=? AND interval=?", instrument.ID, instrument.DataSource, instrument.Symbol, interval).
-				Scan(&bounds).Error; err != nil {
-				return nil, err
-			}
-			if bounds.Count == 0 {
+			identity := marketChartIdentity(instrument.ID, instrument.DataSource, instrument.Symbol, interval)
+			bounds, ok := liveByIdentity[identity]
+			if !ok || bounds.BarCount == 0 {
 				continue
 			}
 			kind := marketversion.ArtifactKindSourceSnapshot
 			if instrument.DataSource == DataSourceFRED {
 				kind = ArtifactKindReferenceIndicator
-			} else if instrument.DataSource == DataSourceGenerated {
-				var metadata saasstore.DatasetMetadata
-				if err := s.db.WithContext(ctx).Where("instrument_id=? AND data_source=? AND symbol=? AND interval=?", instrument.ID, instrument.DataSource, instrument.Symbol, interval).First(&metadata).Error; err == nil && metadata.PriceAdjustment == PriceAdjustmentGeneratedDailyLeverage {
-					kind = marketversion.ArtifactKindDailyLeverage
-				}
+			} else if generatedKind := generatedKinds[identity]; generatedKind != "" {
+				kind = generatedKind
 			}
 			result = append(result, MarketChartSource{
 				Instrument: instrument, ArtifactKind: kind, DisplayName: instrument.DisplayName, Interval: interval,
-				StartTimeMs: bounds.StartTimeMs, EndTimeMs: bounds.EndTimeMs, BarCount: bounds.Count,
+				StartTimeMs: bounds.StartTimeMs, EndTimeMs: bounds.EndTimeMs, BarCount: bounds.BarCount,
 				CanBacktest: kind != ArtifactKindReferenceIndicator,
 			})
 		}
@@ -106,7 +132,12 @@ func (s *Service) MarketChartSources(ctx context.Context, userID uint) ([]Market
 		}
 		instrument, err := s.instruments.ResolveInstrument(ctx, instrumentID, version.Symbol, version.DataSource)
 		if err != nil {
-			return nil, fmt.Errorf("讀取行情版本 %d 的商品資訊: %w", version.ID, err)
+			if errors.Is(err, ErrUnsupportedInstrument) {
+				// 商品停用後不可再建立新工作，但既有不可變版本仍可能留在資料庫。
+				// 略過這筆已退出使用的版本，不讓它拖垮所有仍可用的行情來源。
+				continue
+			}
+			return nil, err
 		}
 		seriesName := ""
 		if version.MarketSeriesID != nil {
@@ -125,6 +156,10 @@ func (s *Service) MarketChartSources(ctx context.Context, userID uint) ([]Market
 		})
 	}
 	return result, nil
+}
+
+func marketChartIdentity(instrumentID, source, symbol, interval string) string {
+	return strings.Join([]string{instrumentID, source, symbol, interval}, "\x00")
 }
 
 func (s *Service) MarketChartBars(ctx context.Context, userID uint, instrumentID string, versionID uint, interval string, startMs, endMs int64, limit int) ([]marketversion.Bar, error) {

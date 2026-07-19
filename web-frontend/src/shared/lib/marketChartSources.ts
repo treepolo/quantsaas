@@ -1,4 +1,4 @@
-import type { MarketChartSource } from "../services/marketData";
+import type { MarketChartSource, ResearchInstrument } from "../services/marketData";
 
 export type MarketSourceCategory = "original" | "reference" | "leverage" | "recomposition" | "perturbation" | "other";
 
@@ -35,5 +35,27 @@ export function groupMarketSources(sources: MarketChartSource[]) {
   return marketSourceCategoryOrder.flatMap((category) => {
     const items = sources.filter((source) => marketSourceCategory(source) === category);
     return items.length ? [{ category, label: marketSourceCategoryLabels[category], items }] : [];
+  });
+}
+
+export function fallbackOriginalMarketSources(instruments: ResearchInstrument[], endTimeMs = Date.now()): MarketChartSource[] {
+  return instruments.flatMap((instrument) => {
+    if (instrument.data_source === "generated") return [];
+    return instrument.supported_intervals.flatMap((interval) => {
+      const startTimeMs = instrument.available_start_ms?.[interval] ?? 0;
+      if (startTimeMs <= 0) return [];
+      const reference = instrument.data_source === "fred";
+      return [{
+        instrument,
+        artifact_kind: reference ? "reference_indicator" : "source_snapshot",
+        display_name: instrument.display_name,
+        interval,
+        start_time_ms: startTimeMs,
+        end_time_ms: Math.max(startTimeMs, endTimeMs),
+        bar_count: 0,
+        immutable: false,
+        can_backtest: !reference
+      } satisfies MarketChartSource];
+    });
   });
 }

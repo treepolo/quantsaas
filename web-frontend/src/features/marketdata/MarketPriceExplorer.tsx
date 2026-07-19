@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { CandlestickChart, LineChart } from "lucide-react";
-import { groupMarketSources, marketSourceKey, marketSourceLabel } from "../../shared/lib/marketChartSources";
+import { fallbackOriginalMarketSources, groupMarketSources, marketSourceKey, marketSourceLabel } from "../../shared/lib/marketChartSources";
 import { marketDataApi, type MarketChartSource, type MarketVersionBar } from "../../shared/services/marketData";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
@@ -28,7 +28,9 @@ function downsample<T>(rows: T[], maximum: number) {
 
 export function MarketPriceExplorer() {
   const sourcesQuery = useQuery({ queryKey: ["market-chart-sources"], queryFn: marketDataApi.chartSources });
-  const sources = sourcesQuery.data?.items ?? [];
+  const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
+  const fallbackSources = useMemo(() => fallbackOriginalMarketSources(instrumentsQuery.data?.instruments ?? []), [instrumentsQuery.data?.instruments]);
+  const sources = sourcesQuery.data?.items?.length ? sourcesQuery.data.items : fallbackSources;
   const grouped = useMemo(() => groupMarketSources(sources), [sources]);
   const [primaryKey, setPrimaryKey] = useState("");
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
@@ -116,13 +118,14 @@ export function MarketPriceExplorer() {
   return <Card>
     <CardHeader><div><CardTitle>查看與比較行情走勢</CardTitle><CardDescription>原始行情、參考指標與各類研究行情分開列出；最多可疊合四組資料。</CardDescription></div></CardHeader>
     <div className="grid gap-3 lg:grid-cols-4">
-      <label className="text-xs text-slate-400 lg:col-span-2">主要行情<select className={`${inputClass} mt-1`} value={primary ? marketSourceKey(primary) : ""} onChange={(event) => choosePrimary(event.target.value)}>{grouped.map((group) => <optgroup key={group.category} label={group.label}>{group.items.map((source) => <option key={marketSourceKey(source)} value={marketSourceKey(source)}>{marketSourceLabel(source)}</option>)}</optgroup>)}</select></label>
+      <label className="text-xs text-slate-400 lg:col-span-2">主要行情<select className={`${inputClass} mt-1`} value={primary ? marketSourceKey(primary) : ""} onChange={(event) => choosePrimary(event.target.value)}>{grouped.map((group) => <optgroup key={group.category} label={group.label}>{group.items.map((source) => <option key={marketSourceKey(source)} value={marketSourceKey(source)}>{marketSourceLabel(source)}</option>)}</optgroup>)}{grouped.length === 0 ? <option value="">{sourcesQuery.isPending || instrumentsQuery.isPending ? "正在載入行情商品…" : "目前沒有可查看的行情"}</option> : null}</select>{sourcesQuery.isError && fallbackSources.length > 0 ? <span className="mt-1 block text-amber-300">研究行情清單暫時無法載入，目前仍可查看原始行情。</span> : null}</label>
       <label className="text-xs text-slate-400">開始日期<input className={`${inputClass} mt-1`} type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
       <label className="text-xs text-slate-400">結束日期<input className={`${inputClass} mt-1`} type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
     </div>
     <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(260px,.42fr)_minmax(0,1.58fr)]">
       <div className="max-h-[430px] space-y-4 overflow-auto rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
         <div className="text-xs leading-5 text-slate-500">勾選要疊合的資料，最多四組。主要行情決定 K 線與下方區間滑桿。</div>
+        {grouped.length === 0 ? <div className="text-sm text-slate-500">{sourcesQuery.isPending || instrumentsQuery.isPending ? "正在載入行情商品…" : "目前沒有可查看的行情商品。"}</div> : null}
         {grouped.map((group) => <div key={group.category}><div className="mb-2 text-xs font-semibold text-slate-300">{group.label}</div><div className="space-y-1">{group.items.map((source) => { const key = marketSourceKey(source); const checked = selectedKeys.includes(key), isPrimary = primary ? key === marketSourceKey(primary) : false; return <label key={key} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-white/[0.04]"><input className="mt-0.5" type="checkbox" checked={checked} disabled={isPrimary} onChange={() => toggleSource(key)} /><span><span className="block text-slate-300">{source.display_name}{isPrimary ? "（主要）" : ""}</span><span className="text-slate-600">{source.interval} · {source.bar_count.toLocaleString("zh-TW")} 根{source.version_id ? ` · 版本 #${source.version_id}` : ""}</span></span></label>})}</div></div>)}
       </div>
       <div>

@@ -134,20 +134,35 @@ func TestPerturbationEndToEndAndIntegrity(t *testing.T) {
 	if reusable, err := service.PlanVariants(ctx, user.ID, group.ID, variantInput); err != nil || reusable.ExistingVariants != 4 || reusable.PendingVariants != 0 {
 		t.Fatalf("variant reuse failed: %+v err=%v", reusable, err)
 	}
+	if err := db.Model(&saasstore.ResearchInstrument{}).Where("id = ?", variants[1].OutputInstrumentID).Update("enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
 	marketService := marketdata.NewService(db, nil)
 	chartSources, err := marketService.MarketChartSources(ctx, user.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var chartVersion *marketdata.MarketChartSource
+	var liveSource *marketdata.MarketChartSource
 	for index := range chartSources {
+		if chartSources[index].VersionID == variants[1].OutputVersionID {
+			t.Fatalf("disabled output instrument should not remain selectable: %+v", chartSources[index])
+		}
 		if chartSources[index].VersionID == variants[0].OutputVersionID {
 			chartVersion = &chartSources[index]
-			break
 		}
+		if chartSources[index].VersionID == 0 && chartSources[index].BarCount > 0 {
+			liveSource = &chartSources[index]
+		}
+	}
+	if liveSource == nil {
+		t.Fatal("aggregated live market-data sources are missing")
 	}
 	if chartVersion == nil || chartVersion.ArtifactKind != marketversion.ArtifactKindLocalPerturbation || !chartVersion.CanBacktest || !chartVersion.Immutable {
 		t.Fatalf("published perturbation version missing from chart/backtest sources: %+v", chartVersion)
+	}
+	if err := db.Model(&saasstore.ResearchInstrument{}).Where("id = ?", variants[1].OutputInstrumentID).Update("enabled", true).Error; err != nil {
+		t.Fatal(err)
 	}
 	chartBars, err := marketService.MarketChartBars(ctx, user.ID, "", chartVersion.VersionID, chartVersion.Interval, chartVersion.StartTimeMs, chartVersion.EndTimeMs, 5000)
 	if err != nil || int64(len(chartBars)) != chartVersion.BarCount {

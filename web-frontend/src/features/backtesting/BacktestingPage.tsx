@@ -5,7 +5,7 @@ import { Area, AreaChart, CartesianGrid, Legend, ReferenceArea, ReferenceLine, R
 import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
 import { datasetStartDate } from "../../shared/lib/datasetDates";
-import { groupMarketSources, marketSourceCategoryLabels, marketSourceCategory, marketSourceKey, marketSourceLabel } from "../../shared/lib/marketChartSources";
+import { fallbackOriginalMarketSources, groupMarketSources, marketSourceCategoryLabels, marketSourceCategory, marketSourceKey, marketSourceLabel } from "../../shared/lib/marketChartSources";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
 import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
@@ -325,7 +325,9 @@ export function BacktestingPage() {
   const marketSourcesQuery = useQuery({ queryKey: ["market-chart-sources"], queryFn: marketDataApi.chartSources });
   const instruments = instrumentsQuery.data?.instruments ?? [];
   const instrumentNames = useMemo(() => Object.fromEntries(instruments.map((item) => [item.id, item.display_name])), [instruments]);
-  const marketSources = (marketSourcesQuery.data?.items ?? []).filter((item) => item.can_backtest);
+  const fallbackMarketSources = useMemo(() => fallbackOriginalMarketSources(instruments), [instruments]);
+  const availableMarketSources = marketSourcesQuery.data?.items?.length ? marketSourcesQuery.data.items : fallbackMarketSources;
+  const marketSources = availableMarketSources.filter((item) => item.can_backtest);
   const groupedMarketSources = useMemo(() => groupMarketSources(marketSources), [marketSources]);
   const [datasetKey, setDatasetKey] = useState("");
   const [instrumentId, setInstrumentId] = useState("BTCUSDT");
@@ -567,7 +569,7 @@ export function BacktestingPage() {
           </div>
         </CardHeader>
         <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
-          <label className="md:col-span-2"><span className="mb-2 block text-sm text-slate-300">回測使用的行情資料</span><select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={selectedMarketSource ? marketSourceKey(selectedMarketSource) : ""} onChange={(event) => changeDataset(event.target.value)}>{groupedMarketSources.map((group) => <optgroup key={group.category} label={group.label}>{group.items.map((item) => <option key={marketSourceKey(item)} value={marketSourceKey(item)}>{marketSourceLabel(item)}</option>)}</optgroup>)}</select><span className="mt-1 block text-xs text-slate-500">目前分類：{selectedMarketSource ? marketSourceCategoryLabels[marketSourceCategory(selectedMarketSource)] : "載入中"}。各類行情分組顯示，不會混在原始商品清單中。</span></label>
+          <label className="md:col-span-2"><span className="mb-2 block text-sm text-slate-300">回測使用的行情資料</span><select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={selectedMarketSource ? marketSourceKey(selectedMarketSource) : ""} onChange={(event) => changeDataset(event.target.value)}>{groupedMarketSources.map((group) => <optgroup key={group.category} label={group.label}>{group.items.map((item) => <option key={marketSourceKey(item)} value={marketSourceKey(item)}>{marketSourceLabel(item)}</option>)}</optgroup>)}{groupedMarketSources.length === 0 ? <option value="">目前沒有可回測的行情</option> : null}</select><span className="mt-1 block text-xs text-slate-500">目前分類：{selectedMarketSource ? marketSourceCategoryLabels[marketSourceCategory(selectedMarketSource)] : instrumentsQuery.isPending ? "正在載入商品" : "目前沒有可用行情"}。各類行情分組顯示，不會混在原始商品清單中。</span>{marketSourcesQuery.isError && fallbackMarketSources.length > 0 ? <span className="mt-1 block text-xs text-amber-300">研究行情清單暫時無法載入，目前仍可選擇原始行情。</span> : null}</label>
           <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes} />
           <Select
             label="參數來源"
