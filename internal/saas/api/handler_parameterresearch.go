@@ -152,6 +152,14 @@ func (h *ParameterResearchHandler) PauseRun(c *gin.Context) {
 	err := h.service.PauseRun(c.Request.Context(), currentUserID(c), id)
 	h.respond(c, http.StatusOK, gin.H{"status": "paused"}, err)
 }
+func (h *ParameterResearchHandler) ResumeRun(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	result, err := h.service.ResumeRun(c.Request.Context(), currentUserID(c), id)
+	h.respond(c, http.StatusOK, result, err)
+}
 func (h *ParameterResearchHandler) CancelRun(c *gin.Context) {
 	id, ok := parseIDParam(c)
 	if !ok {

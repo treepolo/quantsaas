@@ -705,6 +705,60 @@ func (s *Service) metricsForResult(ctx context.Context, resultID uint) (robust.R
 func (s *Service) PauseRun(ctx context.Context, userID, runID uint) error {
 	return s.stopRun(ctx, userID, runID, "paused")
 }
+
+func (s *Service) ResumeRun(ctx context.Context, userID, runID uint) (RunDescriptor, error) {
+	run, _, _, err := s.loadRun(ctx, userID, runID)
+	if err != nil {
+		return RunDescriptor{}, err
+	}
+	var stages []saasstore.ResearchStage
+	if err := s.db.WithContext(ctx).Where("run_id = ? AND compute_task_id IS NOT NULL", run.ID).Order("ordinal DESC").Find(&stages).Error; err != nil {
+		return RunDescriptor{}, err
+	}
+	if len(stages) == 0 {
+		return RunDescriptor{}, ErrInvalidRequest
+	}
+
+	resumed := false
+	for _, stage := range stages {
+		if stage.ComputeTaskID == nil {
+			continue
+		}
+		task, err := s.computeTasks.Get(ctx, userID, *stage.ComputeTaskID)
+		if err != nil {
+			return RunDescriptor{}, err
+		}
+		switch task.Status {
+		case compute.TaskStatusCompleted:
+			continue
+		case compute.TaskStatusFailed, compute.TaskStatusCancelled, compute.TaskStatusPartial:
+			if _, err := s.computeTasks.Retry(ctx, userID, task.ID); err != nil {
+				return RunDescriptor{}, err
+			}
+			resumed = true
+		case compute.TaskStatusPlanned:
+			if _, err := s.computeTasks.StartTask(ctx, userID, task.ID); err != nil {
+				return RunDescriptor{}, err
+			}
+			resumed = true
+		case compute.TaskStatusQueued, compute.TaskStatusRunning:
+			resumed = true
+		default:
+			return RunDescriptor{}, computetask.ErrInvalidState
+		}
+		break
+	}
+	if !resumed {
+		return s.GetRun(ctx, userID, run.ID, true)
+	}
+	if err := s.db.WithContext(ctx).Model(&run).Updates(map[string]any{
+		"status": "running", "exploration_status": "running", "paused_at": nil, "cancelled_at": nil,
+	}).Error; err != nil {
+		return RunDescriptor{}, err
+	}
+	return s.GetRun(ctx, userID, run.ID, true)
+}
+
 func (s *Service) CancelRun(ctx context.Context, userID, runID uint) error {
 	return s.stopRun(ctx, userID, runID, "cancelled")
 }

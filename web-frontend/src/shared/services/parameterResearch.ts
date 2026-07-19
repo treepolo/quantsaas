@@ -34,6 +34,7 @@ export const parameterResearchApi = {
   planStage: (id: number, input: StagePlanInput) => apiFetch<ResearchPlan>(`${root}/runs/${id}/stages/plan`, { method: "POST", body: JSON.stringify(input) }),
   startStage: (id: number, input: StagePlanInput, plan: ResearchPlan, confirmSoftLimit = false) => apiFetch<ResearchRun>(`${root}/runs/${id}/stages`, { method: "POST", body: JSON.stringify({ plan: input, plan_key: plan.plan_key, confirm_soft_limit: confirmSoftLimit }) }),
   pauseRun: (id: number) => apiFetch(`${root}/runs/${id}/pause`, { method: "POST" }),
+  resumeRun: (id: number) => apiFetch<ResearchRun>(`${root}/runs/${id}/resume`, { method: "POST" }),
   cancelRun: (id: number) => apiFetch(`${root}/runs/${id}/cancel`, { method: "POST" }),
   analyze: (id: number, metric: RobustnessMetric) => apiFetch<ResearchAnalysis>(`${root}/runs/${id}/analyses`, { method: "POST", body: JSON.stringify({ metric, radii: [1,2,3,5,8,13] }) }),
   deriveCandidates: (snapshotId: number) => apiFetch<Candidate[]>(`${root}/analysis-snapshots/${snapshotId}/candidates/derive`, { method: "POST" }),

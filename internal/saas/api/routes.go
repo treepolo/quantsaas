@@ -233,6 +233,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	parameterResearchAPI.POST("/runs/:id/stages/plan", parameterResearchHandler.PlanStage)
 	parameterResearchAPI.POST("/runs/:id/stages", parameterResearchHandler.StartStage)
 	parameterResearchAPI.POST("/runs/:id/pause", parameterResearchHandler.PauseRun)
+	parameterResearchAPI.POST("/runs/:id/resume", parameterResearchHandler.ResumeRun)
 	parameterResearchAPI.POST("/runs/:id/cancel", parameterResearchHandler.CancelRun)
 	parameterResearchAPI.POST("/runs/:id/analyses", parameterResearchHandler.Analyze)
 	parameterResearchAPI.POST("/runs/:id/surrogates/plan", parameterResearchHandler.PlanSurrogate)
