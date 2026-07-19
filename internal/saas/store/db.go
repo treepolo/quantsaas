@@ -3,8 +3,6 @@ package store
 import (
 	"database/sql"
 	"fmt"
-	"log"
-	"os"
 	"sort"
 	"time"
 
@@ -24,15 +22,11 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		return nil, fmt.Errorf("database DSN is required")
 	}
 
-	// Keep query values out of logs. Backtest path blocks contain large JSON
-	// payloads; interpolating them into slow-query/error logs can make Docker's
-	// log and Linux page caches grow without bound during a research batch.
-	dbLogger := gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
-		SlowThreshold:        time.Second,
-		LogLevel:             gormlogger.Warn,
-		ParameterizedQueries: true,
-		Colorful:             false,
-	})
+	// Backtest path blocks contain large JSON payloads. GORM's trace callback
+	// can interpolate query values before writing slow-query and error logs for
+	// some dialect paths. Disable SQL trace so path payloads cannot inflate
+	// Docker/WSL log caches; services still return operation errors normally.
+	dbLogger := gormlogger.Default.LogMode(gormlogger.Silent)
 	gdb, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{Logger: dbLogger})
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)

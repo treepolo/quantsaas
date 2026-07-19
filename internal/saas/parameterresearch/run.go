@@ -585,6 +585,7 @@ func (s *Service) syncRun(ctx context.Context, userID uint, run *saasstore.Resea
 	if status == compute.TaskStatusPlanned {
 		status = "waiting"
 	}
+	status = preserveUserControlledRunStatus(run.Status, status)
 	exploration := run.ExplorationStatus
 	if status == compute.TaskStatusCompleted {
 		exploration = "checkpoint"
@@ -595,6 +596,13 @@ func (s *Service) syncRun(ctx context.Context, userID uint, run *saasstore.Resea
 	}
 	run.Status, run.ExplorationStatus, run.GlobalBatchCount, run.GlobalUniquePointCount = status, exploration, globalBatches, len(globalPoints)
 	return nil
+}
+
+func preserveUserControlledRunStatus(stored, derived string) string {
+	if stored == "paused" || stored == "cancelled" {
+		return stored
+	}
+	return derived
 }
 
 func (s *Service) syncStage(ctx context.Context, run saasstore.ResearchRun, stage *saasstore.ResearchStage, task *computetask.TaskDescriptor) error {
