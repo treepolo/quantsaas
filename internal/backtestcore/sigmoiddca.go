@@ -1,6 +1,7 @@
 package backtestcore
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"time"
@@ -10,6 +11,7 @@ import (
 )
 
 type SigmoidDCARequest struct {
+	Context           context.Context
 	Spec              Spec
 	Bars              []quant.Bar
 	Params            sigmoiddca.Params
@@ -18,6 +20,13 @@ type SigmoidDCARequest struct {
 }
 
 func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
+	ctx := request.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
 	spec, err := normalizeSpec(request.Spec, request.Bars, RunnerSigmoidDCA)
 	if err != nil {
 		return Result{}, err
@@ -77,6 +86,9 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 	historyOnlyStarted := false
 
 	for i, bar := range request.Bars {
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
 		if bar.OpenTime < spec.StartTimeMs {
 			continue
 		}

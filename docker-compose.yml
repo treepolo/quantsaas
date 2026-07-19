@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:15
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-3g}
     environment:
       POSTGRES_DB: quantsaas
       POSTGRES_USER: quantsaas
@@ -14,9 +15,14 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
+    mem_limit: ${REDIS_MEMORY_LIMIT:-512m}
     ports:
       - "6379:6379"
     healthcheck:
@@ -24,6 +30,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   saas:
     build:
@@ -37,6 +47,8 @@ services:
       JWT_SECRET: ${JWT_SECRET:-dev-only-change-me}
       SERVER_ADDR: :8080
       FRED_API_KEY: ${FRED_API_KEY:-}
+      GOMEMLIMIT: ${GOMEMLIMIT:-3GiB}
+    mem_limit: ${SAAS_MEMORY_LIMIT:-4g}
     depends_on:
       postgres:
         condition: service_healthy
@@ -44,6 +56,10 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   postgres-data:

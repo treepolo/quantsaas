@@ -428,11 +428,21 @@ func (s *Store) LoadBlock(ctx context.Context, resultID uint, blockIndex int) (P
 }
 
 func (s *Store) VerifyResult(ctx context.Context, resultID uint) (IntegrityReport, error) {
-	loaded, err := s.Load(ctx, resultID, true)
+	// Verification only needs the stored block payloads. Load(..., true) also
+	// decodes every block into a second in-memory copy, then verifyRecords decodes
+	// them again. Avoid that peak allocation for large research batches.
+	loaded, err := s.Load(ctx, resultID, false)
 	if err != nil {
 		return IntegrityReport{}, err
 	}
-	return verifyRecords(loaded.Spec, loaded.Result, loaded.SummaryModel, loaded.BlockModels, true)
+	var blockModels []saasstore.BacktestPathBlock
+	if loaded.Result.PathState == saasstore.BacktestPathStateAvailable {
+		if err := s.db.WithContext(ctx).Where("backtest_result_id = ?", resultID).
+			Order("block_index ASC").Find(&blockModels).Error; err != nil {
+			return IntegrityReport{}, err
+		}
+	}
+	return verifyRecords(loaded.Spec, loaded.Result, loaded.SummaryModel, blockModels, true)
 }
 
 func (s *Store) VerifyMetadata(ctx context.Context, resultID uint) (IntegrityReport, error) {

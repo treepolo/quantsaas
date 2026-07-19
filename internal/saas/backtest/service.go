@@ -394,9 +394,13 @@ func (s *Service) ensureStandardPrepared(ctx context.Context, prepared preparedB
 	if err := s.results.MarkRunning(ctx, reservation.Result.ID); err != nil {
 		return StandardExecutionResult{}, err
 	}
-	artifacts, err := s.executePrepared(prepared)
+	artifacts, err := s.executePrepared(ctx, prepared)
 	if err != nil {
-		_ = s.results.Fail(context.Background(), reservation.Result.ID, err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			_ = s.results.Cancel(context.Background(), reservation.Result.ID, err.Error())
+		} else {
+			_ = s.results.Fail(context.Background(), reservation.Result.ID, err)
+		}
 		return StandardExecutionResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -509,7 +513,7 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*
 			return nil, prepareErr
 		}
 		identity = prepared.identity
-		execute = func() (backtestresult.Artifacts, error) { return s.executePrepared(prepared) }
+		execute = func() (backtestresult.Artifacts, error) { return s.executePrepared(ctx, prepared) }
 	}
 
 	reservation, err := s.results.Reserve(ctx, identity)
@@ -559,7 +563,12 @@ func (s *Service) Create(ctx context.Context, userID uint, req CreateRequest) (*
 	}
 	artifacts, err := execute()
 	if err != nil {
-		s.finishOwnedResultFailure(ctx, resultID, err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			_ = s.results.Cancel(context.Background(), resultID, err.Error())
+			s.finishLinkedRunsFailure(context.Background(), resultID, saasstore.BacktestStatusCancelled, err.Error())
+		} else {
+			s.finishOwnedResultFailure(ctx, resultID, err)
+		}
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -747,8 +756,9 @@ func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req Creat
 	return prepared, nil
 }
 
-func (s *Service) executePrepared(prepared preparedBacktest) (backtestresult.Artifacts, error) {
+func (s *Service) executePrepared(ctx context.Context, prepared preparedBacktest) (backtestresult.Artifacts, error) {
 	path, err := s.runSigmoidDCA(backtestcore.SigmoidDCARequest{
+		Context:           ctx,
 		Spec:              prepared.coreSpec,
 		Bars:              prepared.bars,
 		Params:            prepared.params,
@@ -770,7 +780,7 @@ func (s *Service) executePrepared(prepared preparedBacktest) (backtestresult.Art
 	windows := map[string]float64{}
 	windowDetails := []WindowResult{}
 	if prepared.coreSpec.PrefixMode != backtestcore.PrefixModeHistoryOnly {
-		windows, windowDetails, err = scoreWindows(prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter)
+		windows, windowDetails, err = scoreWindows(ctx, prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter)
 		if err != nil {
 			return backtestresult.Artifacts{}, err
 		}
@@ -1004,9 +1014,13 @@ func (s *Service) EnsureNoCashFlowResult(ctx context.Context, userID uint, sourc
 		params: params, bars: bars,
 		costs: coreSpec.Costs, coreSpec: coreSpec, identity: noCashFlowIdentity,
 	}
-	artifacts, err := s.executePrepared(prepared)
+	artifacts, err := s.executePrepared(ctx, prepared)
 	if err != nil {
-		_ = s.results.Fail(ctx, reservation.Result.ID, err)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			_ = s.results.Cancel(context.Background(), reservation.Result.ID, err.Error())
+		} else {
+			_ = s.results.Fail(ctx, reservation.Result.ID, err)
+		}
 		return backtestresult.LoadedResult{}, err
 	}
 	if err := ctx.Err(); err != nil {
@@ -1711,16 +1725,20 @@ func practicalPath(points []backtestcore.NAVPoint) []backtestcore.NAVPoint {
 	return result
 }
 
-func scoreWindows(bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig) (map[string]float64, []WindowResult, error) {
+func scoreWindows(ctx context.Context, bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig) (map[string]float64, []WindowResult, error) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
 	for _, window := range windows {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		params := sigmoiddca.DefaultParams()
 		params.Chromosome = chromosome
 		params.Spawn = *spawn
 		params.PositionStructure = positionStructure
 		path, err := backtestcore.RunSigmoidDCA(backtestcore.SigmoidDCARequest{
+			Context: ctx,
 			Spec: backtestcore.Spec{
 				Symbol:               symbol,
 				Interval:             interval,

@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"log"
+	"os"
 	"sort"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 type DB struct {
@@ -21,7 +24,16 @@ func NewDB(cfg config.DatabaseConfig) (*DB, error) {
 		return nil, fmt.Errorf("database DSN is required")
 	}
 
-	gdb, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{})
+	// Keep query values out of logs. Backtest path blocks contain large JSON
+	// payloads; interpolating them into slow-query/error logs can make Docker's
+	// log and Linux page caches grow without bound during a research batch.
+	dbLogger := gormlogger.New(log.New(os.Stdout, "\r\n", log.LstdFlags), gormlogger.Config{
+		SlowThreshold:        time.Second,
+		LogLevel:             gormlogger.Warn,
+		ParameterizedQueries: true,
+		Colorful:             false,
+	})
+	gdb, err := gorm.Open(postgres.Open(cfg.DSN), &gorm.Config{Logger: dbLogger})
 	if err != nil {
 		return nil, fmt.Errorf("open postgres: %w", err)
 	}

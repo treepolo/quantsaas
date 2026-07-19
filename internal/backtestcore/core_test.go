@@ -1,6 +1,7 @@
 package backtestcore
 
 import (
+	"context"
 	"errors"
 	"math"
 	"testing"
@@ -9,6 +10,36 @@ import (
 	"quantsaas/internal/quant"
 	"quantsaas/internal/strategies/sigmoiddca"
 )
+
+func TestRunSigmoidDCAStopsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	steps := 0
+	params := sigmoiddca.DefaultParams()
+	params.Spawn.Policy.InitialUSDT = 1000
+	_, err := RunSigmoidDCA(SigmoidDCARequest{
+		Context: ctx,
+		Spec: Spec{
+			Symbol:         "TEST",
+			Interval:       "1d",
+			ExecutionMode:  ExecutionModeCloseSameBar,
+			InitialCapital: 1000,
+		},
+		Bars:   flatCoreBars(120),
+		Params: params,
+		Hooks: Hooks{ComputeStep: func(int64) {
+			steps++
+			if steps == 1 {
+				cancel()
+			}
+		}},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunSigmoidDCA error = %v, want context.Canceled", err)
+	}
+	if steps != 1 {
+		t.Fatalf("compute steps = %d, want cancellation after first step", steps)
+	}
+}
 
 func TestSimulatorTracksPostTradeStateAndCosts(t *testing.T) {
 	simulator := NewSimulator(1000, 0, SimulatorConfig{

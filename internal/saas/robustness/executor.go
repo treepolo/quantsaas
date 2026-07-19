@@ -17,10 +17,13 @@ import (
 type PointExecutor struct {
 	db        *gorm.DB
 	backtests *backtest.Service
+	slots     chan struct{}
 }
 
+const defaultPointConcurrency = 2
+
 func NewPointExecutor(db *gorm.DB) *PointExecutor {
-	return &PointExecutor{db: db, backtests: backtest.NewService(db)}
+	return &PointExecutor{db: db, backtests: backtest.NewService(db), slots: make(chan struct{}, defaultPointConcurrency)}
 }
 
 func (e *PointExecutor) Descriptor() compute.ExecutorDescriptor {
@@ -37,6 +40,12 @@ func (e *PointExecutor) Execute(ctx context.Context, execution computetask.Execu
 	}
 	if input.SchemaVersion != PointSchemaVersion {
 		return nil, ErrInvalidRequest
+	}
+	select {
+	case e.slots <- struct{}{}:
+		defer func() { <-e.slots }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 	if execution.Report != nil {
 		if err := execution.Report(ctx, computetask.ProgressUpdate{Progress: 0.05}); err != nil {
