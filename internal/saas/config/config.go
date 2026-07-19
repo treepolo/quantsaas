@@ -71,7 +71,7 @@ func Default() Config {
 		Compute: ComputeConfig{
 			Workers:          4,
 			SoftItemLimit:    1000,
-			HardItemLimit:    100000,
+			HardItemLimit:    300000,
 			LeaseSeconds:     60,
 			PollMilliseconds: 250,
 		},

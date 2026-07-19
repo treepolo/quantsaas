@@ -33,7 +33,7 @@ func DefaultOptions() Options {
 	return Options{
 		Workers:       4,
 		SoftItemLimit: 1000,
-		HardItemLimit: 100000,
+		HardItemLimit: 300000,
 		LeaseDuration: 60 * time.Second,
 		PollInterval:  250 * time.Millisecond,
 	}
