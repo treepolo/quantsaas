@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, BarChart3, Gauge, Home, RotateCcw } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { formatMoney, formatPercent, shortDateTime } from "../../shared/lib/format";
+import { datasetStartDate } from "../../shared/lib/datasetDates";
 import { researchApi, type ResearchModelPoint, type ResearchStatusItem } from "../../shared/services/research";
 import { marketDataApi } from "../../shared/services/marketData";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
@@ -202,6 +203,10 @@ export function MarketStatusPage() {
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
   const instruments = instrumentsQuery.data?.instruments ?? [];
   const selectedInstrument = instruments.find((item) => item.id === instrumentId);
+  const selectedDatasetStart = datasetStartDate(selectedInstrument, statusInterval);
+  useEffect(() => {
+    if (selectedDatasetStart) setSettings((current) => current.startDate === selectedDatasetStart ? current : { ...current, startDate: selectedDatasetStart });
+  }, [selectedDatasetStart]);
   const query = useQuery({
     queryKey: ["research-status", instrumentId, settings],
     queryFn: () =>

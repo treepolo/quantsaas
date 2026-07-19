@@ -59,7 +59,20 @@ func (s *Service) Sources(ctx context.Context, userID uint) ([]SourceDescriptor,
 					continue
 				}
 			}
-			result = append(result, SourceDescriptor{InstrumentID: row.ID, DataSource: row.DataSource, Symbol: row.Symbol, DisplayName: row.DisplayName, Interval: interval, ArtifactKind: sourceArtifactKind(row.DataSource), Immutable: false})
+			var bounds struct {
+				StartTimeMs int64
+				EndTimeMs   int64
+			}
+			if err := s.db.WithContext(ctx).Model(&saasstore.KLine{}).
+				Select("COALESCE(MIN(open_time), 0) AS start_time_ms, COALESCE(MAX(open_time), 0) AS end_time_ms").
+				Where("instrument_id=? AND source=? AND symbol=? AND interval=?", row.ID, row.DataSource, row.Symbol, interval).
+				Scan(&bounds).Error; err != nil {
+				return nil, err
+			}
+			if bounds.StartTimeMs == 0 || bounds.EndTimeMs == 0 {
+				continue
+			}
+			result = append(result, SourceDescriptor{InstrumentID: row.ID, DataSource: row.DataSource, Symbol: row.Symbol, DisplayName: row.DisplayName, Interval: interval, ArtifactKind: sourceArtifactKind(row.DataSource), Immutable: false, AvailableStartTimeMs: bounds.StartTimeMs, AvailableEndTimeMs: bounds.EndTimeMs})
 		}
 	}
 	var versions []saasstore.MarketDataVersion
@@ -74,7 +87,7 @@ func (s *Service) Sources(ctx context.Context, userID uint) ([]SourceDescriptor,
 		if version.OutputInstrumentID != nil {
 			id = *version.OutputInstrumentID
 		}
-		result = append(result, SourceDescriptor{InstrumentID: id, DataSource: version.DataSource, Symbol: version.Symbol, DisplayName: version.Symbol, Interval: version.Interval, VersionID: version.ID, ContentHash: version.ContentHash, ArtifactKind: version.ArtifactKind, HasPerturbationAncestor: version.HasPerturbationAncestor, Immutable: true})
+		result = append(result, SourceDescriptor{InstrumentID: id, DataSource: version.DataSource, Symbol: version.Symbol, DisplayName: version.Symbol, Interval: version.Interval, VersionID: version.ID, ContentHash: version.ContentHash, ArtifactKind: version.ArtifactKind, HasPerturbationAncestor: version.HasPerturbationAncestor, Immutable: true, AvailableStartTimeMs: version.StartTimeMs, AvailableEndTimeMs: version.EndTimeMs})
 	}
 	return result, nil
 }
@@ -217,17 +230,48 @@ func (s *Service) CreateGroup(ctx context.Context, userID uint, req CreateGroupR
 		} else if err != nil {
 			return err
 		}
-		series := saasstore.MarketSeries{OwnerUserID: userID, Name: name, Notes: strings.TrimSpace(req.Notes), Tags: tagsRaw}
-		if err := tx.Create(&series).Error; err != nil {
-			return err
+		series := saasstore.MarketSeries{OwnerUserID: userID, Name: perturbationSeriesName(name, groupKey), Notes: strings.TrimSpace(req.Notes), Tags: tagsRaw}
+		createdSeries := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "owner_user_id"}, {Name: "name"}}, DoNothing: true}).Create(&series)
+		if createdSeries.Error != nil {
+			return createdSeries.Error
 		}
-		group = saasstore.PerturbationGroup{OwnerUserID: userID, GroupKey: groupKey, Name: name, Notes: strings.TrimSpace(req.Notes), Tags: tagsRaw, SourceSnapshotID: snapshot.ID, MarketSeriesID: series.ID, AlgorithmVersion: core.AlgorithmVersion}
-		return tx.Create(&group).Error
+		if createdSeries.RowsAffected == 0 {
+			if err := tx.Where("owner_user_id=? AND name=?", userID, series.Name).First(&series).Error; err != nil {
+				return err
+			}
+		}
+		candidate := saasstore.PerturbationGroup{OwnerUserID: userID, GroupKey: groupKey, Name: name, Notes: strings.TrimSpace(req.Notes), Tags: tagsRaw, SourceSnapshotID: snapshot.ID, MarketSeriesID: series.ID, AlgorithmVersion: core.AlgorithmVersion}
+		createdGroup := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "owner_user_id"}, {Name: "group_key"}}, DoNothing: true}).Create(&candidate)
+		if createdGroup.Error != nil {
+			return createdGroup.Error
+		}
+		if createdGroup.RowsAffected == 0 {
+			if err := tx.Where("owner_user_id=? AND group_key=?", userID, groupKey).First(&group).Error; err != nil {
+				return err
+			}
+			return nil
+		}
+		group = candidate
+		return nil
 	})
 	if err != nil {
 		return GroupDescriptor{}, err
 	}
 	return s.GetGroup(ctx, userID, group.ID, true)
+}
+
+func perturbationSeriesName(displayName, groupKey string) string {
+	hash := strings.TrimPrefix(groupKey, "perturbation-group:v1:")
+	if len(hash) > 16 {
+		hash = hash[:16]
+	}
+	suffix := " · " + hash
+	base := []rune(strings.TrimSpace(displayName))
+	maxBase := 160 - len([]rune(suffix))
+	if len(base) > maxBase {
+		base = base[:maxBase]
+	}
+	return string(base) + suffix
 }
 
 func (s *Service) createSnapshot(tx *gorm.DB, userID uint, plan GroupPlan, resolved resolvedSource) (saasstore.PerturbationSourceSnapshot, error) {

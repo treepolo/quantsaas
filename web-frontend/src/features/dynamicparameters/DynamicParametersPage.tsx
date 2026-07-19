@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrainCircuit, CheckCircle2, Pause, Play, RefreshCw, RotateCcw, Square, Workflow } from "lucide-react";
 import { evolutionApi } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
+import { datasetStartDate } from "../../shared/lib/datasetDates";
 import { computeTasksApi, type ComputeTask } from "../../shared/services/computeTasks";
 import { dynamicParametersApi, type CreateDynamicStudy, type ParameterMode } from "../../shared/services/dynamicParameters";
 import { Button } from "../../shared/ui/Button";
@@ -51,7 +52,7 @@ export function DynamicParametersPage() {
   const [route, setRoute] = useState<CreateDynamicStudy["route"]>("explainable_gam");
   const [mode, setMode] = useState<ParameterMode>("fixed");
   const [executionMode, setExecutionMode] = useState<CreateDynamicStudy["execution_mode"]>("close_next_open");
-  const [startDate, setStartDate] = useState("2016-01-01");
+  const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState(() => dateValue(new Date(Date.now() - 86_400_000)));
   const [folds, setFolds] = useState(4);
   const [minimumTrain, setMinimumTrain] = useState(120);
@@ -65,6 +66,8 @@ export function DynamicParametersPage() {
   useEffect(() => { if (!genomeId && genomes.length) setGenomeId(genomes[0].id); }, [genomeId, genomes]);
   useEffect(() => { if (!instrumentId && instruments.length) setInstrumentId(instruments.find((item) => item.supported_intervals.includes("1d"))?.id ?? instruments[0].id); }, [instrumentId, instruments]);
   const selectedInstrument = instruments.find((item) => item.id === instrumentId);
+  const selectedDatasetStart = datasetStartDate(selectedInstrument, "1d");
+  useEffect(() => { if (selectedDatasetStart) setStartDate(selectedDatasetStart); }, [selectedDatasetStart]);
   const selectedGenome = genomes.find((item) => item.id === genomeId);
   const lookbacks = useMemo(() => [...new Set(lookbacksText.split(",").map(Number).filter((value) => [5, 10, 20, 40, 60, 120, 250, 500].includes(value)))].sort((a, b) => a - b), [lookbacksText]);
   const beta = chromosomeValue(selectedGenome?.param_pack, "beta", 1);

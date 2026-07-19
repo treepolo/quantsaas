@@ -265,7 +265,7 @@ func (s *Service) createSnapshot(ctx context.Context, task *saasstore.ControlAna
 	if err := json.Unmarshal(baseline.Summary, &baselineMetrics); err != nil {
 		return err
 	}
-	summary := SnapshotSummary{SchemaVersion: SnapshotSchemaVersion, BaselineEvaluationID: baseline.ID, BaselineResultID: baseline.BacktestResultID, Baseline: baselineMetrics}
+	summary := SnapshotSummary{SchemaVersion: SnapshotSchemaVersion, BaselineEvaluationID: baseline.ID, BaselineResultID: baseline.BacktestResultID, Baseline: baselineMetrics, Rules: []RuleResult{}, ConclusionLabels: []string{}}
 	if len(random) > 0 {
 		distribution, percentiles, err := distributionAndPercentiles(baselineMetrics, random)
 		if err != nil {

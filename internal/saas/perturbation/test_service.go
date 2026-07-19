@@ -34,8 +34,17 @@ func (s *Service) PlanTest(ctx context.Context, userID uint, request TestPlanReq
 	if request.Backtest.StrategyID == "" {
 		request.Backtest.StrategyID = sigmoiddca.StrategyID
 	}
-	if request.Backtest.StrategyID != sigmoiddca.StrategyID || request.Backtest.ExecutionMode == "" || request.Backtest.StartTimeMs < snapshot.StartTimeMs || request.Backtest.EndTimeMs > snapshot.EndTimeMs || request.Backtest.EndTimeMs < request.Backtest.StartTimeMs || len(request.Subjects) == 0 {
-		return TestPlan{}, ErrIncompatibleSubject
+	if request.Backtest.StrategyID != sigmoiddca.StrategyID {
+		return TestPlan{}, fmt.Errorf("%w: 受測參數不屬於目前支援的策略", ErrIncompatibleSubject)
+	}
+	if request.Backtest.ExecutionMode == "" {
+		return TestPlan{}, fmt.Errorf("%w: 請選擇執行假設", ErrIncompatibleSubject)
+	}
+	if request.Backtest.StartTimeMs < snapshot.StartTimeMs || request.Backtest.EndTimeMs > snapshot.EndTimeMs || request.Backtest.EndTimeMs < request.Backtest.StartTimeMs {
+		return TestPlan{}, fmt.Errorf("%w: 測試日期必須位於資料群組範圍內", ErrIncompatibleSubject)
+	}
+	if len(request.Subjects) == 0 {
+		return TestPlan{}, fmt.Errorf("%w: 請至少選擇一個受測項目", ErrIncompatibleSubject)
 	}
 	subjects := make([]SubjectDescriptor, 0, len(request.Subjects))
 	seen := map[string]bool{}
@@ -91,7 +100,7 @@ func (s *Service) resolveSubject(ctx context.Context, userID uint, ordinal int, 
 			return SubjectDescriptor{}, err
 		}
 		if execution.Backtest.Interval != snapshot.Interval || execution.Backtest.ExecutionMode != settings.ExecutionMode {
-			return SubjectDescriptor{}, ErrIncompatibleSubject
+			return SubjectDescriptor{}, fmt.Errorf("%w: 候選 #%d 的週期或執行假設與資料群組不一致", ErrIncompatibleSubject, request.SourceID)
 		}
 		candidateID := candidate.ID
 		return SubjectDescriptor{Ordinal: ordinal, SourceKind: "robust_candidate", SourceID: candidate.ID, SourceVersion: candidate.Version, SubjectHash: candidate.AdoptionUnitHash, AdoptionUnit: append(json.RawMessage(nil), candidate.AdoptionUnit...), Dynamic: execution.Dynamic, CandidateID: &candidateID}, nil
@@ -101,7 +110,7 @@ func (s *Service) resolveSubject(ctx context.Context, userID uint, ordinal int, 
 			return SubjectDescriptor{}, ErrNotFound
 		}
 		if gene.Interval != snapshot.Interval || gene.ExecutionMode != settings.ExecutionMode {
-			return SubjectDescriptor{}, ErrIncompatibleSubject
+			return SubjectDescriptor{}, fmt.Errorf("%w: 參數 #%d 使用 %s／%s，但資料群組測試設定為 %s／%s", ErrIncompatibleSubject, gene.ID, gene.Interval, gene.ExecutionMode, snapshot.Interval, settings.ExecutionMode)
 		}
 		params := sigmoiddca.ParseParamsFromParamPack(gene.ParamPack)
 		adoption, err := compute.CanonicalJSON(params)
@@ -125,7 +134,7 @@ func (s *Service) resolveSubject(ctx context.Context, userID uint, ordinal int, 
 			return SubjectDescriptor{}, err
 		}
 		if identity.Snapshot.Interval != snapshot.Interval || identity.Snapshot.ExecutionMode != settings.ExecutionMode {
-			return SubjectDescriptor{}, ErrIncompatibleSubject
+			return SubjectDescriptor{}, fmt.Errorf("%w: 回測結果 #%d 的週期或執行假設與資料群組不一致", ErrIncompatibleSubject, request.SourceID)
 		}
 		adoption := append(json.RawMessage(nil), identity.Snapshot.Parameters...)
 		dynamic := identity.Snapshot.ModelArtifactHash != ""

@@ -276,6 +276,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	controlResearchAPI.DELETE("/random-batches/:id", controlResearchHandler.DeleteUnusedBatch)
 	controlResearchAPI.GET("/evaluations/:evaluationID/path", controlResearchHandler.PathBlock)
 	klineInverseAPI := lab.Group("/kline-inverse")
+	klineInverseAPI.GET("/availability", klineInverseHandler.Availability)
 	klineInverseAPI.POST("/studies/drafts", klineInverseHandler.CreateDraft)
 	klineInverseAPI.GET("/studies", klineInverseHandler.List)
 	klineInverseAPI.GET("/studies/:id", klineInverseHandler.Get)

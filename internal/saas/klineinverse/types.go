@@ -68,6 +68,24 @@ type CreateDraftRequest struct {
 	MutationAmplitude  float64             `json:"mutation_amplitude"`
 }
 
+type AvailabilityRequest struct {
+	InstrumentID     string `form:"instrument_id" json:"instrument_id"`
+	DataSource       string `form:"data_source" json:"data_source"`
+	Symbol           string `form:"symbol" json:"symbol"`
+	Interval         string `form:"interval" json:"interval"`
+	EvaluationLength int    `form:"evaluation_length" json:"evaluation_length"`
+}
+
+type AvailabilityDescriptor struct {
+	AvailableStartMs          int64 `json:"available_start_ms"`
+	AvailableEndMs            int64 `json:"available_end_ms"`
+	EarliestEvaluationStartMs int64 `json:"earliest_evaluation_start_ms"`
+	LatestEvaluationStartMs   int64 `json:"latest_evaluation_start_ms"`
+	WarmupLength              int   `json:"warmup_length"`
+	EvaluationLength          int   `json:"evaluation_length"`
+	BarCount                  int64 `json:"bar_count"`
+}
+
 type StudyCanonical struct {
 	SchemaVersion         string              `json:"schema_version"`
 	SourceKind            string              `json:"source_kind"`

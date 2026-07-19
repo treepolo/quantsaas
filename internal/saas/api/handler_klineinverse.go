@@ -33,6 +33,16 @@ func (h *KlineInverseHandler) CreateDraft(c *gin.Context) {
 	h.respond(c, http.StatusCreated, result, err)
 }
 
+func (h *KlineInverseHandler) Availability(c *gin.Context) {
+	var request klineinversesvc.AvailabilityRequest
+	if c.ShouldBindQuery(&request) != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "K 線可用範圍查詢格式無效"})
+		return
+	}
+	result, err := h.service.Availability(c.Request.Context(), request)
+	h.respond(c, http.StatusOK, result, err)
+}
+
 func (h *KlineInverseHandler) List(c *gin.Context) {
 	result, err := h.service.List(c.Request.Context(), currentUserID(c), c.Query("include_archived") == "true")
 	h.respond(c, http.StatusOK, result, err)

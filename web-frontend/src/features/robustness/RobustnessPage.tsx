@@ -4,6 +4,7 @@ import { AlertTriangle, Box, Check, FlaskConical, Grid3X3, Pause, Play, RefreshC
 import { Bar, BarChart, CartesianGrid, Cell, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { evolutionApi } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
+import { datasetStartDate } from "../../shared/lib/datasetDates";
 import { computeTasksApi, type ComputeTask } from "../../shared/services/computeTasks";
 import {
   robustnessApi,
@@ -93,7 +94,7 @@ export function RobustnessPage() {
   const [radiiText, setRadiiText] = useState("1,2,3,5,8,13");
   const [interval, setInterval] = useState("1d");
   const [executionMode, setExecutionMode] = useState("close_next_open");
-  const [startDate, setStartDate] = useState("2020-01-01");
+  const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState(() => dateValue(new Date(Date.now() - 86_400_000)));
   const [selectedStudyId, setSelectedStudyId] = useState(0);
   const [taskId, setTaskId] = useState(0);
@@ -113,6 +114,11 @@ export function RobustnessPage() {
       setInterval(instruments[0].supported_intervals[0] ?? "1d");
     }
   }, [instrumentId, instruments]);
+  const selectedInstrument = instruments.find((item) => item.id === instrumentId);
+  const selectedDatasetStart = datasetStartDate(selectedInstrument, interval);
+  useEffect(() => {
+    if (selectedDatasetStart) setStartDate(selectedDatasetStart);
+  }, [selectedDatasetStart]);
 
   const parametersQuery = useQuery({
     queryKey: ["robustness-parameters", genomeId],
@@ -129,7 +135,6 @@ export function RobustnessPage() {
     });
   }, [mode, parametersQuery.data]);
 
-  const selectedInstrument = instruments.find((item) => item.id === instrumentId);
   const radii = useMemo(
     () => [...new Set(radiiText.split(",").map(Number).filter((value) => Number.isInteger(value) && value > 0 && value <= 100))].sort((a, b) => a - b),
     [radiiText]

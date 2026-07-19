@@ -1,6 +1,7 @@
 import { apiFetch } from "./client";
 
 export type Bounds = { g_min:number; g_max:number; b_min:number; b_max:number; u_min:number; u_max:number; d_min:number; d_max:number };
+export type KlineInverseAvailability = { available_start_ms:number; available_end_ms:number; earliest_evaluation_start_ms:number; latest_evaluation_start_ms:number; warmup_length:number; evaluation_length:number; bar_count:number };
 export type Batch = { id:number; ordinal:number; batch_type:string; budget:number; status:string; completed_count:number; cache_hit_count:number; error_count:number; rng_start:number; rng_end:number; checkpoint_position:number; compute_task_id?:number; error_message?:string };
 export type Study = { id:number; name:string; notes:string; tags:string[]; status:string; current_stage:string; study_hash:string; source_kind:string; source_id:number; instrument_id:string; data_source:string; symbol:string; interval:string; execution_mode:string; warmup_length:number; evaluation_length:number; evaluation_start_ms:number; initial_budget:number; cell_count:number; parent_capacity:number; root_seed:number; observed_bounds:Bounds; final_bounds:Bounds; current_snapshot_id?:number; archived:boolean; batches:Batch[]; canonical:Record<string,unknown>; created_at:string; updated_at:string };
 export type CompositePlan = { plan_key:string; total_items:number; estimated_units:number; cache_hit_count:number; new_item_count:number; requires_confirmation:boolean; stages:Array<{stage_key:string; total_items:number; estimated_units:number; cache_hit_count:number; new_item_count:number}> };
@@ -19,6 +20,7 @@ export type Boundary = { anchor:PathSummary;points:Array<{child_path_id:number;o
 
 const root = "/kline-inverse";
 export const klineInverseApi = {
+  availability:(input:{instrument_id:string;data_source:string;symbol:string;interval:string;evaluation_length:number})=>apiFetch<KlineInverseAvailability>(`${root}/availability?${new URLSearchParams({instrument_id:input.instrument_id,data_source:input.data_source,symbol:input.symbol,interval:input.interval,evaluation_length:String(input.evaluation_length)})}`),
   createDraft:(input:CreateDraft)=>apiFetch<Study>(`${root}/studies/drafts`,{method:"POST",body:JSON.stringify(input)}),
   list:(includeArchived=false)=>apiFetch<Study[]>(`${root}/studies?include_archived=${includeArchived}`),
   get:(id:number)=>apiFetch<Study>(`${root}/studies/${id}`),

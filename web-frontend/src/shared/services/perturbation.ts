@@ -1,7 +1,7 @@
 import { apiFetch } from "./client";
 import type { ComputePlanPreview, ComputeTask } from "./computeTasks";
 
-export type PerturbationSource = { instrument_id:string; data_source:string; symbol:string; display_name:string; interval:string; version_id?:number; content_hash?:string; artifact_kind:string; immutable:boolean; has_perturbation_ancestor:boolean };
+export type PerturbationSource = { instrument_id:string; data_source:string; symbol:string; display_name:string; interval:string; version_id?:number; content_hash?:string; artifact_kind:string; immutable:boolean; has_perturbation_ancestor:boolean; available_start_time_ms?:number; available_end_time_ms?:number };
 export type GroupPlan = { schema_version:string; source:PerturbationSource; actual_start_time_ms:number; actual_end_time_ms:number; bar_count:number; previous_close_present:boolean; previous_close?:number; source_content_hash:string; estimated_bytes:number; plan_hash:string; source_version:string; wick_warning:boolean };
 export type Deviation = { median:number; p95:number; maximum:number; open_max:number; high_max:number; low_max:number; close_max:number };
 export type PerturbationVariant = { id:number; group_id:number; seed:string; alpha:string; recipe_hash:string; output_version_id:number; output_instrument_id:string; generated_content_hash?:string; status:string; integrity_status:string; bar_count:number; deviation:Deviation; compute_task_id?:number; archived:boolean; error_code?:string; error_message?:string; created_at:string };

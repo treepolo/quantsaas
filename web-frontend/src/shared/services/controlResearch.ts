@@ -22,7 +22,7 @@ export type SnapshotSummary = {
   baseline_evaluation_id: number; baseline_result_id: number; baseline: ControlMetrics;
   random_distribution?: DistributionSet; random_percentiles?: PercentileSet;
   shuffle_distribution?: DistributionSet; shuffle_percentiles?: PercentileSet;
-  rules: RuleResult[]; conclusion_labels: string[];
+  rules?: RuleResult[] | null; conclusion_labels?: string[] | null;
 };
 export type ControlSnapshot = {
   id: number; completeness: string; statistics_version: string; random_completed_count: number;

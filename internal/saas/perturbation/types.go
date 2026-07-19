@@ -55,6 +55,8 @@ type SourceDescriptor struct {
 	ArtifactKind            string `json:"artifact_kind"`
 	HasPerturbationAncestor bool   `json:"has_perturbation_ancestor"`
 	Immutable               bool   `json:"immutable"`
+	AvailableStartTimeMs    int64  `json:"available_start_time_ms,omitempty"`
+	AvailableEndTimeMs      int64  `json:"available_end_time_ms,omitempty"`
 }
 
 type GroupPlanRequest struct {

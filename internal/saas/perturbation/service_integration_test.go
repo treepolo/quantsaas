@@ -75,6 +75,13 @@ func TestPerturbationEndToEndAndIntegrity(t *testing.T) {
 		_ = tasks.Shutdown(shutdown)
 	})
 	service := NewService(db, tasks, nil)
+	sources, err := service.Sources(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].AvailableStartTimeMs != bars[0].OpenTime || sources[0].AvailableEndTimeMs != bars[len(bars)-1].OpenTime {
+		t.Fatalf("unexpected source bounds: %+v", sources)
+	}
 
 	groupRequest := GroupPlanRequest{Source: SourceRequest{InstrumentID: "P13", Interval: "1d", StartTimeMs: bars[1].OpenTime, EndTimeMs: bars[len(bars)-1].OpenTime}}
 	groupPlan, err := service.PlanGroup(ctx, user.ID, groupRequest)
@@ -87,6 +94,18 @@ func TestPerturbationEndToEndAndIntegrity(t *testing.T) {
 	group, err := service.CreateGroup(ctx, user.ID, CreateGroupRequest{PlanRequest: groupRequest, PlanHash: groupPlan.PlanHash, Name: "P13 integration"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	reusedGroup, err := service.CreateGroup(ctx, user.ID, CreateGroupRequest{PlanRequest: groupRequest, PlanHash: groupPlan.PlanHash, Name: "P13 integration"})
+	if err != nil || reusedGroup.ID != group.ID {
+		t.Fatalf("exact group was not reused: group=%+v err=%v", reusedGroup, err)
+	}
+	distinctGroup, err := service.CreateGroup(ctx, user.ID, CreateGroupRequest{PlanRequest: groupRequest, PlanHash: groupPlan.PlanHash, Name: "P13 integration", Notes: "same display name, distinct research identity"})
+	if err != nil || distinctGroup.ID == group.ID {
+		t.Fatalf("same display name could not create a distinct group: group=%+v err=%v", distinctGroup, err)
+	}
+	var storedGroups []saasstore.PerturbationGroup
+	if err := db.Where("id IN ?", []uint{group.ID, distinctGroup.ID}).Order("id ASC").Find(&storedGroups).Error; err != nil || len(storedGroups) != 2 || storedGroups[0].MarketSeriesID == storedGroups[1].MarketSeriesID || storedGroups[0].SourceSnapshotID != storedGroups[1].SourceSnapshotID {
+		t.Fatalf("unexpected group storage isolation: groups=%+v err=%v", storedGroups, err)
 	}
 
 	variantInput := VariantPlanRequest{Seeds: []string{"42", "18446744073709551615"}, Alphas: []string{"0.0100", "0.03"}}
@@ -116,7 +135,7 @@ func TestPerturbationEndToEndAndIntegrity(t *testing.T) {
 	}
 
 	initial, monthly, fee, spread, filter := 10_000.0, 100.0, .001, .001, false
-	testRequest := CreateTestRequest{Name: "P13 gene test", GroupID: group.ID, Subjects: []SubjectRequest{{SourceKind: "gene_record", SourceID: gene.ID}}, Backtest: BacktestSettings{StrategyID: sigmoiddca.StrategyID, ExecutionMode: saasstore.ExecutionModeCloseSameBar, StartTimeMs: group.Snapshot.StartTimeMs, EndTimeMs: group.Snapshot.EndTimeMs, InitialCapital: &initial, MonthlyDCA: &monthly, FeeRate: &fee, SpreadRate: &spread, LongTermFilterEnabled: &filter}}
+	testRequest := CreateTestRequest{Name: "P13 gene test", GroupID: group.ID, Subjects: []SubjectRequest{{SourceKind: "gene_record", SourceID: gene.ID}}, Backtest: BacktestSettings{ExecutionMode: saasstore.ExecutionModeCloseSameBar, StartTimeMs: group.Snapshot.StartTimeMs, EndTimeMs: group.Snapshot.EndTimeMs, InitialCapital: &initial, MonthlyDCA: &monthly, FeeRate: &fee, SpreadRate: &spread, LongTermFilterEnabled: &filter}}
 	testPlan, err := service.PlanTest(ctx, user.ID, TestPlanRequest{CreateTestRequest: testRequest})
 	if err != nil {
 		t.Fatal(err)

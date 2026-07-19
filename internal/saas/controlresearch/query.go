@@ -110,6 +110,12 @@ func (s *Service) snapshotDescriptorFrom(row saasstore.ControlAnalysisSnapshot) 
 	if err := json.Unmarshal(row.Summary, &summary); err != nil {
 		return SnapshotDescriptor{}, err
 	}
+	if summary.Rules == nil {
+		summary.Rules = []RuleResult{}
+	}
+	if summary.ConclusionLabels == nil {
+		summary.ConclusionLabels = []string{}
+	}
 	return SnapshotDescriptor{ID: row.ID, Completeness: row.Completeness, StatisticsVersion: row.StatisticsVersion, RandomCompletedCount: row.RandomCompletedCount, ShuffleCompletedCount: row.ShuffleCompletedCount, RuleCompletedCount: row.RuleCompletedCount, FailedCount: row.FailedCount, CancelledCount: row.CancelledCount, CacheHitCount: row.CacheHitCount, ContentHash: row.ContentHash, Summary: summary, CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339)}, nil
 }
 

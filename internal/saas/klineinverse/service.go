@@ -41,6 +41,47 @@ func NewService(db *gorm.DB, tasks *computetask.Service, backtests *backtest.Ser
 	return &Service{db: db, computeTasks: tasks, backtests: backtests, results: backtestresult.NewStore(db), parameterResearch: parameterResearch}
 }
 
+func (s *Service) Availability(ctx context.Context, request AvailabilityRequest) (AvailabilityDescriptor, error) {
+	request.InstrumentID = strings.ToUpper(strings.TrimSpace(request.InstrumentID))
+	request.DataSource = strings.TrimSpace(request.DataSource)
+	request.Symbol = strings.TrimSpace(request.Symbol)
+	request.Interval = strings.TrimSpace(request.Interval)
+	if request.InstrumentID == "" || request.DataSource == "" || request.Symbol == "" || request.Interval == "" || request.EvaluationLength < 2 || request.EvaluationLength > 5000 {
+		return AvailabilityDescriptor{}, ErrInvalidRequest
+	}
+	warmup := sigmoiddca.StrategyManifest().RequiredHistoryBars
+	base := s.db.WithContext(ctx).Model(&saasstore.KLine{}).Where("instrument_id=? AND source=? AND symbol=? AND interval=?", request.InstrumentID, request.DataSource, request.Symbol, request.Interval)
+	var count int64
+	if err := base.Count(&count).Error; err != nil {
+		return AvailabilityDescriptor{}, err
+	}
+	if count < int64(warmup+request.EvaluationLength) {
+		return AvailabilityDescriptor{}, fmt.Errorf("%w: 資料只有 %d 根，至少需要 %d 根暖身加 %d 根 H", ErrInvalidRequest, count, warmup, request.EvaluationLength)
+	}
+	loadAt := func(offset int) (saasstore.KLine, error) {
+		var row saasstore.KLine
+		err := s.db.WithContext(ctx).Where("instrument_id=? AND source=? AND symbol=? AND interval=?", request.InstrumentID, request.DataSource, request.Symbol, request.Interval).Order("open_time ASC").Offset(offset).First(&row).Error
+		return row, err
+	}
+	first, err := loadAt(0)
+	if err != nil {
+		return AvailabilityDescriptor{}, err
+	}
+	earliest, err := loadAt(warmup)
+	if err != nil {
+		return AvailabilityDescriptor{}, err
+	}
+	latest, err := loadAt(int(count) - request.EvaluationLength)
+	if err != nil {
+		return AvailabilityDescriptor{}, err
+	}
+	var last saasstore.KLine
+	if err := s.db.WithContext(ctx).Where("instrument_id=? AND source=? AND symbol=? AND interval=?", request.InstrumentID, request.DataSource, request.Symbol, request.Interval).Order("open_time DESC").First(&last).Error; err != nil {
+		return AvailabilityDescriptor{}, err
+	}
+	return AvailabilityDescriptor{AvailableStartMs: first.OpenTime, AvailableEndMs: last.OpenTime, EarliestEvaluationStartMs: earliest.OpenTime, LatestEvaluationStartMs: latest.OpenTime, WarmupLength: warmup, EvaluationLength: request.EvaluationLength, BarCount: count}, nil
+}
+
 func (s *Service) CreateDraft(ctx context.Context, userID uint, request CreateDraftRequest) (StudyDescriptor, error) {
 	canonical, err := s.resolveDraft(ctx, userID, request)
 	if err != nil {
@@ -346,6 +387,7 @@ func (s *Service) resolveDraft(ctx context.Context, userID uint, request CreateD
 	if err != nil {
 		return StudyCanonical{}, err
 	}
+	request.EvaluationStartMs = dates[warmup]
 	if len(request.CalibrationSources) == 0 {
 		request.CalibrationSources = []CalibrationSource{{InstrumentID: request.InstrumentID, DataSource: request.DataSource, Symbol: request.Symbol, Interval: request.Interval, StartTimeMs: dates[0], EndTimeMs: dates[len(dates)-1]}}
 	}
@@ -446,14 +488,14 @@ func (s *Service) studyDates(ctx context.Context, instrument, source, symbol, in
 		return nil, err
 	}
 	if len(before) != w {
-		return nil, fmt.Errorf("H 起點前只有 %d 根，策略需要 %d 根暖身", len(before), w)
+		return nil, fmt.Errorf("%w: H 起點前只有 %d 根，策略需要 %d 根暖身", ErrInvalidRequest, len(before), w)
 	}
 	sort.Slice(before, func(i, j int) bool { return before[i].OpenTime < before[j].OpenTime })
 	if err := s.db.WithContext(ctx).Where("instrument_id=? AND source=? AND symbol=? AND interval=? AND open_time >= ?", instrument, source, symbol, interval, start).Order("open_time ASC").Limit(h).Find(&after).Error; err != nil {
 		return nil, err
 	}
-	if len(after) != h || after[0].OpenTime != start {
-		return nil, fmt.Errorf("H 起點或有效交易日數不足")
+	if len(after) != h {
+		return nil, fmt.Errorf("%w: H 起點之後只有 %d 根有效 K 棒，本研究需要 %d 根", ErrInvalidRequest, len(after), h)
 	}
 	dates := make([]int64, 0, w+h)
 	for _, bar := range before {

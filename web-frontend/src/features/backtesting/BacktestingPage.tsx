@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, Legend, ReferenceArea, ReferenceLine, ResponsiveContainer, XAxis, YAxis } from "recharts";
 import { BarChart3, PlayCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { formatMoney, formatPercent } from "../../shared/lib/format";
+import { datasetStartDate } from "../../shared/lib/datasetDates";
 import { backtestsApi, type BacktestResult } from "../../shared/services/backtests";
 import { evolutionApi, type GenomeRecord } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
@@ -351,6 +352,10 @@ export function BacktestingPage() {
   const selectedGenome = selectableGenomes.find((genome) => genome.id === candidateId) ?? selectableGenomes.find((genome) => selectedGenomeIds.includes(genome.id)) ?? selectableGenomes[0];
   const selectedGenomes = selectableGenomes.filter((genome) => selectedGenomeIds.includes(genome.id));
   const crossInstrumentCount = selectedGenomes.filter((genome) => genome.instrument_id && genome.instrument_id !== instrumentId).length;
+  const selectedDatasetStart = datasetStartDate(selectedInstrument, interval);
+  useEffect(() => {
+    if (selectedDatasetStart) setBacktestStart(selectedDatasetStart);
+  }, [selectedDatasetStart]);
 
   const startMutation = useMutation({
     mutationFn: async () => {

@@ -10,6 +10,7 @@ import {
   type ResearchInstrument
 } from "../../shared/services/marketData";
 import { computeTasksApi, type ComputeTask } from "../../shared/services/computeTasks";
+import { datasetStartDate } from "../../shared/lib/datasetDates";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { PerturbationWorkspace } from "./PerturbationWorkspace";
@@ -95,7 +96,7 @@ function RecompositionEditor() {
   const [selectedSourceKey, setSelectedSourceKey] = useState("");
   const selectedSource = eligibleSources.find((source) => sourceKey(source) === selectedSourceKey) ?? eligibleSources[0];
   const now = new Date();
-  const [startDate, setStartDate] = useState(dateInputValue(new Date(Date.UTC(now.getUTCFullYear() - 2, now.getUTCMonth(), now.getUTCDate()))));
+  const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState(dateInputValue(now));
   const [bars, setBars] = useState<MarketVersionBar[]>([]);
   const [selectionStart, setSelectionStart] = useState(0);
@@ -114,6 +115,10 @@ function RecompositionEditor() {
   useEffect(() => {
     if (!selectedSourceKey && selectedSource) setSelectedSourceKey(sourceKey(selectedSource));
   }, [selectedSource, selectedSourceKey]);
+  const selectedDatasetStart = datasetStartDate(selectedSource?.instrument, interval);
+  useEffect(() => {
+    if (selectedDatasetStart) setStartDate(selectedDatasetStart);
+  }, [selectedDatasetStart]);
 
   const loadBars = useMutation({
     mutationFn: () => marketDataApi.recompositionSourceBars({
@@ -391,7 +396,7 @@ function LeverageGenerator({ instruments }: { instruments: ResearchInstrument[] 
   const source = sources.find((item) => item.id === sourceID) ?? sources[0];
   const [interval, setInterval] = useState("1d");
   const now = new Date();
-  const [startDate, setStartDate] = useState(dateInputValue(new Date(Date.UTC(now.getUTCFullYear() - 1, now.getUTCMonth(), now.getUTCDate()))));
+  const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState(dateInputValue(now));
   const [multiplier, setMultiplier] = useState(2);
   const [targetID, setTargetID] = useState("");
@@ -405,6 +410,10 @@ function LeverageGenerator({ instruments }: { instruments: ResearchInstrument[] 
     setTargetID(id); setTargetName(`${source.display_name} ${multiplier} 倍做多`);
     if (!source.supported_intervals.includes(interval)) setInterval(source.supported_intervals[0] ?? "1d");
   }, [source?.id, multiplier]);
+  const sourceDatasetStart = datasetStartDate(source, interval);
+  useEffect(() => {
+    if (sourceDatasetStart) setStartDate(sourceDatasetStart);
+  }, [sourceDatasetStart]);
   const mutation = useMutation({ mutationFn: () => marketDataApi.generateLeveraged({ source_instrument_id: sourceID, source_interval: interval, start_time_ms: dayStartMs(startDate), end_time_ms: dayEndMs(endDate), multiplier, target_instrument_id: targetID, target_symbol: targetID, target_display_name: targetName }), onSuccess: (value) => { setResult(value); queryClient.invalidateQueries({ queryKey: ["market-data-instruments"] }); } });
   function submit(event: FormEvent) { event.preventDefault(); mutation.mutate(); }
   return <form onSubmit={submit} className="grid gap-5 lg:grid-cols-2"><Card className="p-5"><CardHeader><div><CardTitle>來源與倍數</CardTitle><CardDescription>依既有每日倍數做多規則產生資料。</CardDescription></div></CardHeader><div className="grid gap-3 md:grid-cols-2"><Field label="來源"><select value={sourceID} onChange={(event) => setSourceID(event.target.value)} className={inputClass}>{sources.map((item) => <option key={item.id} value={item.id}>{item.display_name}</option>)}</select></Field><Field label="週期"><select value={interval} onChange={(event) => setInterval(event.target.value)} className={inputClass}>{(source?.supported_intervals ?? ["1d"]).map((item) => <option key={item} value={item}>{intervalLabels[item] ?? item}</option>)}</select></Field><Field label="起日"><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className={inputClass} /></Field><Field label="迄日"><input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className={inputClass} /></Field><Field label="倍數"><input type="number" min="0.01" step="0.01" value={multiplier} onChange={(event) => setMultiplier(Number(event.target.value))} className={inputClass} /></Field></div></Card><Card className="p-5"><CardHeader><div><CardTitle>輸出資料</CardTitle><CardDescription>此舊模式仍以標的 ID 覆寫同一份產生資料。</CardDescription></div></CardHeader><div className="grid gap-3"><Field label="標的 ID / 代號"><input value={targetID} maxLength={32} onChange={(event) => setTargetID(event.target.value.toUpperCase())} className={inputClass} /></Field><Field label="顯示名稱"><input value={targetName} onChange={(event) => setTargetName(event.target.value)} className={inputClass} /></Field><Button type="submit" loading={mutation.isPending} disabled={!sourceID || !targetID || multiplier <= 0}>產生每日倍數行情</Button>{mutation.error instanceof Error ? <div className="text-sm text-[#fecaca]">{mutation.error.message}</div> : null}{result ? <div className="rounded-lg border border-[#2dd4bf]/25 bg-[#2dd4bf]/10 p-3 text-sm text-[#99f6e4]">已產生 {result.generated_bars.toLocaleString("zh-TW")} 根：{result.instrument.display_name}</div> : null}</div></Card></form>;
