@@ -33,6 +33,7 @@ export const navItems: NavItem[] = [
   { to: "/datasets", labelKey: "研究資料集", icon: Layers3, placement: "main", feature: "backtesting" },
   { to: "/status", labelKey: "市場狀態", icon: Gauge, placement: "main", feature: "backtesting" },
   { to: "/evolution", labelKey: "nav.evolution", icon: Layers3, placement: "main", feature: "backtesting" },
+  { to: "/parameter-research", labelKey: "參數實驗室", icon: Grid3X3, placement: "main", feature: "backtesting" },
   { to: "/parameter-library", labelKey: "參數庫", icon: FlaskConical, placement: "main", feature: "strategies" },
   { to: "/backtesting", labelKey: "nav.backtesting", icon: BarChart3, placement: "main", feature: "backtesting" },
 	{ to: "/control-analysis", labelKey: "隨機對照研究", icon: Dices, placement: "main", feature: "backtesting" },
