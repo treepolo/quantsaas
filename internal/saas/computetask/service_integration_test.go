@@ -359,6 +359,48 @@ func TestCompositeStagesRequireExplicitStart(t *testing.T) {
 	waitForTaskStatus(t, service, user.ID, root.ID, compute.TaskStatusCompleted)
 }
 
+func TestCompositeCachedStageRequiresExplicitStart(t *testing.T) {
+	db := openComputeIntegrationDB(t)
+	user := createComputeIntegrationUser(t, db, "cached-stage")
+	executor := newIntegrationExecutor()
+	service := newComputeIntegrationService(t, db, executor, 1)
+	ctx := context.Background()
+
+	warm, err := service.Create(ctx, user.ID, integrationCreateSpec("warm-cache", "cached"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.StartTask(ctx, user.ID, warm.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, service, user.ID, warm.ID, compute.TaskStatusCompleted)
+
+	root, err := service.CreateComposite(ctx, user.ID, CompositeSpec{
+		TaskType: "cached-composite", Title: "快取階段確認", Settings: map[string]any{"schema": "v1"},
+		Stages: []StageSpec{{Key: "cached", Type: "cached", Order: 1, Title: "快取階段", ExecutorType: executor.Descriptor().Type, Items: integrationItems("cached")}},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage, err := service.Get(ctx, user.ID, root.ChildTaskIDs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stage.Status != compute.TaskStatusPlanned || stage.CacheHitCount != 1 || stage.ValidResultCount != 1 {
+		t.Fatalf("cached stage must wait for confirmation: %+v", stage)
+	}
+	if executor.callCount("cached") != 1 {
+		t.Fatalf("cached stage executed before confirmation: %d", executor.callCount("cached"))
+	}
+	if _, err := service.StartTask(ctx, user.ID, stage.ID); err != nil {
+		t.Fatal(err)
+	}
+	completed := waitForTaskStatus(t, service, user.ID, stage.ID, compute.TaskStatusCompleted)
+	if completed.Attempt != 1 || executor.callCount("cached") != 1 {
+		t.Fatalf("cached stage confirmation must complete without execution: %+v calls=%d", completed, executor.callCount("cached"))
+	}
+}
+
 func TestComputeTaskRestartRecoversExpiredLeaseFromFixedManifest(t *testing.T) {
 	db := openComputeIntegrationDB(t)
 	user := createComputeIntegrationUser(t, db, "restart")

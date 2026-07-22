@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"quantsaas/internal/backtestcore"
@@ -30,6 +31,7 @@ type Service struct {
 	computeTasks      *computetask.Service
 	parameterResearch *parameterresearchsvc.Service
 	results           *backtestresult.Store
+	taskSyncs         sync.Map
 }
 
 type preparedPlan struct {
@@ -48,6 +50,13 @@ func NewService(db *gorm.DB, tasks *computetask.Service, parameterResearch *para
 		parameterResearch = parameterresearchsvc.NewService(db, tasks, nil)
 	}
 	return &Service{db: db, computeTasks: tasks, parameterResearch: parameterResearch, results: backtestresult.NewStore(db)}
+}
+
+func (s *Service) lockTaskSync(taskID uint) func() {
+	value, _ := s.taskSyncs.LoadOrStore(taskID, &sync.Mutex{})
+	mutex := value.(*sync.Mutex)
+	mutex.Lock()
+	return mutex.Unlock
 }
 
 func (s *Service) Preview(ctx context.Context, userID uint, req CreateRequest) (PlanResponse, error) {

@@ -204,13 +204,7 @@ func (s *Service) createCompositeStageTx(tx *gorm.DB, userID uint, parentID uint
 		title = prepared.spec.Type
 	}
 	status := compute.TaskStatusPlanned
-	completedAt := (*time.Time)(nil)
 	progress := compute.Progress(compute.ItemCounts{Total: prepared.plan.Manifest.TotalItems, Cached: len(prepared.caches)})
-	if len(prepared.caches) == prepared.plan.Manifest.TotalItems {
-		status = compute.TaskStatusCompleted
-		completedAt = &now
-		progress = 1
-	}
 	stage := saasstore.ComputeTask{
 		UserID: userID, ParentTaskID: &parentID, Kind: compute.TaskKindStage,
 		TaskType: prepared.plan.Snapshot.TaskType, Title: title, PlanKey: prepared.plan.PlanKey, ActiveKey: &activeKey,
@@ -226,7 +220,7 @@ func (s *Service) createCompositeStageTx(tx *gorm.DB, userID uint, parentID uint
 		NewItemCount: prepared.plan.Manifest.TotalItems - len(prepared.caches), ValidResultCount: len(prepared.caches),
 		MissingCount: prepared.plan.Manifest.TotalItems - len(prepared.caches), Progress: progress, Status: status,
 		RNGAlgorithm: prepared.plan.Snapshot.RNG.Algorithm, RNGVersion: prepared.plan.Snapshot.RNG.Version,
-		RootSeed: prepared.plan.Snapshot.RNG.RootSeed, Checkpoint: saasstore.JSONB(`{}`), CompletedAt: completedAt,
+		RootSeed: prepared.plan.Snapshot.RNG.RootSeed, Checkpoint: saasstore.JSONB(`{}`),
 	}
 	if err := tx.Create(&stage).Error; err != nil {
 		return 0, err

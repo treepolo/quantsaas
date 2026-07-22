@@ -107,6 +107,21 @@ func TestControlAnalysisRunsAllStagesAndPersistsImmutableEvidence(t *testing.T) 
 	if err != nil || len(reopened) != 1 || reopened[0].ID != task.ID {
 		t.Fatalf("P11 task cannot be reopened: %+v err=%v", reopened, err)
 	}
+	var evaluationBefore saasstore.ControlEvaluation
+	if err := db.Where("task_id = ?", task.ID).Order("updated_at DESC").First(&evaluationBefore).Error; err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := service.Get(ctx, user.ID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	var evaluationAfter saasstore.ControlEvaluation
+	if err := db.First(&evaluationAfter, evaluationBefore.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !evaluationAfter.UpdatedAt.Equal(evaluationBefore.UpdatedAt) {
+		t.Fatalf("read-only polling rewrote an existing evaluation: before=%s after=%s", evaluationBefore.UpdatedAt, evaluationAfter.UpdatedAt)
+	}
 	reused, err := service.Create(ctx, user.ID, request)
 	if err != nil || reused.ID != task.ID {
 		t.Fatalf("same P11 identity was not reused: %+v err=%v", reused, err)

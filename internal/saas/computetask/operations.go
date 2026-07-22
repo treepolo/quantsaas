@@ -53,6 +53,22 @@ func (s *Service) StartTask(ctx context.Context, userID uint, taskID uint) (*Tas
 		return nil, err
 	}
 	if pending == 0 {
+		if task.Status == compute.TaskStatusPlanned && task.CacheHitCount == task.TotalItems {
+			now := time.Now().UTC()
+			if err := s.db.WithContext(ctx).Model(&saasstore.ComputeTask{}).Where("id = ? AND user_id = ? AND status = ?", task.ID, userID, compute.TaskStatusPlanned).Updates(map[string]any{
+				"status": compute.TaskStatusCompleted, "started_at": now, "completed_at": now,
+				"cancelled_at": nil, "cancel_requested_at": nil, "error_message": "",
+				"attempt": gorm.Expr("attempt + 1"),
+			}).Error; err != nil {
+				return nil, err
+			}
+			if task.ParentTaskID != nil {
+				if err := s.refreshCompositeTask(ctx, *task.ParentTaskID); err != nil {
+					return nil, err
+				}
+			}
+			return s.Get(ctx, userID, taskID)
+		}
 		return nil, ErrInvalidState
 	}
 	now := time.Now().UTC()

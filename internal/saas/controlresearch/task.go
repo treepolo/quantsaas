@@ -95,6 +95,8 @@ func (s *Service) syncTask(ctx context.Context, userID uint, task *saasstore.Con
 	if task.ComputeTaskID == nil {
 		return nil
 	}
+	unlock := s.lockTaskSync(task.ID)
+	defer unlock()
 	root, err := s.computeTasks.Get(ctx, userID, *task.ComputeTaskID)
 	if err != nil {
 		return err
@@ -107,19 +109,43 @@ func (s *Service) syncTask(ctx context.Context, userID uint, task *saasstore.Con
 	if err := s.db.WithContext(ctx).Where("parent_task_id = ?", root.ID).Find(&stages).Error; err != nil {
 		return err
 	}
+	var existing []saasstore.ControlEvaluation
+	if err := s.db.WithContext(ctx).Select("kind", "sequence_index").Where("task_id = ?", task.ID).Find(&existing).Error; err != nil {
+		return err
+	}
+	synced := make(map[string]struct{}, len(existing))
+	for _, evaluation := range existing {
+		synced[evaluationIdentity(evaluation.Kind, evaluation.SequenceIndex)] = struct{}{}
+	}
+	newResults := false
 	for _, stage := range stages {
+		if stage.Status == compute.TaskStatusPlanned && stage.StartedAt == nil {
+			continue
+		}
 		var items []saasstore.ComputeTaskItem
 		if err := s.db.WithContext(ctx).Where("compute_task_id = ? AND status IN ?", stage.ID, []string{compute.ItemStatusCompleted, compute.ItemStatusCached}).Find(&items).Error; err != nil {
 			return err
 		}
 		for _, item := range items {
+			kind, index, err := evaluationIdentityForItem(stage.StageKey, item)
+			if err != nil {
+				return err
+			}
+			identity := evaluationIdentity(kind, index)
+			if _, ok := synced[identity]; ok {
+				continue
+			}
 			if err := s.syncItem(ctx, *task, canonical, stage.StageKey, item); err != nil {
 				return err
 			}
+			synced[identity] = struct{}{}
+			newResults = true
 		}
 	}
-	if err := s.createSnapshot(ctx, task, root); err != nil {
-		return err
+	if newResults || task.LatestSnapshotID == nil {
+		if err := s.createSnapshot(ctx, task, root); err != nil {
+			return err
+		}
 	}
 	status := "running"
 	var baseline, randomCount, ruleCount, shuffleCount int64
@@ -147,6 +173,25 @@ func (s *Service) syncTask(ctx context.Context, userID uint, task *saasstore.Con
 	}
 	task.Status = status
 	return s.updateCandidateLink(ctx, userID, *task)
+}
+
+func evaluationIdentity(kind string, index int) string {
+	return kind + ":" + strconv.Itoa(index)
+}
+
+func evaluationIdentityForItem(stageKey string, item saasstore.ComputeTaskItem) (string, int, error) {
+	switch stageKey {
+	case "baseline":
+		return "baseline", 0, nil
+	case "random":
+		return "random", parseItemIndex(item.ItemKey), nil
+	default:
+		var result ExecutionResult
+		if err := json.Unmarshal(item.Result, &result); err != nil || result.SchemaVersion != ExecutorResultVersion {
+			return "", 0, ErrInvalidRequest
+		}
+		return result.Kind, result.SequenceIndex, nil
+	}
 }
 
 func (s *Service) syncItem(ctx context.Context, task saasstore.ControlAnalysisTask, canonical TaskCanonical, stageKey string, item saasstore.ComputeTaskItem) error {
@@ -256,8 +301,7 @@ func (s *Service) createSnapshot(ctx context.Context, task *saasstore.ControlAna
 	snapshotKey := "p11-snapshot:" + compute.HashBytes(identityRaw)
 	var existing saasstore.ControlAnalysisSnapshot
 	if err := s.db.WithContext(ctx).Where("snapshot_key = ?", snapshotKey).First(&existing).Error; err == nil {
-		task.LatestSnapshotID = &existing.ID
-		return s.db.WithContext(ctx).Model(task).Update("latest_snapshot_id", existing.ID).Error
+		return s.promoteLatestSnapshot(ctx, task, existing)
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
@@ -305,8 +349,15 @@ func (s *Service) createSnapshot(ctx context.Context, task *saasstore.ControlAna
 	snapshotEnvelope, _ := compute.CanonicalJSON(map[string]any{"schema_version": SnapshotSchemaVersion, "task_id": task.ID, "completeness": completeness, "summary": json.RawMessage(summaryRaw), "manifest": json.RawMessage(manifestRaw), "statistics_version": core.StatisticsVersion})
 	snapshot := saasstore.ControlAnalysisSnapshot{TaskID: task.ID, SnapshotKey: snapshotKey, SchemaVersion: SnapshotSchemaVersion, Completeness: completeness, StatisticsVersion: core.StatisticsVersion, RandomCompletedCount: len(random), ShuffleCompletedCount: len(shuffle), RuleCompletedCount: len(rules), FailedCount: root.FailedCount, CancelledCount: root.CancelledCount, CacheHitCount: root.CacheHitCount, Summary: summaryRaw, DetailManifest: manifestRaw, ContentHash: compute.HashBytes(snapshotEnvelope)}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&snapshot).Error; err != nil {
-			return err
+		created := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "snapshot_key"}}, DoNothing: true}).Create(&snapshot)
+		if created.Error != nil {
+			return created.Error
+		}
+		if created.RowsAffected == 0 {
+			if err := tx.Where("snapshot_key = ?", snapshotKey).First(&snapshot).Error; err != nil {
+				return err
+			}
+			return promoteLatestSnapshotTx(tx, task, snapshot)
 		}
 		for _, evaluation := range evaluations {
 			member := saasstore.ControlSnapshotMember{SnapshotID: snapshot.ID, EvaluationID: evaluation.ID, RepresentativeRole: representatives[evaluation.ID]}
@@ -314,12 +365,51 @@ func (s *Service) createSnapshot(ctx context.Context, task *saasstore.ControlAna
 				return err
 			}
 		}
-		return tx.Model(task).Update("latest_snapshot_id", snapshot.ID).Error
+		return promoteLatestSnapshotTx(tx, task, snapshot)
 	}); err != nil {
 		return err
 	}
-	task.LatestSnapshotID = &snapshot.ID
 	return nil
+}
+
+func (s *Service) promoteLatestSnapshot(ctx context.Context, task *saasstore.ControlAnalysisTask, candidate saasstore.ControlAnalysisSnapshot) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		return promoteLatestSnapshotTx(tx, task, candidate)
+	})
+}
+
+func promoteLatestSnapshotTx(tx *gorm.DB, task *saasstore.ControlAnalysisTask, candidate saasstore.ControlAnalysisSnapshot) error {
+	var locked saasstore.ControlAnalysisTask
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "latest_snapshot_id").First(&locked, task.ID).Error; err != nil {
+		return err
+	}
+	if locked.LatestSnapshotID != nil {
+		var current saasstore.ControlAnalysisSnapshot
+		if err := tx.First(&current, *locked.LatestSnapshotID).Error; err != nil {
+			return err
+		}
+		if !snapshotAtLeastAsComplete(candidate, current) {
+			task.LatestSnapshotID = locked.LatestSnapshotID
+			return nil
+		}
+	}
+	if err := tx.Model(&saasstore.ControlAnalysisTask{}).Where("id = ?", task.ID).Update("latest_snapshot_id", candidate.ID).Error; err != nil {
+		return err
+	}
+	task.LatestSnapshotID = &candidate.ID
+	return nil
+}
+
+func snapshotAtLeastAsComplete(candidate, current saasstore.ControlAnalysisSnapshot) bool {
+	if candidate.RandomCompletedCount < current.RandomCompletedCount ||
+		candidate.RuleCompletedCount < current.RuleCompletedCount ||
+		candidate.ShuffleCompletedCount < current.ShuffleCompletedCount {
+		return false
+	}
+	if current.Completeness == "completed" && candidate.Completeness != "completed" {
+		return false
+	}
+	return true
 }
 
 func distributionAndPercentiles(baseline MetricSet, evaluations []saasstore.ControlEvaluation) (DistributionSet, PercentileSet, error) {
@@ -367,6 +457,10 @@ func representativeRoles(evaluations []saasstore.ControlEvaluation) map[uint]str
 			return a.LogFinalNAVRatio < b.LogFinalNAVRatio
 		})
 		if len(items) == 0 {
+			continue
+		}
+		if len(items) == 1 {
+			result[items[0].ID] = kind + "_median"
 			continue
 		}
 		assignments := map[uint][]string{}
@@ -417,7 +511,7 @@ func (s *Service) updateCandidateLink(ctx context.Context, userID uint, task saa
 
 func (s *Service) extensionPlan(ctx context.Context, userID uint, task saasstore.ControlAnalysisTask, randomCount, shuffleCount int) (preparedPlan, error) {
 	if randomCount < task.RandomTargetCount || shuffleCount < task.ShuffleTargetCount || (randomCount == task.RandomTargetCount && shuffleCount == task.ShuffleTargetCount) {
-		return preparedPlan{}, ErrInvalidRequest
+		return preparedPlan{}, ErrExtensionCountNotIncreased
 	}
 	var canonical TaskCanonical
 	if json.Unmarshal(task.Canonical, &canonical) != nil {

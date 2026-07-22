@@ -29,9 +29,10 @@ const (
 )
 
 var (
-	ErrInvalidRequest = errors.New("P11 對照研究設定無效")
-	ErrNotFound       = errors.New("找不到 P11 對照研究資源")
-	ErrPlanStale      = errors.New("對照研究計畫已過期，請重新預覽")
+	ErrInvalidRequest             = errors.New("P11 對照研究設定無效")
+	ErrExtensionCountNotIncreased = errors.New("追加後的隨機參數或曝險打亂總數，至少要比目前數量增加一項")
+	ErrNotFound                   = errors.New("找不到 P11 對照研究資源")
+	ErrPlanStale                  = errors.New("對照研究計畫已過期，請重新預覽")
 )
 
 type CreateRequest struct {
