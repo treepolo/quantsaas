@@ -18,6 +18,8 @@ type MaterializationConfig struct {
 	ModelArtifactHash string             `json:"model_artifact_hash"`
 	PredictionHash    string             `json:"prediction_hash"`
 	PolicyHash        string             `json:"policy_hash"`
+	WorkCounter       func(int64)        `json:"-"`
+	Heartbeat         func(string)       `json:"-"`
 }
 
 type DailyDiagnostic struct {
@@ -59,6 +61,9 @@ func Materialize(bars []quant.Bar, oneDay, twentyDay []Prediction, config Materi
 	oneByIndex, twentyByIndex := predictionsByIndex(oneDay), predictionsByIndex(twentyDay)
 	result := MaterializedPath{SchemaVersion: PredictionSchemaVersion, ModelArtifactHash: config.ModelArtifactHash, PredictionHash: config.PredictionHash, PolicyHash: config.PolicyHash, Diagnostics: make([]DailyDiagnostic, 0, len(bars))}
 	for index, bar := range bars {
+		if config.Heartbeat != nil {
+			config.Heartbeat("每日診斷：計算第 " + fmt.Sprintf("%d/%d", index+1, len(bars)))
+		}
 		one, oneOK := oneByIndex[index]
 		twenty, twentyOK := twentyByIndex[index]
 		featureAvailable := index < len(features) && features[index].Available
@@ -88,6 +93,9 @@ func Materialize(bars []quant.Bar, oneDay, twentyDay []Prediction, config Materi
 		}
 		oneCopy, twentyCopy := one, twenty
 		result.Diagnostics = append(result.Diagnostics, DailyDiagnostic{SchemaVersion: EffectiveParameterVersion, Index: index, TimeMs: bar.OpenTime, OneDay: &oneCopy, TwentyDay: &twentyCopy, State: state, Effective: effective})
+		if config.WorkCounter != nil {
+			config.WorkCounter(1)
+		}
 	}
 	return result, nil
 }

@@ -53,20 +53,21 @@ func (o Options) validate() error {
 }
 
 type CreateSpec struct {
-	Kind                string
-	TaskType            string
-	Title               string
-	ExecutorType        string
-	Settings            any
-	ResearchSettingID   string
-	ResearchSettingHash string
-	ParentTaskID        *uint
-	StageKey            string
-	StageType           string
-	StageOrder          int
-	DependsOnTaskIDs    []uint
-	RNG                 compute.RNGSpec
-	Items               []compute.ManifestItemInput
+	Kind                  string
+	TaskType              string
+	Title                 string
+	ExecutorType          string
+	Settings              any
+	ResearchSettingID     string
+	ResearchSettingHash   string
+	ParentTaskID          *uint
+	StageKey              string
+	StageType             string
+	StageOrder            int
+	DependsOnTaskIDs      []uint
+	ComputeMonitorEnabled bool
+	RNG                   compute.RNGSpec
+	Items                 []compute.ManifestItemInput
 }
 
 type StageSpec struct {
@@ -151,53 +152,60 @@ func (e *CompositeLimitError) Error() string {
 func (e *CompositeLimitError) Unwrap() error { return e.Cause }
 
 type TaskDescriptor struct {
-	ID                  uint                       `json:"id"`
-	UserID              uint                       `json:"user_id"`
-	ParentTaskID        *uint                      `json:"parent_task_id,omitempty"`
-	Kind                string                     `json:"kind"`
-	TaskType            string                     `json:"task_type"`
-	Title               string                     `json:"title"`
-	PlanKey             string                     `json:"plan_key"`
-	TaskSchemaVersion   string                     `json:"task_schema_version"`
-	LifecycleVersion    string                     `json:"lifecycle_version"`
-	Executor            compute.ExecutorDescriptor `json:"executor"`
-	SettingsHash        string                     `json:"settings_hash"`
-	Settings            json.RawMessage            `json:"settings,omitempty"`
-	ResearchSettingID   string                     `json:"research_setting_id,omitempty"`
-	ResearchSettingHash string                     `json:"research_setting_hash,omitempty"`
-	StageKey            string                     `json:"stage_key,omitempty"`
-	StageType           string                     `json:"stage_type,omitempty"`
-	StageOrder          int                        `json:"stage_order"`
-	ManifestVersion     string                     `json:"manifest_version,omitempty"`
-	ManifestHash        string                     `json:"manifest_hash,omitempty"`
-	Manifest            json.RawMessage            `json:"manifest,omitempty"`
-	TotalItems          int                        `json:"total_items"`
-	EstimatedUnits      int64                      `json:"estimated_units"`
-	UnknownUnitItems    int                        `json:"unknown_unit_items"`
-	CacheHitCount       int                        `json:"cache_hit_count"`
-	NewItemCount        int                        `json:"new_item_count"`
-	ValidResultCount    int                        `json:"valid_result_count"`
-	FailedCount         int                        `json:"failed_count"`
-	MissingCount        int                        `json:"missing_count"`
-	CancelledCount      int                        `json:"cancelled_count"`
-	Progress            float64                    `json:"progress"`
-	Status              string                     `json:"status"`
-	Error               string                     `json:"error,omitempty"`
-	Attempt             int                        `json:"attempt"`
-	RNGAlgorithm        string                     `json:"rng_algorithm,omitempty"`
-	RNGVersion          string                     `json:"rng_version,omitempty"`
-	RootSeed            *int64                     `json:"root_seed,omitempty"`
-	RNGPosition         int64                      `json:"rng_position"`
-	CheckpointHash      string                     `json:"checkpoint_hash,omitempty"`
-	DependencyTaskIDs   []uint                     `json:"dependency_task_ids"`
-	ChildTaskIDs        []uint                     `json:"child_task_ids"`
-	CreatedAt           string                     `json:"created_at"`
-	UpdatedAt           string                     `json:"updated_at"`
-	StartedAt           string                     `json:"started_at,omitempty"`
-	CompletedAt         string                     `json:"completed_at,omitempty"`
-	CancelledAt         string                     `json:"cancelled_at,omitempty"`
-	CancelRequestedAt   string                     `json:"cancel_requested_at,omitempty"`
-	Reused              bool                       `json:"reused"`
+	ID                    uint                       `json:"id"`
+	UserID                uint                       `json:"user_id"`
+	ParentTaskID          *uint                      `json:"parent_task_id,omitempty"`
+	Kind                  string                     `json:"kind"`
+	TaskType              string                     `json:"task_type"`
+	Title                 string                     `json:"title"`
+	PlanKey               string                     `json:"plan_key"`
+	TaskSchemaVersion     string                     `json:"task_schema_version"`
+	LifecycleVersion      string                     `json:"lifecycle_version"`
+	Executor              compute.ExecutorDescriptor `json:"executor"`
+	SettingsHash          string                     `json:"settings_hash"`
+	Settings              json.RawMessage            `json:"settings,omitempty"`
+	ResearchSettingID     string                     `json:"research_setting_id,omitempty"`
+	ResearchSettingHash   string                     `json:"research_setting_hash,omitempty"`
+	StageKey              string                     `json:"stage_key,omitempty"`
+	StageType             string                     `json:"stage_type,omitempty"`
+	StageOrder            int                        `json:"stage_order"`
+	ManifestVersion       string                     `json:"manifest_version,omitempty"`
+	ManifestHash          string                     `json:"manifest_hash,omitempty"`
+	Manifest              json.RawMessage            `json:"manifest,omitempty"`
+	TotalItems            int                        `json:"total_items"`
+	EstimatedUnits        int64                      `json:"estimated_units"`
+	ComputeMonitorEnabled bool                       `json:"compute_monitor_enabled"`
+	ComputedUnits         int64                      `json:"computed_units,omitempty"`
+	PlannedComputeUnits   int64                      `json:"planned_compute_units,omitempty"`
+	ComputeUnitsPerSec    float64                    `json:"compute_units_per_sec,omitempty"`
+	ComputeRemainingSec   float64                    `json:"compute_remaining_sec,omitempty"`
+	ComputeCurrentStage   string                     `json:"compute_current_stage,omitempty"`
+	ComputeLastHeartbeat  string                     `json:"compute_last_heartbeat,omitempty"`
+	UnknownUnitItems      int                        `json:"unknown_unit_items"`
+	CacheHitCount         int                        `json:"cache_hit_count"`
+	NewItemCount          int                        `json:"new_item_count"`
+	ValidResultCount      int                        `json:"valid_result_count"`
+	FailedCount           int                        `json:"failed_count"`
+	MissingCount          int                        `json:"missing_count"`
+	CancelledCount        int                        `json:"cancelled_count"`
+	Progress              float64                    `json:"progress"`
+	Status                string                     `json:"status"`
+	Error                 string                     `json:"error,omitempty"`
+	Attempt               int                        `json:"attempt"`
+	RNGAlgorithm          string                     `json:"rng_algorithm,omitempty"`
+	RNGVersion            string                     `json:"rng_version,omitempty"`
+	RootSeed              *int64                     `json:"root_seed,omitempty"`
+	RNGPosition           int64                      `json:"rng_position"`
+	CheckpointHash        string                     `json:"checkpoint_hash,omitempty"`
+	DependencyTaskIDs     []uint                     `json:"dependency_task_ids"`
+	ChildTaskIDs          []uint                     `json:"child_task_ids"`
+	CreatedAt             string                     `json:"created_at"`
+	UpdatedAt             string                     `json:"updated_at"`
+	StartedAt             string                     `json:"started_at,omitempty"`
+	CompletedAt           string                     `json:"completed_at,omitempty"`
+	CancelledAt           string                     `json:"cancelled_at,omitempty"`
+	CancelRequestedAt     string                     `json:"cancel_requested_at,omitempty"`
+	Reused                bool                       `json:"reused"`
 }
 
 type ItemDescriptor struct {

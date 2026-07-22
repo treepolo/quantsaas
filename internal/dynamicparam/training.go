@@ -17,6 +17,8 @@ type TrainingConfig struct {
 	Learner       LearnerConfig `json:"learner"`
 	RegionRule    RegionRule    `json:"region_rule"`
 	ActivityKappa float64       `json:"activity_kappa"`
+	WorkCounter   func(int64)   `json:"-"`
+	Heartbeat     func(string)  `json:"-"`
 }
 
 type FoldWindow struct {
@@ -456,13 +458,62 @@ func validateCandidate(ctx context.Context, features []FeaturePoint, targets []T
 	losses, baselines := make([]float64, 0), make([]float64, 0)
 	marginalUp, marginalDown, zeroBrier, regionBrier, reliability := []float64{}, []float64{}, []float64{}, []float64{}, []float64{}
 	allCriteriaPassed := true
+	// Keep the manifest's high-level unit (one dataset-sized candidate) while
+	// distributing that fixed budget across validation examples. The three
+	// targets share one candidate budget, so each target receives one third of it.
+	baseBudget := int64(len(features)) / 3
+	targetBudget := baseBudget
+	if targetKind == TargetDirection {
+		targetBudget = int64(len(features)) - 2*baseBudget
+	}
+	epochs := config.Learner.GAM.Epochs
+	if config.Route == RouteTCN {
+		epochs = config.Learner.TCN.Epochs
+	}
+	if epochs <= 0 {
+		if config.Route == RouteTCN {
+			epochs = 120
+		} else {
+			epochs = 250
+		}
+	}
+	var totalEvents int64
 	for _, fold := range folds {
+		train := examples[fold.TrainStart : fold.TrainEnd+1]
+		validation := examples[fold.ValidationStart : fold.ValidationEnd+1]
+		totalEvents += int64(len(train))*int64(epochs) + int64(len(validation))
+	}
+	if totalEvents < 1 {
+		totalEvents = 1
+	}
+	var progressEvents, reportedUnits int64
+	reportEvent := func(count int64) {
+		if config.WorkCounter == nil || count <= 0 {
+			return
+		}
+		progressEvents += count
+		completedUnits := progressEvents * targetBudget / totalEvents
+		if completedUnits > targetBudget {
+			completedUnits = targetBudget
+		}
+		if delta := completedUnits - reportedUnits; delta > 0 {
+			config.WorkCounter(delta)
+			reportedUnits = completedUnits
+		}
+	}
+	for foldIndex, fold := range folds {
 		if err := ctx.Err(); err != nil {
 			return ModelReport{}, err
 		}
+		if config.Heartbeat != nil {
+			config.Heartbeat(fmt.Sprintf("%s：第 %d/%d fold", targetKind, foldIndex+1, len(folds)))
+		}
 		train := examples[fold.TrainStart : fold.TrainEnd+1]
 		validation := examples[fold.ValidationStart : fold.ValidationEnd+1]
-		evaluation, foldErr := fitAndScoreFold(ctx, features, targets, train, validation, targetKind, config)
+		foldConfig := config
+		foldConfig.Learner.GAM.WorkCounter = reportEvent
+		foldConfig.Learner.TCN.WorkCounter = reportEvent
+		evaluation, foldErr := fitAndScoreFold(ctx, features, targets, train, validation, targetKind, foldConfig, func() { reportEvent(1) })
 		if foldErr != nil {
 			return ModelReport{}, foldErr
 		}
@@ -475,6 +526,11 @@ func validateCandidate(ctx context.Context, features []FeaturePoint, targets []T
 		regionBrier = append(regionBrier, evaluation.SixRegionBrier)
 		reliability = append(reliability, evaluation.CalibrationError)
 		allCriteriaPassed = allCriteriaPassed && evaluation.CriteriaPassed
+	}
+	if config.WorkCounter != nil {
+		if delta := targetBudget - reportedUnits; delta > 0 {
+			config.WorkCounter(delta)
+		}
 	}
 	report.MeanLoss, report.StandardError = meanAndSE(losses)
 	report.MeanBaselineLoss, _ = meanAndSE(baselines)
@@ -517,7 +573,7 @@ type foldEvaluation struct {
 	CriteriaPassed                               bool
 }
 
-func fitAndScoreFold(ctx context.Context, features []FeaturePoint, targets []TargetPoint, train, validation []SupervisedExample, targetKind string, config TrainingConfig) (foldEvaluation, error) {
+func fitAndScoreFold(ctx context.Context, features []FeaturePoint, targets []TargetPoint, train, validation []SupervisedExample, targetKind string, config TrainingConfig, reportWork func()) (foldEvaluation, error) {
 	if err := ctx.Err(); err != nil {
 		return foldEvaluation{}, err
 	}
@@ -552,6 +608,7 @@ func fitAndScoreFold(ctx context.Context, features []FeaturePoint, targets []Tar
 			baseline += binaryLogLoss(prevalence, y)
 			brier += (prediction[0] - y) * (prediction[0] - y)
 			baselineBrier += (prevalence - y) * (prevalence - y)
+			reportWork()
 		}
 		denominator := float64(len(validation))
 		result := foldEvaluation{Loss: loss / denominator, BaselineLoss: baseline / denominator, CalibrationError: brier / denominator, BaselineCalibrationError: baselineBrier / denominator}
@@ -579,6 +636,7 @@ func fitAndScoreFold(ctx context.Context, features []FeaturePoint, targets []Tar
 			}
 			loss += mse(prediction, example.Target)
 			baseline += mse(means, example.Target)
+			reportWork()
 		}
 		denominator := float64(len(validation))
 		return foldEvaluation{Loss: loss / denominator, BaselineLoss: baseline / denominator, CriteriaPassed: loss <= baseline}, nil
@@ -641,6 +699,7 @@ func fitAndScoreFold(ctx context.Context, features []FeaturePoint, targets []Tar
 			regionPredictions = append(regionPredictions, regionValues)
 			regionBaselines = append(regionBaselines, baselineRegionValues)
 			regionLabels = append(regionLabels, regionClass)
+			reportWork()
 		}
 		denominator := float64(len(validation))
 		reliability := 0.5 * (multiclassReliabilityError(zeroPredictions, zeroLabels, 10) + multiclassReliabilityError(regionPredictions, regionLabels, 10))

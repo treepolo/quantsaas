@@ -19,19 +19,21 @@ import (
 )
 
 type Service struct {
-	db       *gorm.DB
-	registry *Registry
-	options  Options
-	logger   *zap.Logger
-	workerID string
-	rootCtx  context.Context
-	stopRoot context.CancelFunc
-	started  atomic.Bool
-	stopping atomic.Bool
-	sem      chan struct{}
-	mu       sync.Mutex
-	cancels  map[uint]map[uint]context.CancelFunc
-	wg       sync.WaitGroup
+	db        *gorm.DB
+	registry  *Registry
+	options   Options
+	logger    *zap.Logger
+	workerID  string
+	rootCtx   context.Context
+	stopRoot  context.CancelFunc
+	started   atomic.Bool
+	stopping  atomic.Bool
+	sem       chan struct{}
+	mu        sync.Mutex
+	cancels   map[uint]map[uint]context.CancelFunc
+	computeMu sync.RWMutex
+	computes  map[uint]*liveComputeMonitor
+	wg        sync.WaitGroup
 }
 
 func NewService(db *gorm.DB, registry *Registry, options Options, logger *zap.Logger) (*Service, error) {
@@ -52,7 +54,8 @@ func NewService(db *gorm.DB, registry *Registry, options Options, logger *zap.Lo
 		db: db, registry: registry, options: options, logger: logger,
 		workerID: fmt.Sprintf("worker-%d", time.Now().UTC().UnixNano()),
 		rootCtx:  rootCtx, stopRoot: cancel, sem: make(chan struct{}, options.Workers),
-		cancels: make(map[uint]map[uint]context.CancelFunc),
+		cancels:  make(map[uint]map[uint]context.CancelFunc),
+		computes: make(map[uint]*liveComputeMonitor),
 	}, nil
 }
 
@@ -165,7 +168,8 @@ func (s *Service) Create(ctx context.Context, userID uint, spec CreateSpec, conf
 			StageKey: plan.Snapshot.StageKey, StageType: plan.Snapshot.StageType, StageOrder: plan.Snapshot.StageOrder,
 			ManifestVersion: compute.ManifestSchemaVersion, ManifestHash: plan.Snapshot.ManifestHash, Manifest: saasstore.JSONB(plan.ManifestJSON),
 			TotalItems: plan.Manifest.TotalItems, EstimatedUnits: plan.Manifest.EstimatedUnits, UnknownUnitItems: plan.Manifest.UnknownUnitItems,
-			CacheHitCount: len(caches), NewItemCount: plan.Manifest.TotalItems - len(caches),
+			ComputeMonitorEnabled: spec.ComputeMonitorEnabled,
+			CacheHitCount:         len(caches), NewItemCount: plan.Manifest.TotalItems - len(caches),
 			ValidResultCount: len(caches), MissingCount: plan.Manifest.TotalItems - len(caches),
 			Progress:     compute.Progress(compute.ItemCounts{Total: plan.Manifest.TotalItems, Cached: len(caches)}),
 			Status:       compute.TaskStatusPlanned,
@@ -343,7 +347,25 @@ func (s *Service) Get(ctx context.Context, userID uint, taskID uint) (*TaskDescr
 		}
 		return nil, err
 	}
-	return s.taskDescriptor(ctx, task)
+	descriptor, err := s.taskDescriptor(ctx, task)
+	if err != nil {
+		return nil, err
+	}
+	s.overlayLiveCompute(descriptor)
+	return descriptor, nil
+}
+
+func (s *Service) overlayLiveCompute(descriptor *TaskDescriptor) {
+	if descriptor == nil || !descriptor.ComputeMonitorEnabled {
+		return
+	}
+	s.computeMu.RLock()
+	monitor := s.computes[descriptor.ID]
+	s.computeMu.RUnlock()
+	if monitor == nil {
+		return
+	}
+	descriptor.ComputedUnits, descriptor.PlannedComputeUnits, descriptor.ComputeUnitsPerSec, descriptor.ComputeRemainingSec, descriptor.ComputeCurrentStage, descriptor.ComputeLastHeartbeat = monitor.snapshot()
 }
 
 func (s *Service) Snapshot(ctx context.Context, userID uint, taskID uint) (*TaskSnapshot, error) {
@@ -429,7 +451,9 @@ func (s *Service) List(ctx context.Context, userID uint, filter ListFilter) ([]T
 	}
 	items := make([]TaskDescriptor, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, *taskDescriptorWithRelations(row, dependencyIDs[row.ID], childIDs[row.ID]))
+		descriptor := taskDescriptorWithRelations(row, dependencyIDs[row.ID], childIDs[row.ID])
+		s.overlayLiveCompute(descriptor)
+		items = append(items, *descriptor)
 	}
 	return items, nil
 }
@@ -486,7 +510,7 @@ func taskDescriptorWithRelations(task saasstore.ComputeTask, dependencyIDs, chil
 		ResearchSettingID: task.ResearchSettingID, ResearchSettingHash: task.ResearchSettingHash,
 		StageKey: task.StageKey, StageType: task.StageType, StageOrder: task.StageOrder,
 		ManifestVersion: task.ManifestVersion, ManifestHash: task.ManifestHash,
-		TotalItems: task.TotalItems, EstimatedUnits: task.EstimatedUnits, UnknownUnitItems: task.UnknownUnitItems,
+		TotalItems: task.TotalItems, EstimatedUnits: task.EstimatedUnits, UnknownUnitItems: task.UnknownUnitItems, ComputeMonitorEnabled: task.ComputeMonitorEnabled,
 		CacheHitCount: task.CacheHitCount, NewItemCount: task.NewItemCount,
 		ValidResultCount: task.ValidResultCount, FailedCount: task.FailedCount,
 		MissingCount: task.MissingCount, CancelledCount: task.CancelledCount,

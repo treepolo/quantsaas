@@ -420,55 +420,56 @@ type PerformanceReportChartBlock struct {
 // stage within a composite workflow. The immutable manifest and versions make
 // unfinished work resumable without regenerating a different plan.
 type ComputeTask struct {
-	ID                  uint `gorm:"primaryKey"`
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-	UserID              uint    `gorm:"not null;index"`
-	ParentTaskID        *uint   `gorm:"index;uniqueIndex:idx_compute_task_stage_key"`
-	Kind                string  `gorm:"size:24;not null;index"`
-	TaskType            string  `gorm:"size:80;not null;index"`
-	Title               string  `gorm:"size:160;not null"`
-	PlanKey             string  `gorm:"size:96;not null;index"`
-	ActiveKey           *string `gorm:"size:192;uniqueIndex"`
-	TaskSchemaVersion   string  `gorm:"size:40;not null"`
-	LifecycleVersion    string  `gorm:"size:40;not null"`
-	ExecutorType        string  `gorm:"size:80;not null;default:'';index"`
-	ExecutorVersion     string  `gorm:"size:40;not null;default:''"`
-	ResultSchemaVersion string  `gorm:"size:40;not null;default:''"`
-	SettingsHash        string  `gorm:"size:80;not null;default:'';index"`
-	Settings            JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ResearchSettingID   string  `gorm:"size:96;not null;default:'';index"`
-	ResearchSettingHash string  `gorm:"size:80;not null;default:'';index"`
-	StageKey            string  `gorm:"size:80;not null;default:'';uniqueIndex:idx_compute_task_stage_key"`
-	StageType           string  `gorm:"size:80;not null;default:''"`
-	StageOrder          int     `gorm:"not null;default:0"`
-	ManifestVersion     string  `gorm:"size:40;not null;default:''"`
-	ManifestHash        string  `gorm:"size:80;not null;default:'';index"`
-	Manifest            JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	TotalItems          int     `gorm:"not null;default:0"`
-	EstimatedUnits      int64   `gorm:"not null;default:0"`
-	UnknownUnitItems    int     `gorm:"not null;default:0"`
-	CacheHitCount       int     `gorm:"not null;default:0"`
-	NewItemCount        int     `gorm:"not null;default:0"`
-	ValidResultCount    int     `gorm:"not null;default:0"`
-	FailedCount         int     `gorm:"not null;default:0"`
-	MissingCount        int     `gorm:"not null;default:0"`
-	CancelledCount      int     `gorm:"not null;default:0"`
-	Progress            float64 `gorm:"type:numeric(10,6);not null;default:0"`
-	Status              string  `gorm:"size:24;not null;index"`
-	ErrorMessage        string  `gorm:"type:text"`
-	Attempt             int     `gorm:"not null;default:0"`
-	RNGAlgorithm        string  `gorm:"size:48;not null;default:''"`
-	RNGVersion          string  `gorm:"size:40;not null;default:''"`
-	RootSeed            *int64
-	RNGPosition         int64  `gorm:"not null;default:0"`
-	Checkpoint          JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	CheckpointHash      string `gorm:"size:80;not null;default:''"`
-	CancelRequestedAt   *time.Time
-	StartedAt           *time.Time
-	CompletedAt         *time.Time
-	CancelledAt         *time.Time
-	InvalidatedAt       *time.Time
+	ID                    uint `gorm:"primaryKey"`
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
+	UserID                uint    `gorm:"not null;index"`
+	ParentTaskID          *uint   `gorm:"index;uniqueIndex:idx_compute_task_stage_key"`
+	Kind                  string  `gorm:"size:24;not null;index"`
+	TaskType              string  `gorm:"size:80;not null;index"`
+	Title                 string  `gorm:"size:160;not null"`
+	PlanKey               string  `gorm:"size:96;not null;index"`
+	ActiveKey             *string `gorm:"size:192;uniqueIndex"`
+	TaskSchemaVersion     string  `gorm:"size:40;not null"`
+	LifecycleVersion      string  `gorm:"size:40;not null"`
+	ExecutorType          string  `gorm:"size:80;not null;default:'';index"`
+	ExecutorVersion       string  `gorm:"size:40;not null;default:''"`
+	ResultSchemaVersion   string  `gorm:"size:40;not null;default:''"`
+	SettingsHash          string  `gorm:"size:80;not null;default:'';index"`
+	Settings              JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ResearchSettingID     string  `gorm:"size:96;not null;default:'';index"`
+	ResearchSettingHash   string  `gorm:"size:80;not null;default:'';index"`
+	StageKey              string  `gorm:"size:80;not null;default:'';uniqueIndex:idx_compute_task_stage_key"`
+	StageType             string  `gorm:"size:80;not null;default:''"`
+	StageOrder            int     `gorm:"not null;default:0"`
+	ManifestVersion       string  `gorm:"size:40;not null;default:''"`
+	ManifestHash          string  `gorm:"size:80;not null;default:'';index"`
+	Manifest              JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	TotalItems            int     `gorm:"not null;default:0"`
+	EstimatedUnits        int64   `gorm:"not null;default:0"`
+	ComputeMonitorEnabled bool    `gorm:"not null;default:false"`
+	UnknownUnitItems      int     `gorm:"not null;default:0"`
+	CacheHitCount         int     `gorm:"not null;default:0"`
+	NewItemCount          int     `gorm:"not null;default:0"`
+	ValidResultCount      int     `gorm:"not null;default:0"`
+	FailedCount           int     `gorm:"not null;default:0"`
+	MissingCount          int     `gorm:"not null;default:0"`
+	CancelledCount        int     `gorm:"not null;default:0"`
+	Progress              float64 `gorm:"type:numeric(10,6);not null;default:0"`
+	Status                string  `gorm:"size:24;not null;index"`
+	ErrorMessage          string  `gorm:"type:text"`
+	Attempt               int     `gorm:"not null;default:0"`
+	RNGAlgorithm          string  `gorm:"size:48;not null;default:''"`
+	RNGVersion            string  `gorm:"size:40;not null;default:''"`
+	RootSeed              *int64
+	RNGPosition           int64  `gorm:"not null;default:0"`
+	Checkpoint            JSONB  `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	CheckpointHash        string `gorm:"size:80;not null;default:''"`
+	CancelRequestedAt     *time.Time
+	StartedAt             *time.Time
+	CompletedAt           *time.Time
+	CancelledAt           *time.Time
+	InvalidatedAt         *time.Time
 
 	Parent       *ComputeTask            `gorm:"foreignKey:ParentTaskID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`
 	Children     []ComputeTask           `gorm:"foreignKey:ParentTaskID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;" json:"-"`

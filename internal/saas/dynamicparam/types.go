@@ -59,6 +59,7 @@ type CreateStudyRequest struct {
 	LongTermFilterEnabled bool               `json:"long_term_filter_enabled"`
 	LongTermFilterMonths  int                `json:"long_term_filter_months"`
 	ActivityKappa         float64            `json:"activity_kappa"`
+	ComputeMonitorEnabled *bool              `json:"compute_monitor_enabled,omitempty"`
 	ConfirmSoftLimit      bool               `json:"confirm_soft_limit"`
 }
 
@@ -177,7 +178,12 @@ type CreateStudyResponse struct {
 }
 
 type MaterializeRequest struct {
-	ConfirmSoftLimit bool `json:"confirm_soft_limit"`
+	ComputeMonitorEnabled *bool `json:"compute_monitor_enabled,omitempty"`
+	ConfirmSoftLimit      bool  `json:"confirm_soft_limit"`
+}
+
+func monitorEnabled(value *bool) bool {
+	return value == nil || *value
 }
 
 type MaterializeResponse struct {

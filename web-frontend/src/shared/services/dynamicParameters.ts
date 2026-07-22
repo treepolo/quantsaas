@@ -69,6 +69,7 @@ export type CreateDynamicStudy = {
   };
   long_term_filter_enabled: boolean;
   long_term_filter_months: number;
+  compute_monitor_enabled?: boolean;
   confirm_soft_limit?: boolean;
 };
 
@@ -95,8 +96,11 @@ export const dynamicParametersApi = {
   get(id: number) {
     return apiFetch<DynamicStudy>(`/dynamic-parameters/studies/${id}`);
   },
-  materialize(id: number, confirmSoftLimit = false) {
-    return apiFetch<{ study: DynamicStudy; task: ComputeTask }>(`/dynamic-parameters/studies/${id}/materialize`, { method: "POST", body: JSON.stringify({ confirm_soft_limit: confirmSoftLimit }) });
+  materialize(id: number, confirmSoftLimit = false, computeMonitorEnabled = true) {
+    return apiFetch<{ study: DynamicStudy; task: ComputeTask }>(`/dynamic-parameters/studies/${id}/materialize`, { method: "POST", body: JSON.stringify({ confirm_soft_limit: confirmSoftLimit, compute_monitor_enabled: computeMonitorEnabled }) });
+  },
+  previewMaterialize(id: number, computeMonitorEnabled = true) {
+    return apiFetch<ComputePlanPreview>(`/dynamic-parameters/studies/${id}/materialize/preview`, { method: "POST", body: JSON.stringify({ compute_monitor_enabled: computeMonitorEnabled }) });
   },
   reportBlock(id: number, blockId: string) {
     return apiFetch<ReportBlock>(`/dynamic-parameters/studies/${id}/report-blocks/${blockId}`);

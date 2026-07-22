@@ -235,6 +235,7 @@ func (s *Service) executeClaim(claim *claimedItem) {
 	}
 
 	cacheEntry := reservation.entry
+	s.ensureLiveCompute(claim.task)
 	heartbeatDone := make(chan struct{})
 	var heartbeatWG sync.WaitGroup
 	heartbeatWG.Add(1)
@@ -260,6 +261,8 @@ func (s *Service) executeClaim(claim *claimedItem) {
 		RNG:         compute.RNGSpec{Algorithm: claim.task.RNGAlgorithm, Version: claim.task.RNGVersion, RootSeed: claim.task.RootSeed},
 		RNGPosition: claim.item.RNGPosition,
 		Report:      report,
+		CountUnits:  s.countLiveCompute(claim.task.ID),
+		Heartbeat:   func(stage string) { s.heartbeatLiveCompute(claim.task.ID, stage) },
 	}
 	result, executeErr := safeExecute(ctx, claim.executor, execution)
 	if executeErr != nil {
@@ -434,6 +437,7 @@ func (s *Service) heartbeat(ctx context.Context, cancel context.CancelFunc, clai
 		case <-done:
 			return
 		case <-ticker.C:
+			s.heartbeatLiveCompute(claim.task.ID, "")
 			now := time.Now().UTC()
 			expiresAt := now.Add(s.options.LeaseDuration)
 			itemResult := s.db.WithContext(ctx).Model(&saasstore.ComputeTaskItem{}).
@@ -776,7 +780,7 @@ func (s *Service) refreshTaskTree(ctx context.Context, taskID uint) error {
 }
 
 func (s *Service) refreshAtomicTask(ctx context.Context, taskID uint) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var task saasstore.ComputeTask
 		if err := tx.Where("id = ?", taskID).First(&task).Error; err != nil {
 			return err
@@ -839,6 +843,16 @@ func (s *Service) refreshAtomicTask(ctx context.Context, taskID uint) error {
 		}
 		return tx.Model(&saasstore.ComputeTask{}).Where("id = ?", taskID).Updates(updates).Error
 	})
+	if err == nil {
+		var status string
+		if queryErr := s.db.WithContext(ctx).Model(&saasstore.ComputeTask{}).Where("id = ?", taskID).Pluck("status", &status).Error; queryErr == nil {
+			switch status {
+			case compute.TaskStatusCompleted, compute.TaskStatusFailed, compute.TaskStatusPartial, compute.TaskStatusCancelled, compute.TaskStatusInvalidated:
+				s.clearLiveCompute(taskID)
+			}
+		}
+	}
+	return err
 }
 
 func (s *Service) refreshCompositeTask(ctx context.Context, taskID uint) error {

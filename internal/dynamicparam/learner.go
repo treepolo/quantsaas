@@ -18,11 +18,12 @@ type SupervisedExample struct {
 }
 
 type GAMConfig struct {
-	Interactions bool    `json:"interactions"`
-	L1Penalty    float64 `json:"l1_penalty"`
-	L2Penalty    float64 `json:"l2_penalty"`
-	Epochs       int     `json:"epochs"`
-	LearningRate float64 `json:"learning_rate"`
+	Interactions bool        `json:"interactions"`
+	L1Penalty    float64     `json:"l1_penalty"`
+	L2Penalty    float64     `json:"l2_penalty"`
+	Epochs       int         `json:"epochs"`
+	LearningRate float64     `json:"learning_rate"`
+	WorkCounter  func(int64) `json:"-"`
 }
 
 type GAMModel struct {
@@ -70,6 +71,9 @@ func TrainGAMContext(ctx context.Context, examples []SupervisedExample, outputs 
 			if basisErr != nil {
 				return GAMModel{}, basisErr
 			}
+			if config.WorkCounter != nil {
+				config.WorkCounter(1)
+			}
 			raw := matrixVector(model.Weights, basis)
 			prediction := activate(raw, loss)
 			gradient := outputGradient(prediction, example.Target, loss)
@@ -102,12 +106,13 @@ func (model GAMModel) Predict(feature FeaturePoint) ([]float64, error) {
 }
 
 type TCNConfig struct {
-	Hidden       int     `json:"hidden"`
-	KernelSize   int     `json:"kernel_size"`
-	Dilations    []int   `json:"dilations"`
-	Epochs       int     `json:"epochs"`
-	LearningRate float64 `json:"learning_rate"`
-	L2Penalty    float64 `json:"l2_penalty"`
+	Hidden       int         `json:"hidden"`
+	KernelSize   int         `json:"kernel_size"`
+	Dilations    []int       `json:"dilations"`
+	Epochs       int         `json:"epochs"`
+	LearningRate float64     `json:"learning_rate"`
+	L2Penalty    float64     `json:"l2_penalty"`
+	WorkCounter  func(int64) `json:"-"`
 }
 
 type TCNLayer struct {
@@ -171,6 +176,9 @@ func TrainTCNContext(ctx context.Context, examples []SupervisedExample, outputs 
 			}
 			if err := model.trainExample(example); err != nil {
 				return TCNModel{}, err
+			}
+			if config.WorkCounter != nil {
+				config.WorkCounter(1)
 			}
 		}
 	}

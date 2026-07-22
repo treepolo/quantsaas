@@ -38,6 +38,13 @@ func (executor *TrainExecutor) Execute(ctx context.Context, execution computetas
 	if input.SchemaVersion != TrainInputVersion || (input.Horizon != core.HorizonOneDay && input.Horizon != core.HorizonTwentyDay) {
 		return nil, ErrInvalidRequest
 	}
+	input.Training.WorkCounter = func(units int64) {
+		if input.Training.Route == core.RouteTCN {
+			units *= 4
+		}
+		execution.CountUnits(units)
+	}
+	input.Training.Heartbeat = execution.Heartbeat
 	bars, err := loadScopedBars(ctx, executor.db, input.Scope)
 	if err != nil {
 		return nil, err
@@ -275,6 +282,8 @@ func (executor *MaterializeExecutor) Execute(ctx context.Context, execution comp
 		SchemaVersion: core.PredictionSchemaVersion, ActivityLookback: twenty.Activity.Lookback, ActivityScale: twenty.ActivityScale,
 		StateRules: policy.StateRules, Policy: policy.Policy, BaseChromosome: policy.BaseChromosome,
 		ModelArtifactHash: input.ArtifactSetHash, PredictionHash: input.PredictionSnapshotHash, PolicyHash: input.PolicyHash,
+		WorkCounter: execution.CountUnits,
+		Heartbeat:   execution.Heartbeat,
 	})
 	if err != nil {
 		return nil, err

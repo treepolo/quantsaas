@@ -25,6 +25,8 @@ type Execution struct {
 	RNG         compute.RNGSpec
 	RNGPosition int64
 	Report      func(context.Context, ProgressUpdate) error
+	CountUnits  func(int64)
+	Heartbeat   func(string)
 }
 
 type Executor interface {

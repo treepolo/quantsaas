@@ -86,6 +86,24 @@ func (h *DynamicParameterHandler) Materialize(c *gin.Context) {
 	c.JSON(http.StatusCreated, result)
 }
 
+func (h *DynamicParameterHandler) PreviewMaterialize(c *gin.Context) {
+	id, ok := parseIDParam(c)
+	if !ok {
+		return
+	}
+	var req dynamicparamsvc.MaterializeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := h.service.PreviewMaterialize(c.Request.Context(), currentUserID(c), id, req)
+	if err != nil {
+		h.respondError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
 func (h *DynamicParameterHandler) ReportBlock(c *gin.Context) {
 	id, ok := parseIDParam(c)
 	if !ok {

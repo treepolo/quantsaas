@@ -39,6 +39,13 @@ export type ComputeTask = {
   manifest?: unknown;
   total_items: number;
   estimated_units: number;
+  compute_monitor_enabled?: boolean;
+  computed_units?: number;
+  planned_compute_units?: number;
+  compute_units_per_sec?: number;
+  compute_remaining_sec?: number;
+  compute_current_stage?: string;
+  compute_last_heartbeat?: string;
   unknown_unit_items: number;
   cache_hit_count: number;
   new_item_count: number;

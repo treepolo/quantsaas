@@ -206,7 +206,7 @@ func (s *Service) prepare(ctx context.Context, req CreateStudyRequest) (prepared
 		}
 		items = append(items, compute.ManifestItemInput{Key: fmt.Sprintf("horizon-%d", horizon), CacheKey: "p09-train:" + compute.HashBytes(raw), Input: raw, EstimatedUnits: int64(len(bars)*len(req.Lookbacks)) * multiplier})
 	}
-	spec := computetask.CreateSpec{Kind: compute.TaskKindAtomic, TaskType: "p09.dynamic-model.train", Title: req.Name, ExecutorType: TrainExecutorType, Settings: setting, ResearchSettingID: fmt.Sprintf("p09-genome:%d", req.GenomeID), ResearchSettingHash: compute.HashBytes(settingRaw), StageKey: "training", StageType: req.Route, Items: items}
+	spec := computetask.CreateSpec{Kind: compute.TaskKindAtomic, TaskType: "p09.dynamic-model.train", Title: req.Name, ExecutorType: TrainExecutorType, Settings: setting, ResearchSettingID: fmt.Sprintf("p09-genome:%d", req.GenomeID), ResearchSettingHash: compute.HashBytes(settingRaw), StageKey: "training", StageType: req.Route, ComputeMonitorEnabled: monitorEnabled(req.ComputeMonitorEnabled), Items: items}
 	return preparedStudy{request: req, scope: scope, settingRaw: settingRaw, spec: spec}, nil
 }
 
@@ -522,7 +522,7 @@ func (s *Service) Materialize(ctx context.Context, userID, studyID uint, req Mat
 	backtestRequest := backtest.CreateRequest{StrategyID: sigmoiddca.StrategyID, InstrumentID: study.InstrumentID, DataSource: study.DataSource, ExecutionMode: study.ExecutionMode, StartTimeMs: study.TrainStartTimeMs, EndTimeMs: study.TrainEndTimeMs, Symbol: study.Symbol, Pair: study.Symbol, Interval: study.Interval, Source: backtest.SourceCustom, CustomParams: json.RawMessage(gene.ParamPack), LongTermFilterEnabled: &setting.Request.LongTermFilterEnabled, LongTermFilterMonths: setting.Request.LongTermFilterMonths}
 	input := MaterializeExecutionInput{SchemaVersion: MaterializeInputVersion, StudyID: study.ID, ArtifactSetHash: study.ArtifactSetHash, PredictionSnapshotHash: prediction.ContentHash, PolicyHash: policy.ContentHash, Scope: MarketScope{InstrumentID: study.InstrumentID, DataSource: study.DataSource, Symbol: study.Symbol, Interval: study.Interval, StartTimeMs: study.TrainStartTimeMs, EndTimeMs: study.TrainEndTimeMs, DatasetHash: study.DatasetHash}, Backtest: backtestRequest}
 	raw, _ := compute.CanonicalJSON(input)
-	spec := computetask.CreateSpec{Kind: compute.TaskKindAtomic, TaskType: "p09.dynamic-model.materialize", Title: study.Name + "：物化與回測", ExecutorType: MaterializeExecutorType, Settings: input, ResearchSettingID: fmt.Sprintf("p09-study:%d", study.ID), ResearchSettingHash: study.SettingHash, StageKey: "materialization", StageType: "dynamic-backtest", Items: []compute.ManifestItemInput{{Key: "materialize", CacheKey: "p09-materialize:" + compute.HashBytes(raw), Input: raw, EstimatedUnits: int64(prediction.PredictionCount)}}}
+	spec := computetask.CreateSpec{Kind: compute.TaskKindAtomic, TaskType: "p09.dynamic-model.materialize", Title: study.Name + "：物化與回測", ExecutorType: MaterializeExecutorType, Settings: input, ResearchSettingID: fmt.Sprintf("p09-study:%d", study.ID), ResearchSettingHash: study.SettingHash, StageKey: "materialization", StageType: "dynamic-backtest", ComputeMonitorEnabled: monitorEnabled(req.ComputeMonitorEnabled), Items: []compute.ManifestItemInput{{Key: "materialize", CacheKey: "p09-materialize:" + compute.HashBytes(raw), Input: raw, EstimatedUnits: int64(prediction.PredictionCount)}}}
 	task, err := s.computeTasks.Create(ctx, userID, spec, req.ConfirmSoftLimit)
 	if err != nil {
 		return MaterializeResponse{}, err
@@ -538,6 +538,50 @@ func (s *Service) Materialize(ctx context.Context, userID, studyID uint, req Mat
 	}
 	updated, err := s.describe(ctx, study, true)
 	return MaterializeResponse{Study: updated, Task: task}, err
+}
+
+// PreviewMaterialize builds the immutable second-stage plan without creating
+// or starting a compute task. It shares the same input identity as Materialize.
+func (s *Service) PreviewMaterialize(ctx context.Context, userID, studyID uint, req MaterializeRequest) (computetask.PlanPreview, error) {
+	if s.computeTasks == nil {
+		return computetask.PlanPreview{}, computetask.ErrServiceUnavailable
+	}
+	descriptor, err := s.Get(ctx, userID, studyID)
+	if err != nil {
+		return computetask.PlanPreview{}, err
+	}
+	if descriptor.Status != StudyStatusAwaitingMaterialization || descriptor.PredictionSnapshotID == nil || descriptor.PolicyArtifactID == nil {
+		return computetask.PlanPreview{}, ErrInvalidRequest
+	}
+	var study saasstore.DynamicModelStudy
+	if err := s.db.WithContext(ctx).Where("id = ? AND owner_user_id = ?", studyID, userID).First(&study).Error; err != nil {
+		return computetask.PlanPreview{}, err
+	}
+	var setting StudySetting
+	if err := json.Unmarshal(study.Settings, &setting); err != nil {
+		return computetask.PlanPreview{}, err
+	}
+	var prediction saasstore.DynamicPredictionSnapshot
+	if err := s.db.WithContext(ctx).First(&prediction, *study.PredictionSnapshotID).Error; err != nil {
+		return computetask.PlanPreview{}, err
+	}
+	var gene saasstore.GeneRecord
+	if err := s.db.WithContext(ctx).First(&gene, setting.Request.GenomeID).Error; err != nil {
+		return computetask.PlanPreview{}, err
+	}
+	backtestRequest := backtest.CreateRequest{StrategyID: sigmoiddca.StrategyID, InstrumentID: study.InstrumentID, DataSource: study.DataSource, ExecutionMode: study.ExecutionMode, StartTimeMs: study.TrainStartTimeMs, EndTimeMs: study.TrainEndTimeMs, Symbol: study.Symbol, Pair: study.Symbol, Interval: study.Interval, Source: backtest.SourceCustom, CustomParams: json.RawMessage(gene.ParamPack), LongTermFilterEnabled: &setting.Request.LongTermFilterEnabled, LongTermFilterMonths: setting.Request.LongTermFilterMonths}
+	input := MaterializeExecutionInput{SchemaVersion: MaterializeInputVersion, StudyID: study.ID, ArtifactSetHash: study.ArtifactSetHash, PredictionSnapshotHash: prediction.ContentHash, PolicyHash: descriptor.SettingHash, Scope: MarketScope{InstrumentID: study.InstrumentID, DataSource: study.DataSource, Symbol: study.Symbol, Interval: study.Interval, StartTimeMs: study.TrainStartTimeMs, EndTimeMs: study.TrainEndTimeMs, DatasetHash: study.DatasetHash}, Backtest: backtestRequest}
+	var policy saasstore.DynamicPolicyArtifact
+	if err := s.db.WithContext(ctx).First(&policy, *study.PolicyArtifactID).Error; err != nil {
+		return computetask.PlanPreview{}, err
+	}
+	input.PolicyHash = policy.ContentHash
+	raw, err := compute.CanonicalJSON(input)
+	if err != nil {
+		return computetask.PlanPreview{}, err
+	}
+	spec := computetask.CreateSpec{Kind: compute.TaskKindAtomic, TaskType: "p09.dynamic-model.materialize", Title: study.Name + "：物化與回測", ExecutorType: MaterializeExecutorType, Settings: input, ResearchSettingID: fmt.Sprintf("p09-study:%d", study.ID), ResearchSettingHash: study.SettingHash, StageKey: "materialization", StageType: "dynamic-backtest", ComputeMonitorEnabled: monitorEnabled(req.ComputeMonitorEnabled), Items: []compute.ManifestItemInput{{Key: "materialize", CacheKey: "p09-materialize:" + compute.HashBytes(raw), Input: raw, EstimatedUnits: int64(prediction.PredictionCount)}}}
+	return s.computeTasks.Preview(ctx, userID, spec)
 }
 
 func (s *Service) syncMaterialization(ctx context.Context, study *saasstore.DynamicModelStudy, task *computetask.TaskDescriptor) error {

@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ComputePlanPreview, ComputeTask, ComputeTaskStatus } from "../../shared/services/computeTasks";
 
 const statusLabels: Record<ComputeTaskStatus, string> = {
@@ -34,7 +35,7 @@ export function ComputeProgress({ task, compact = false }: { task: ComputeTask; 
   return (
     <div className="space-y-2">
       <div className="h-2 overflow-hidden rounded-full bg-white/[0.05]">
-        <div className="h-full bg-[#2dd4bf]" style={{ width: `${percent}%` }} />
+        <div className="h-full bg-[#2dd4bf] transition-[width] duration-[1200ms] ease-out" style={{ width: `${percent}%` }} />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
         <span>
@@ -48,6 +49,16 @@ export function ComputeProgress({ task, compact = false }: { task: ComputeTask; 
           <Count label="缺漏" value={finiteCount(task.missing_count)} />
           <Count label="快取" value={finiteCount(task.cache_hit_count)} tone="text-teal-300" />
         </div>
+      )}
+      {task.compute_monitor_enabled && (
+        <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+          <Count label="本次計算量" value={<><AnimatedInteger value={finiteCount(task.computed_units)} /> / {finiteCount(task.planned_compute_units ?? task.estimated_units).toLocaleString()}</>} />
+          <Count label="計算速度" value={`${finiteCount(task.compute_units_per_sec)} 單位／秒`} />
+          <Count label="預估剩餘" value={task.compute_remaining_sec && task.compute_remaining_sec > 0 ? `${Math.ceil(task.compute_remaining_sec)} 秒` : "未知"} />
+        </div>
+      )}
+      {task.compute_monitor_enabled && (task.compute_current_stage || task.compute_last_heartbeat) && (
+        <div className="text-xs text-slate-500">目前階段：{task.compute_current_stage || "執行中"} · 最後心跳：{task.compute_last_heartbeat ? new Date(task.compute_last_heartbeat).toLocaleTimeString() : "未知"}</div>
       )}
     </div>
   );
@@ -105,12 +116,34 @@ function Metric({ label, value, tone = "text-slate-100" }: { label: string; valu
   );
 }
 
-function Count({ label, value, tone = "text-slate-400" }: { label: string; value: number; tone?: string }) {
+function Count({ label, value, tone = "text-slate-400" }: { label: string; value: ReactNode; tone?: string }) {
   return (
     <div className="rounded-md bg-white/[0.025] px-2 py-1.5">
-      <span className="text-slate-600">{label}</span> <span className={tone}>{value.toLocaleString()}</span>
+      <span className="text-slate-600">{label}</span> <span className={tone}>{value}</span>
     </div>
   );
+}
+
+function AnimatedInteger({ value }: { value: number }) {
+  const [displayed, setDisplayed] = useState(value);
+  const current = useRef(value);
+  useEffect(() => {
+    const from = current.current;
+    const started = performance.now();
+    const duration = 1200;
+    let frame = 0;
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const next = from + (value - from) * eased;
+      current.current = next;
+      setDisplayed(next);
+      if (progress < 1) frame = requestAnimationFrame(animate);
+    };
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [value]);
+  return <span>{Math.round(displayed).toLocaleString()}</span>;
 }
 
 function HashLine({ label, value }: { label: string; value: string }) {

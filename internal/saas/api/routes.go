@@ -215,6 +215,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/dynamic-parameters/studies/preview", dynamicParameterHandler.Preview)
 	lab.POST("/dynamic-parameters/studies", dynamicParameterHandler.Create)
 	lab.GET("/dynamic-parameters/studies", dynamicParameterHandler.List)
+	lab.POST("/dynamic-parameters/studies/:id/materialize/preview", dynamicParameterHandler.PreviewMaterialize)
 	lab.GET("/dynamic-parameters/studies/:id", dynamicParameterHandler.Get)
 	lab.POST("/dynamic-parameters/studies/:id/materialize", dynamicParameterHandler.Materialize)
 	lab.GET("/dynamic-parameters/studies/:id/report-blocks/:blockID", dynamicParameterHandler.ReportBlock)
