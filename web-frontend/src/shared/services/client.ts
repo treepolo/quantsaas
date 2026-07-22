@@ -37,7 +37,10 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
       ...headers
     }
   }).catch((error: Error) => {
-    throw new ApiRequestError(0, error.message || "Network error");
+    const message = error.message === "Failed to fetch"
+      ? "伺服器未在等待時間內回應，或服務連線已中斷；請查看計算任務與服務狀態。"
+      : error.message || "Network error";
+    throw new ApiRequestError(0, message);
   });
 
   const payload = await parseResponse(response);

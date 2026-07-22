@@ -47,6 +47,7 @@ export type BacktestResult = {
   w_breakout?: number;
   nav: EquitySnapshot[];
   windows: Record<string, number>;
+  error?: string;
 };
 
 export type StandardBacktestResult = {

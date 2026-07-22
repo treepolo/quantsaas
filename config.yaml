@@ -28,4 +28,4 @@ jwt:
 server:
   addr: ":8080"
   read_timeout_seconds: 15
-  write_timeout_seconds: 30
+  write_timeout_seconds: 600

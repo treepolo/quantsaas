@@ -343,6 +343,11 @@ export function BacktestingPage() {
   const [backtestEnd, setBacktestEnd] = useState("");
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [comparisonResults, setComparisonResults] = useState<ComparisonResult[]>([]);
+  const [pendingComparisonResults, setPendingComparisonResults] = useState<ComparisonResult[]>([]);
+  const [primaryRunId, setPrimaryRunId] = useState(0);
+  const [pendingRunIds, setPendingRunIds] = useState<number[]>([]);
+  const [refreshPending, setRefreshPending] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [range, setRange] = useState<ChartRange | null>(null);
   const [scaleMode, setScaleMode] = useState<ScaleMode>("absolute");
   const [valueMode, setValueMode] = useState<ValueMode>("nav");
@@ -415,8 +420,14 @@ export function BacktestingPage() {
       return { primary, comparisons: [] as ComparisonResult[] };
     },
     onSuccess: ({ primary, comparisons }) => {
-      setResult(primary);
-      setComparisonResults(comparisons);
+      const allRuns = comparisons.length > 0 ? comparisons.map((item) => item.result) : [primary];
+      setPrimaryRunId(primary.id);
+      setPendingRunIds(allRuns.filter((run) => run.status === "running").map((run) => run.id));
+      setResult(primary.status === "completed" ? primary : null);
+      setPendingComparisonResults(comparisons);
+      setComparisonResults(comparisons.filter((item) => item.result.status === "completed"));
+      const failed = allRuns.find((run) => run.status === "failed" || run.status === "cancelled");
+      setRefreshError(failed ? failed.error || `回測 #${failed.id} 未完成：${failed.status}` : null);
     }
   });
 
@@ -467,9 +478,35 @@ export function BacktestingPage() {
 
   useEffect(() => {
     if (!linkedRunQuery.data) return;
-    setResult(linkedRunQuery.data);
+    setPrimaryRunId(linkedRunQuery.data.id);
+    setPendingRunIds(linkedRunQuery.data.status === "running" ? [linkedRunQuery.data.id] : []);
+    setResult(linkedRunQuery.data.status === "completed" ? linkedRunQuery.data : null);
+    setPendingComparisonResults([]);
     setComparisonResults([]);
   }, [linkedRunQuery.data]);
+
+  async function refreshPendingRuns() {
+    if (pendingRunIds.length === 0 || refreshPending) return;
+    setRefreshPending(true);
+    setRefreshError(null);
+    try {
+      const refreshed = await Promise.all(pendingRunIds.map((id) => backtestsApi.get(id)));
+      const refreshedByID = new Map(refreshed.map((run) => [run.id, run]));
+      const stillPending = refreshed.filter((run) => run.status === "running").map((run) => run.id);
+      setPendingRunIds(stillPending);
+      const primary = refreshedByID.get(primaryRunId);
+      if (primary?.status === "completed") setResult(primary);
+      const updatedComparisons = pendingComparisonResults.map((item) => ({ ...item, result: refreshedByID.get(item.result.id) ?? item.result }));
+      setPendingComparisonResults(updatedComparisons);
+      setComparisonResults(updatedComparisons.filter((item) => item.result.status === "completed"));
+      const failed = refreshed.find((run) => run.status === "failed" || run.status === "cancelled");
+      if (failed) setRefreshError(failed.error || `回測 #${failed.id} 未完成：${failed.status}`);
+    } catch (error) {
+      setRefreshError(error instanceof Error ? error.message : "讀取回測狀態失敗");
+    } finally {
+      setRefreshPending(false);
+    }
+  }
 
   const visibleRawChartData = useMemo(() => {
     if (!range) return chartData;
@@ -509,6 +546,11 @@ export function BacktestingPage() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setResult(null);
+    setComparisonResults([]);
+    setPendingComparisonResults([]);
+    setPendingRunIds([]);
+    setRefreshError(null);
     startMutation.mutate();
   }
 
@@ -648,6 +690,8 @@ export function BacktestingPage() {
 
       {linkedRunQuery.isLoading ? <Card className="p-4 text-sm text-slate-500">讀取原始回測 #{initialRun} 中…</Card> : null}
       {linkedRunQuery.error ? <Card className="p-4 text-sm text-[#fecaca]">{String(linkedRunQuery.error.message)}</Card> : null}
+
+      {pendingRunIds.length > 0 ? <Card className="border-amber-500/20 bg-amber-500/5 p-4 text-sm text-amber-100"><div>回測正在背景執行中，尚未完成；目前不顯示空白結果。</div><div className="mt-1 text-xs text-amber-200/70">待完成回測：{pendingRunIds.map((id) => `#${id}`).join("、")}</div><div className="mt-3"><Button type="button" variant="secondary" icon={RotateCcw} loading={refreshPending} onClick={refreshPendingRuns}>重新整理結果</Button></div>{refreshError ? <div className="mt-2 text-sm text-rose-200">{refreshError}</div> : null}</Card> : null}
 
       {result ? (
         <>

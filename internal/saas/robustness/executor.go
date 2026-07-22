@@ -20,7 +20,11 @@ type PointExecutor struct {
 	slots     chan struct{}
 }
 
-const defaultPointConcurrency = 2
+// Keep one full backtest resident at a time for a robustness task. Each point
+// materializes bars and a complete result path; allowing several points to do
+// that concurrently can exhaust the SaaS container even when the task item
+// count itself is modest.
+const defaultPointConcurrency = 1
 
 func NewPointExecutor(db *gorm.DB) *PointExecutor {
 	return &PointExecutor{db: db, backtests: backtest.NewService(db), slots: make(chan struct{}, defaultPointConcurrency)}

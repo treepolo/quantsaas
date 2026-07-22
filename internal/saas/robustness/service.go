@@ -27,6 +27,11 @@ type Service struct {
 	computeTasks *computetask.Service
 }
 
+// MaxMultidimensionalSampleCount bounds the size of a sparse preview/task
+// manifest. Sparse sampling is point-count driven, so allowing an unbounded
+// count can still create an unnecessarily large request and cache lookup.
+const MaxMultidimensionalSampleCount = 1000
+
 func NewService(db *gorm.DB, tasks *computetask.Service) *Service {
 	return &Service{db: db, computeTasks: tasks}
 }
@@ -163,7 +168,7 @@ func (s *Service) prepareStudy(ctx context.Context, req CreateStudyRequest) (pre
 			return preparedStudy{}, computetask.CreateSpec{}, nil, nil, ErrInvalidRequest
 		}
 	case ModeMultidimensional:
-		if axisCount < 2 || req.SampleCount < 1 {
+		if axisCount < 2 || req.SampleCount < 1 || req.SampleCount > MaxMultidimensionalSampleCount {
 			return preparedStudy{}, computetask.CreateSpec{}, nil, nil, ErrInvalidRequest
 		}
 	default:

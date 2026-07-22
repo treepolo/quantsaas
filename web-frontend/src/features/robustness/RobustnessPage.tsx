@@ -264,7 +264,7 @@ export function RobustnessPage() {
             <Field label="開始日期"><input className={inputClass} type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field>
             <Field label="結束日期"><input className={inputClass} type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></Field>
             <Field label="多尺度半徑"><input className={inputClass} value={radiiText} onChange={(event) => setRadiiText(event.target.value)} placeholder="1,2,3,5,8,13" /></Field>
-            {mode === "multidimensional" && <Field label="抽樣點數"><input className={inputClass} type="number" min={1} value={sampleCount} onChange={(event) => setSampleCount(Number(event.target.value))} /></Field>}
+            {mode === "multidimensional" && <Field label="抽樣點數"><input className={inputClass} type="number" min={1} max={1000} value={sampleCount} onChange={(event) => setSampleCount(Math.min(1000, Math.max(1, Number(event.target.value))))} /><div className="mt-1 text-xs text-slate-500">最多 1,000 點</div></Field>}
           </div>
           <div className="mt-4">
             <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">研究變數</div>

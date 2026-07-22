@@ -82,7 +82,7 @@ func Default() Config {
 		Server: ServerConfig{
 			Addr:                ":8080",
 			ReadTimeoutSeconds:  15,
-			WriteTimeoutSeconds: 30,
+			WriteTimeoutSeconds: 600,
 		},
 	}
 }
@@ -138,6 +138,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Server.Addr) == "" {
 		return errors.New("server.addr is required")
 	}
+	if c.Server.ReadTimeoutSeconds <= 0 || c.Server.WriteTimeoutSeconds <= 0 {
+		return errors.New("server read/write timeouts must be positive")
+	}
 	return nil
 }
 
@@ -189,5 +192,15 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("SERVER_ADDR"); v != "" {
 		cfg.Server.Addr = v
+	}
+	if v := os.Getenv("SERVER_READ_TIMEOUT_SECONDS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			cfg.Server.ReadTimeoutSeconds = parsed
+		}
+	}
+	if v := os.Getenv("SERVER_WRITE_TIMEOUT_SECONDS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			cfg.Server.WriteTimeoutSeconds = parsed
+		}
 	}
 }
