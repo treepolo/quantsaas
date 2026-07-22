@@ -254,6 +254,13 @@ func (s *Service) metricsForResult(ctx context.Context, resultID uint) (MetricSe
 	if err != nil || loaded.Summary == nil {
 		return MetricSet{}, err
 	}
+	var practical struct {
+		TotalReturn *float64 `json:"practical_total_return"`
+		MaxDrawdown *float64 `json:"practical_max_drawdown"`
+		FinalEquity *float64 `json:"practical_final_equity"`
+		TradeCount  *int     `json:"practical_trade_count"`
+	}
+	_ = json.Unmarshal(loaded.Summary.Extra, &practical)
 	points := make([]performancecore.Point, 0)
 	for _, block := range loaded.Blocks {
 		for _, point := range block.Points {
@@ -261,14 +268,30 @@ func (s *Service) metricsForResult(ctx context.Context, resultID uint) (MetricSe
 			if point.BenchmarkEquity != nil {
 				benchmark = *point.BenchmarkEquity
 			}
-			points = append(points, performancecore.Point{TimeMs: point.TimeMs, NAV: point.TotalEquity, BenchmarkNAV: benchmark, ActualExposure: point.ActualExposureWeight})
+			points = append(points, performancecore.Point{TimeMs: point.TimeMs, NAV: point.PracticalTotalEquity, BenchmarkNAV: benchmark, ActualExposure: point.PracticalActualExposureWeight})
 		}
 	}
 	analysis, err := performancecore.Analyze(points, points, nil, performancecore.Config{RiskFreeAnnualRate: 0, HistogramBins: performancecore.DefaultHistogramBins})
 	if err != nil {
 		return MetricSet{}, err
 	}
-	return MetricSet{ROI: loaded.Summary.ROI, FinalEquity: loaded.Summary.FinalEquity, FinalNAVRatio: analysis.Summary.Relative.FinalNAVRatio, LogFinalNAVRatio: analysis.Summary.Relative.LogFinalNAVRatio, MaxDrawdown: loaded.Summary.MaxDrawdown, Sortino: analysis.Summary.Sortino.Value, LongestUnderwaterDays: analysis.Summary.LongestUnderwater.LongestDays, TradeCount: loaded.Summary.TradeCount, ExposureDaysRatio: analysis.Summary.Exposure.ExposureDaysRatio, AverageExposure: analysis.Summary.Exposure.AverageActualExposure, FeeCost: loaded.Summary.Costs.FeeCost, SlippageCost: loaded.Summary.Costs.SlippageCost, ReturnDistributions: analysis.Summary.Distributions}, nil
+	roi := loaded.Summary.ROI
+	maxDrawdown := loaded.Summary.MaxDrawdown
+	finalEquity := loaded.Summary.FinalEquity
+	tradeCount := loaded.Summary.TradeCount
+	if practical.TotalReturn != nil {
+		roi = *practical.TotalReturn
+	}
+	if practical.MaxDrawdown != nil {
+		maxDrawdown = *practical.MaxDrawdown
+	}
+	if practical.FinalEquity != nil {
+		finalEquity = *practical.FinalEquity
+	}
+	if practical.TradeCount != nil {
+		tradeCount = *practical.TradeCount
+	}
+	return MetricSet{ROI: roi, FinalEquity: finalEquity, FinalNAVRatio: analysis.Summary.Relative.FinalNAVRatio, LogFinalNAVRatio: analysis.Summary.Relative.LogFinalNAVRatio, MaxDrawdown: maxDrawdown, Sortino: analysis.Summary.Sortino.Value, LongestUnderwaterDays: analysis.Summary.LongestUnderwater.LongestDays, TradeCount: tradeCount, ExposureDaysRatio: analysis.Summary.Exposure.ExposureDaysRatio, AverageExposure: analysis.Summary.Exposure.AverageActualExposure, FeeCost: loaded.Summary.Costs.FeeCost, SlippageCost: loaded.Summary.Costs.SlippageCost, ReturnDistributions: analysis.Summary.Distributions}, nil
 }
 
 func (s *Service) createSnapshot(ctx context.Context, task *saasstore.ControlAnalysisTask, root *computetask.TaskDescriptor) error {

@@ -216,6 +216,8 @@ func (s *Service) resolveSource(ctx context.Context, userID uint, req CreateRequ
 }
 
 func normalizeBacktestSettings(settings robustnesssvc.BacktestSettings, gene saasstore.GeneRecord, params sigmoiddca.Params) (robustnesssvc.BacktestSettings, error) {
+	var searchConfig map[string]any
+	_ = json.Unmarshal(gene.SearchConfig, &searchConfig)
 	if settings.InstrumentID == "" {
 		settings.InstrumentID = gene.InstrumentID
 	}
@@ -240,16 +242,30 @@ func normalizeBacktestSettings(settings robustnesssvc.BacktestSettings, gene saa
 		settings.MonthlyDCA = &value
 	}
 	if settings.FeeRate == nil {
-		value := .001
+		value := params.Spawn.Risk.FeeRate
+		if configured, ok := searchConfig["fee_rate"].(float64); ok {
+			value = configured
+		}
 		settings.FeeRate = &value
 	}
 	if settings.SpreadRate == nil {
-		value := .0005
+		value := 0.0
+		if configured, ok := searchConfig["spread_rate"].(float64); ok {
+			value = configured
+		}
 		settings.SpreadRate = &value
 	}
 	if settings.LongTermFilterEnabled == nil {
 		value := true
+		if configured, ok := searchConfig["long_term_filter_enabled"].(bool); ok {
+			value = configured
+		}
 		settings.LongTermFilterEnabled = &value
+	}
+	if settings.LongTermFilterMonths == 0 {
+		if configured, ok := searchConfig["long_term_filter_months"].(float64); ok {
+			settings.LongTermFilterMonths = int(configured)
+		}
 	}
 	if settings.LongTermFilterMonths == 0 {
 		settings.LongTermFilterMonths = backtestcore.DefaultLongTermFilterMonths

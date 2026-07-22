@@ -1119,7 +1119,7 @@ func responseFromStored(run saasstore.BacktestRun, loaded backtestresult.LoadedR
 		ExecutionMode:         identity.Snapshot.ExecutionMode,
 		Interval:              identity.Snapshot.Interval,
 		Source:                run.Source,
-		TotalReturn:           loaded.Summary.ROI,
+		TotalReturn:           metrics.PracticalTotalReturn,
 		Alpha:                 metrics.Alpha,
 		MaxDrawdown:           loaded.Summary.MaxDrawdown,
 		FinalEquity:           loaded.Summary.FinalEquity,
