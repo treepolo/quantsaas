@@ -12,6 +12,18 @@ type CompareMode = "price" | "relative";
 type ScaleMode = "linear" | "log";
 
 const colors = ["#2dd4bf", "#38bdf8", "#f59e0b", "#a78bfa"];
+const overlayCandleColors = [
+  { up: "#4ade80", down: "#f87171" },
+  { up: "#34d399", down: "#fb7185" },
+  { up: "#86efac", down: "#fca5a5" },
+  { up: "#16a34a", down: "#dc2626" },
+  { up: "#6ee7b7", down: "#fda4af" },
+  { up: "#22c55e", down: "#ef4444" },
+  { up: "#a7f3d0", down: "#fecaca" },
+  { up: "#15803d", down: "#b91c1c" },
+  { up: "#bbf7d0", down: "#fecdd3" },
+  { up: "#059669", down: "#e11d48" }
+];
 const inputClass = "min-h-10 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 text-sm text-slate-200 outline-none focus:border-teal-400/50";
 
 function dateValue(ms: number) { return new Date(ms).toISOString().slice(0, 10); }
@@ -19,6 +31,11 @@ function dayStart(value: string) { return new Date(`${value}T00:00:00.000Z`).get
 function dayEnd(value: string) { return new Date(`${value}T23:59:59.999Z`).getTime(); }
 function dateLabel(ms: number) { return new Date(ms).toLocaleDateString("zh-TW", { timeZone: "UTC" }); }
 function valueLabel(value: number, relative: boolean) { return relative ? `${value.toFixed(2)}` : value >= 1000 ? value.toLocaleString("zh-TW", { maximumFractionDigits: 0 }) : value.toLocaleString("zh-TW", { maximumFractionDigits: 4 }); }
+function candleColors(index: number, primaryIndex: number) {
+  if (index === primaryIndex) return { up: "#22c55e", down: "#ef4444" };
+  const overlayIndex = index < primaryIndex ? index : index - 1;
+  return overlayCandleColors[overlayIndex % overlayCandleColors.length];
+}
 
 function downsample<T>(rows: T[], maximum: number) {
   if (rows.length <= maximum) return rows;
@@ -26,7 +43,7 @@ function downsample<T>(rows: T[], maximum: number) {
   return Array.from({ length: maximum }, (_, index) => rows[Math.min(rows.length - 1, Math.floor(index * step))]);
 }
 
-export function MarketPriceExplorer() {
+export function MarketPriceExplorer({ selectedInstrumentId, selectedSourceKey }: { selectedInstrumentId?: string; selectedSourceKey?: string }) {
   const sourcesQuery = useQuery({ queryKey: ["market-chart-sources"], queryFn: marketDataApi.chartSources });
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
   const fallbackSources = useMemo(() => fallbackOriginalMarketSources(instrumentsQuery.data?.instruments ?? []), [instrumentsQuery.data?.instruments]);
@@ -49,6 +66,19 @@ export function MarketPriceExplorer() {
     if (!primaryKey) setPrimaryKey(key);
     if (selectedKeys.length === 0) setSelectedKeys([key]);
   }, [primary, primaryKey, selectedKeys.length]);
+  useEffect(() => {
+    if (!selectedSourceKey || !sources.some((source) => marketSourceKey(source) === selectedSourceKey)) return;
+    setPrimaryKey(selectedSourceKey);
+    setSelectedKeys((current) => current.includes(selectedSourceKey) ? current : [selectedSourceKey, ...current].slice(0, 4));
+  }, [selectedSourceKey, sources]);
+  useEffect(() => {
+    if (!selectedInstrumentId) return;
+    const source = sources.find((item) => item.instrument.id === selectedInstrumentId && item.artifact_kind === "source_snapshot") ?? sources.find((item) => item.instrument.id === selectedInstrumentId);
+    if (!source) return;
+    const key = marketSourceKey(source);
+    setPrimaryKey(key);
+    setSelectedKeys((current) => current.includes(key) ? current : [key, ...current].slice(0, 4));
+  }, [selectedInstrumentId, sources]);
   useEffect(() => {
     if (!primary) return;
     setStartDate(dateValue(primary.start_time_ms));
@@ -124,7 +154,7 @@ export function MarketPriceExplorer() {
     </div>
     <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(260px,.42fr)_minmax(0,1.58fr)]">
       <div className="max-h-[430px] space-y-4 overflow-auto rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-        <div className="text-xs leading-5 text-slate-500">勾選要疊合的資料，最多四組。主要行情決定 K 線與下方區間滑桿。</div>
+        <div className="text-xs leading-5 text-slate-500">勾選要疊合的資料，最多四組。主要行情決定日期與下方區間滑桿；所有疊合資料會跟隨走勢／K 線切換。</div>
         {grouped.length === 0 ? <div className="text-sm text-slate-500">{sourcesQuery.isPending || instrumentsQuery.isPending ? "正在載入行情商品…" : "目前沒有可查看的行情商品。"}</div> : null}
         {grouped.map((group) => <div key={group.category}><div className="mb-2 text-xs font-semibold text-slate-300">{group.label}</div><div className="space-y-1">{group.items.map((source) => { const key = marketSourceKey(source); const checked = selectedKeys.includes(key), isPrimary = primary ? key === marketSourceKey(primary) : false; return <label key={key} className="flex cursor-pointer items-start gap-2 rounded px-2 py-1.5 text-xs hover:bg-white/[0.04]"><input className="mt-0.5" type="checkbox" checked={checked} disabled={isPrimary} onChange={() => toggleSource(key)} /><span><span className="block text-slate-300">{source.display_name}{isPrimary ? "（主要）" : ""}</span><span className="text-slate-600">{source.interval} · {source.bar_count.toLocaleString("zh-TW")} 根{source.version_id ? ` · 版本 #${source.version_id}` : ""}</span></span></label>})}</div></div>)}
       </div>
@@ -142,8 +172,7 @@ export function MarketPriceExplorer() {
             <svg viewBox={`0 0 ${width} ${height}`} className="w-full" onMouseMove={updateHover} onMouseLeave={() => setHoverIndex(null)}>
               {yTicks.map((tick, index) => <g key={`y-${index}`}><line x1={left} x2={width-right} y1={tick.y} y2={tick.y} stroke="rgba(148,163,184,.09)"/><text x={left-8} y={tick.y+4} textAnchor="end" fill="#64748b" fontSize="11">{valueLabel(tick.value, compareMode === "relative")}</text></g>)}
               {xTicks.map((tick, index) => <g key={`x-${index}`}><line x1={x(tick)} x2={x(tick)} y1={top} y2={height-bottom} stroke="rgba(148,163,184,.04)"/><text x={x(tick)} y={height-30} textAnchor="middle" fill="#64748b" fontSize="11">{dateLabel(tick)}</text></g>)}
-              {chartKind === "candlestick" && visibleSeries[primarySeriesIndex] ? downsample(visibleSeries[primarySeriesIndex].bars, 650).map((bar) => { const up = bar.close >= bar.open; const color = up ? "#22c55e" : "#ef4444"; const candleWidth = Math.max(1.2, Math.min(10, plotWidth / Math.max(1, visibleSeries[primarySeriesIndex].bars.length) * .72)); return <g key={bar.open_time}><line x1={x(bar.open_time)} x2={x(bar.open_time)} y1={y(bar.high)} y2={y(bar.low)} stroke={color} strokeWidth="1"/><rect x={x(bar.open_time)-candleWidth/2} y={Math.min(y(bar.open),y(bar.close))} width={candleWidth} height={Math.max(1,Math.abs(y(bar.open)-y(bar.close)))} fill={color}/></g> }) : null}
-              {chartKind === "candlestick" ? visibleSeries.map((item, index) => { if (index === primarySeriesIndex) return null; const rows = downsample(item.bars, 1200); const points = rows.map((bar) => `${x(bar.open_time)},${y(bar.close)}`).join(" "); return <polyline key={marketSourceKey(item.source)} points={points} fill="none" stroke={item.color} strokeWidth="2" opacity=".9"/> }) : null}
+              {chartKind === "candlestick" ? visibleSeries.map((item, index) => { const palette = candleColors(index, primarySeriesIndex); return downsample(item.bars, 650).map((bar) => { const color = bar.close >= bar.open ? palette.up : palette.down; const candleWidth = Math.max(1.2, Math.min(10, plotWidth / Math.max(1, item.bars.length) * .72)); return <g key={`${marketSourceKey(item.source)}-${bar.open_time}`} opacity={index === primarySeriesIndex ? 1 : .55}><line x1={x(bar.open_time)} x2={x(bar.open_time)} y1={y(bar.high)} y2={y(bar.low)} stroke={color} strokeWidth="1"/><rect x={x(bar.open_time)-candleWidth/2} y={Math.min(y(bar.open),y(bar.close))} width={candleWidth} height={Math.max(1,Math.abs(y(bar.open)-y(bar.close)))} fill={color}/></g> }); }) : null}
               {chartKind === "line" && visibleSeries.map((item) => { const rows = downsample(item.bars, 1200); return <polyline key={`line-${marketSourceKey(item.source)}`} points={rows.map((bar) => `${x(bar.open_time)},${y(bar.close)}`).join(" ")} fill="none" stroke={item.color} strokeWidth="2"/> })}
               {hoverBar ? <line x1={x(hoverBar.open_time)} x2={x(hoverBar.open_time)} y1={top} y2={height-bottom} stroke="#e2e8f0" strokeDasharray="4 4" opacity=".55"/> : null}
             </svg>

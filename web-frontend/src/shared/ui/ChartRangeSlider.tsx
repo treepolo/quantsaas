@@ -98,24 +98,24 @@ export function ChartRangeSlider({
       <div ref={trackRef} className="relative h-9 select-none px-1">
         <div className="absolute left-1 right-1 top-1/2 h-2 -translate-y-1/2 rounded-full bg-slate-800" />
         <div
-          className="absolute top-1/2 h-5 -translate-y-1/2 rounded-full border border-[#2dd4bf]/50 bg-[#2dd4bf]/20 shadow-[0_0_16px_rgba(45,212,191,0.16)]"
+          className="absolute top-1/2 h-5 -translate-y-1/2 border border-[#2dd4bf]/50 bg-[#2dd4bf]/20 shadow-[0_0_16px_rgba(45,212,191,0.16)]"
           style={{ left: `${leftPct}%`, width: `${Math.max(0.8, rightPct - leftPct)}%` }}
         >
           <button
             type="button"
             aria-label="調整顯示起點"
-            className={cn("absolute -left-2 top-1/2 h-7 w-4 -translate-y-1/2 cursor-ew-resize rounded bg-[#2dd4bf]", dragging === "start" && "bg-[#99f6e4]")}
+            className={cn("absolute right-full top-1/2 z-10 h-7 w-3 -translate-y-1/2 cursor-ew-resize bg-[#2dd4bf]", dragging === "start" && "bg-[#99f6e4]")}
             onPointerDown={(event) => beginDrag("start", event)}
           />
           <div
             aria-label="移動顯示區間"
-            className={cn("absolute inset-y-0 left-3 right-3 cursor-grab rounded-full", dragging === "window" && "cursor-grabbing")}
+            className={cn("absolute inset-y-0 left-0 right-0 z-0 cursor-grab", dragging === "window" && "cursor-grabbing")}
             onPointerDown={(event) => beginDrag("window", event)}
           />
           <button
             type="button"
             aria-label="調整顯示終點"
-            className={cn("absolute -right-2 top-1/2 h-7 w-4 -translate-y-1/2 cursor-ew-resize rounded bg-[#2dd4bf]", dragging === "end" && "bg-[#99f6e4]")}
+            className={cn("absolute left-full top-1/2 z-10 h-7 w-3 -translate-y-1/2 cursor-ew-resize bg-[#2dd4bf]", dragging === "end" && "bg-[#99f6e4]")}
             onPointerDown={(event) => beginDrag("end", event)}
           />
         </div>
