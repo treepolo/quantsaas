@@ -73,7 +73,7 @@ export function AppRouter() {
 				<Route path="kline-inverse" element={<KlineInversePage />} />
                 <Route path="robustness" element={<RobustnessPage />} />
                 <Route path="dynamic-parameters" element={<DynamicParametersPage />} />
-                <Route path="evolution" element={<ParameterResearchPage />} />
+                <Route path="evolution" element={<EvolutionPage />} />
                 <Route path="parameter-research" element={<ParameterResearchPage />} />
                 <Route path="tasks" element={<ComputeTasksPage />} />
               </Route>

@@ -12,3 +12,8 @@ web-frontend/.tmp/
 .docker-codex-config/
 .tools/
 .cache/
+
+# Private key files
+*.key
+*.pem
+ssh-key-*.pub

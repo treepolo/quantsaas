@@ -148,6 +148,95 @@ export type GenomeRecord = {
   param_pack?: Record<string, unknown> | null;
 };
 
+export type CreateTaskInput = {
+  strategy_id: string;
+  research_dataset_id?: number;
+  pair?: string;
+  instrument_id?: string;
+  data_source?: string;
+  interval?: string;
+  execution_mode?: string;
+  train_start_ms?: number;
+  train_end_ms?: number;
+  monthly_dca?: number;
+  evolve_rebalance_threshold?: boolean;
+  evolve_force_full_threshold?: boolean;
+  evolve_force_empty_threshold?: boolean;
+  evolve_gamma?: boolean;
+  enable_w_mean?: boolean;
+  enable_w_momentum?: boolean;
+  enable_w_breakout?: boolean;
+  position_structure?: "dual_layer" | "floating_only";
+  trade_penalty?: number;
+  fee_rate?: number;
+  spread_rate?: number;
+  long_term_filter_enabled?: boolean;
+  long_term_filter_months?: number;
+  pop_size: number;
+  max_generations: number;
+  spawn_mode: "inherit" | "random_once" | "manual";
+  spawn_point?: Record<string, unknown>;
+  test_mode?: boolean;
+  trace_mode?: TraceMode;
+  compute_monitor_enabled?: boolean;
+  continuous_mode?: "" | "standardized_best" | "random";
+  continuous_iterations?: number;
+  continuous_unlimited?: boolean;
+  standard_start_ms?: number;
+  standard_end_ms?: number;
+  seed_gene_id?: number;
+  fixed_param_keys?: string[];
+};
+
+export type ComputeEstimate = {
+  enabled: boolean;
+  units_per_individual: number;
+  planned_units: number;
+};
+
+export type GeneObservationAxis = {
+  key: string;
+  label: string;
+  min: number;
+  max: number;
+};
+
+export type GeneObservation = {
+  id: number;
+  created_at: string;
+  task_id: number;
+  generation: number;
+  individual: number;
+  fingerprint: string;
+  score_total: number;
+  max_drawdown: number;
+  fatal: boolean;
+  param_values: Record<string, number>;
+  param_pack?: Record<string, unknown> | null;
+  instrument_id?: string;
+  data_source?: string;
+  interval?: string;
+  execution_mode?: string;
+};
+
+export type GeneObservationResponse = {
+  schema: GeneObservationAxis[];
+  observations: GeneObservation[];
+  count: number;
+};
+
+export type GeneObservationQuery = {
+  strategy_id?: string;
+  instrument_id?: string;
+  data_source?: string;
+  interval?: string;
+  execution_mode?: string;
+  train_start_ms?: number;
+  train_end_ms?: number;
+  spawn_mode?: string;
+  limit?: number;
+};
+
 export type EvolutionOverview = {
   current_task: EvolutionTask | null;
   running: boolean;
@@ -161,8 +250,27 @@ export const evolutionApi = {
   listTasks() {
     return apiFetch<EvolutionOverview>("/evolution/tasks");
   },
+  createTask(input: CreateTaskInput) {
+    return apiFetch<EvolutionTask>("/evolution/tasks", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  },
+  estimateCompute(input: CreateTaskInput) {
+    return apiFetch<ComputeEstimate>("/evolution/tasks/compute-estimate", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  },
   listGenomes() {
     return apiFetch<GenomeRecord[]>("/evolution/genomes");
+  },
+  listGeneObservations(input: GeneObservationQuery) {
+    const params = new URLSearchParams();
+    Object.entries(input).forEach(([key, value]) => {
+      if (value !== undefined && value !== "" && value !== 0) params.set(key, String(value));
+    });
+    return apiFetch<GeneObservationResponse>(`/evolution/gene-observations?${params.toString()}`);
   },
   updateGenome(genomeId: number, input: { name?: string; notes?: string; tags?: string[] }) {
     return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/genomes/${genomeId}`, {
