@@ -284,6 +284,20 @@ type MapResponse struct {
 	Target     string        `json:"target"`
 	Color      string        `json:"color"`
 	Cells      []CellSummary `json:"cells"`
+	Points     []MapPoint    `json:"points"`
+}
+
+// MapPoint 是每筆評估的精簡投影資料；OHLC 僅在使用者選取結果後才按需讀取。
+type MapPoint struct {
+	EvaluationID uint        `json:"evaluation_id"`
+	PathID       uint        `json:"path_id"`
+	OutcomeState string      `json:"outcome_state"`
+	PassA        bool        `json:"pass_a"`
+	PassB        bool        `json:"pass_b"`
+	QRelative    float64     `json:"q_rel"`
+	QAbsolute    float64     `json:"q_abs"`
+	X            float64     `json:"x"`
+	Y            float64     `json:"y"`
 }
 
 type PathSummary struct {

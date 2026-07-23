@@ -46,6 +46,7 @@ func (s *Service) Map(ctx context.Context, userID, studyID, snapshotID uint, axi
 	if !validFeatureName(axisX) || !validFeatureName(axisY) || axisX == axisY {
 		return MapResponse{}, ErrInvalidRequest
 	}
+	xIndex, yIndex := featureIndex(axisX), featureIndex(axisY)
 	if target != "all" && target != "failed" && target != "A" && target != "B" {
 		return MapResponse{}, ErrInvalidRequest
 	}
@@ -61,7 +62,29 @@ func (s *Service) Map(ctx context.Context, userID, studyID, snapshotID uint, axi
 	if json.Unmarshal(snapshot.CellSummary, &cells) != nil {
 		return MapResponse{}, ErrInvalidRequest
 	}
-	return MapResponse{StudyID: study.ID, SnapshotID: snapshot.ID, AxisX: axisX, AxisY: axisY, Target: target, Color: color, Cells: cells}, nil
+	var evaluations []saasstore.KlineInverseEvaluation
+	query := s.db.WithContext(ctx).Where("study_id = ? AND status = ?", study.ID, "completed")
+	switch target {
+	case "failed":
+		query = query.Where("pass_a = ?", false)
+	case "A":
+		query = query.Where("pass_a = ?", true)
+	case "B":
+		query = query.Where("pass_b = ?", true)
+	}
+	if err := query.Order("id ASC").Find(&evaluations).Error; err != nil {
+		return MapResponse{}, err
+	}
+	points := make([]MapPoint, 0, len(evaluations))
+	for _, evaluation := range evaluations {
+		var behavior core.Behavior
+		if json.Unmarshal(evaluation.Features, &behavior) != nil {
+			continue
+		}
+		features := core.FeatureVector(behavior)
+		points = append(points, MapPoint{EvaluationID: evaluation.ID, PathID: evaluation.PathID, OutcomeState: evaluation.OutcomeState, PassA: evaluation.PassA, PassB: evaluation.PassB, QRelative: evaluation.QRelative, QAbsolute: evaluation.QAbsolute, X: features[xIndex], Y: features[yIndex]})
+	}
+	return MapResponse{StudyID: study.ID, SnapshotID: snapshot.ID, AxisX: axisX, AxisY: axisY, Target: target, Color: color, Cells: cells, Points: points}, nil
 }
 
 func (s *Service) Paths(ctx context.Context, userID, studyID uint, query PathQuery) (PathPage, error) {
@@ -264,6 +287,15 @@ func validFeatureName(value string) bool {
 		}
 	}
 	return false
+}
+
+func featureIndex(value string) int {
+	for index, name := range core.FeatureNames {
+		if name == value {
+			return index
+		}
+	}
+	return -1
 }
 
 func passCurve(points []BoundaryPoint, pass func(BoundaryPoint) bool) []PassStep {
