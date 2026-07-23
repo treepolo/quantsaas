@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, LogOut } from "lucide-react";
@@ -6,7 +6,7 @@ import { AppBackground } from "./AppBackground";
 import { useAuth } from "./AuthProvider";
 import { useI18n } from "../i18n/useI18n";
 import { hasFeature } from "../shared/config/features";
-import { brandIcon as BrandIcon, navItems } from "../shared/config/navigation";
+import { brandIcon as BrandIcon, navGroups, navItems, type NavGroup } from "../shared/config/navigation";
 import { cn } from "../shared/lib/cn";
 import { systemApi } from "../shared/services/system";
 import { Button } from "../shared/ui/Button";
@@ -15,9 +15,15 @@ import { PageErrorBoundary } from "./PageErrorBoundary";
 
 function Sidebar() {
   const { t } = useI18n();
+  const location = useLocation();
   const visibleItems = navItems.filter((item) => !item.feature || hasFeature(item.feature));
-  const mainItems = visibleItems.filter((item) => item.placement === "main");
-  const footerItems = visibleItems.filter((item) => item.placement === "footer");
+  const overviewItem = visibleItems.find((item) => !item.group);
+  const activeGroup = visibleItems.find((item) => item.to !== "/" && location.pathname.startsWith(item.to))?.group;
+  const [expandedGroup, setExpandedGroup] = useState<NavGroup | undefined>(activeGroup ?? "dataPreparation");
+
+  useEffect(() => {
+    if (activeGroup) setExpandedGroup(activeGroup);
+  }, [activeGroup]);
 
   const renderItem = (item: (typeof navItems)[number]) => (
     <NavLink
@@ -50,8 +56,32 @@ function Sidebar() {
           <div className="text-xs text-slate-500">{t("app.tagline")}</div>
         </div>
       </div>
-      <nav className="mt-3 flex flex-1 flex-col gap-1">{mainItems.map(renderItem)}</nav>
-      <div className="mb-3 space-y-1">{footerItems.map(renderItem)}</div>
+      <nav className="custom-scrollbar mt-3 flex flex-1 flex-col gap-1 overflow-y-auto pb-3">
+        {overviewItem && renderItem(overviewItem)}
+        <div className="my-2 border-t border-white/[0.05]" />
+        {navGroups.map((group) => {
+          const items = visibleItems.filter((item) => item.group === group.id);
+          if (items.length === 0) return null;
+          const expanded = expandedGroup === group.id;
+          return (
+            <div key={group.id} className="space-y-1">
+              <button
+                type="button"
+                className="flex h-9 w-full items-center justify-between rounded-lg px-3 text-left text-xs font-semibold tracking-wide text-slate-500 transition hover:bg-white/[0.04] hover:text-slate-300"
+                onClick={() => setExpandedGroup(expanded ? undefined : group.id)}
+                aria-expanded={expanded}
+                aria-label={t(group.labelKey)}
+                title={t(group.labelKey)}
+              >
+                <span className="hidden lg:inline">{t(group.labelKey)}</span>
+                <span className="hidden lg:inline" />
+                <ChevronDown className={cn("h-4 w-4 transition-transform", expanded && "rotate-180")} />
+              </button>
+              {expanded && <div className="space-y-1 lg:pl-3">{items.map(renderItem)}</div>}
+            </div>
+          );
+        })}
+      </nav>
     </aside>
   );
 }

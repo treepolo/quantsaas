@@ -15,6 +15,12 @@
     "backtesting": "回測",
     "settings": "設定"
   },
+  "navGroup": {
+    "dataPreparation": "1. 準備資料",
+    "researchExecution": "2. 執行研究",
+    "analysis": "3. 驗證與解讀",
+    "management": "4. 管理"
+  },
   "common": {
     "loading": "載入中",
     "login": "登入",

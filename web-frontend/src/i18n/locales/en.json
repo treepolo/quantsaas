@@ -15,6 +15,12 @@
     "backtesting": "Backtesting",
     "settings": "Settings"
   },
+  "navGroup": {
+    "dataPreparation": "1. Prepare Data",
+    "researchExecution": "2. Run Research",
+    "analysis": "3. Validate & Interpret",
+    "management": "4. Manage"
+  },
   "common": {
     "loading": "Loading",
     "login": "Log in",
