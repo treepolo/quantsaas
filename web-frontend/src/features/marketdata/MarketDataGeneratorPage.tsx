@@ -14,6 +14,7 @@ import { datasetStartDate } from "../../shared/lib/datasetDates";
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { PerturbationWorkspace } from "./PerturbationWorkspace";
+import { SearchablePicker } from "../../shared/ui/SearchablePicker";
 
 const intervalLabels: Record<string, string> = {
   "1d": "日 K", "1h": "1 小時 K", "15m": "15 分 K", "5m": "5 分 K", "1m": "1 分 K", "1s": "1 秒 K", "1w": "週 K", "1M": "月 K"
@@ -274,7 +275,7 @@ function RecompositionEditor() {
           <CardHeader><div><CardTitle>1. 選取來源片段</CardTitle><CardDescription>同一週期可混用不同標的；點圖兩次或拖動下方範圍控制選取。</CardDescription></div><Database className="h-5 w-5 text-slate-500" /></CardHeader>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Field label="週期"><select value={interval} onChange={(event) => { setInterval(event.target.value); setBars([]); }} className={inputClass}>{Object.keys(intervalLabels).map((item) => <option key={item} value={item}>{intervalLabels[item]}</option>)}</select></Field>
-            <Field label="來源"><select value={selectedSource ? sourceKey(selectedSource) : ""} onChange={(event) => setSelectedSourceKey(event.target.value)} className={inputClass}>{eligibleSources.map((source) => <option key={sourceKey(source)} value={sourceKey(source)}>{source.instrument.display_name} · {source.immutable ? `v${source.version_id}` : sourceLabel(source.instrument.data_source)}</option>)}</select></Field>
+            <SearchablePicker label="來源" value={selectedSource ? sourceKey(selectedSource) : ""} onChange={setSelectedSourceKey} options={eligibleSources.map((source) => ({ value: sourceKey(source), label: source.instrument.display_name, detail: `${source.instrument.symbol} · ${source.immutable ? `版本 ${source.version_id}` : sourceLabel(source.instrument.data_source)}` }))}/>
             <Field label="查詢起日"><input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className={inputClass} /></Field>
             <Field label="查詢迄日"><input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className={inputClass} /></Field>
           </div>

@@ -17,6 +17,8 @@ import {
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { ComputePlanSummary, ComputeProgress, ComputeStatusBadge } from "../computetasks/ComputeTaskComponents";
+import { ParameterPicker } from "../../shared/ui/ParameterPicker";
+import { SearchablePicker } from "../../shared/ui/SearchablePicker";
 
 const metricLabels: Record<RobustnessMetric, string> = {
   log_final_nav_ratio: "log 期末淨值比",
@@ -238,23 +240,14 @@ export function RobustnessPage() {
         <Card>
           <CardHeader><div><CardTitle>建立研究</CardTitle><CardDescription>先預覽固定計算清單，再由你明確啟動；切換圖表與疊圖不會重跑回測。</CardDescription></div></CardHeader>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <Field label="來源參數">
-              <select className={inputClass} value={genomeId} onChange={(event) => setGenomeId(Number(event.target.value))}>
-                <option value={0}>選擇參數</option>
-                {genomes.map((item) => <option key={item.id} value={item.id}>#{item.id} · {item.name || item.role}</option>)}
-              </select>
-            </Field>
+            <ParameterPicker label="來源參數" genomes={genomes} value={genomeId} onChange={setGenomeId}/>
             <Field label="研究模式">
               <select className={inputClass} value={mode} onChange={(event) => setMode(event.target.value as CreateRobustnessStudy["mode"])}>
                 <option value="one_dimensional">一維曲線</option><option value="two_dimensional">二維 heatmap / 3D</option><option value="multidimensional">多維稀疏抽樣</option>
               </select>
             </Field>
             <Field label="研究半徑（格）"><input className={inputClass} type="number" min={1} max={100} value={radius} onChange={(event) => setRadius(Number(event.target.value))} /></Field>
-            <Field label="標的">
-              <select className={inputClass} value={instrumentId} onChange={(event) => { const value = event.target.value; setInstrumentId(value); setInterval(instruments.find((item) => item.id === value)?.supported_intervals[0] ?? "1d"); }}>
-                {instruments.map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.id}</option>)}
-              </select>
-            </Field>
+            <SearchablePicker label="標的" value={instrumentId} onChange={(value) => { setInstrumentId(value); setInterval(instruments.find((item) => item.id === value)?.supported_intervals[0] ?? "1d"); }} options={instruments.map((item) => ({ value: item.id, label: item.display_name, detail: `${item.symbol} · ${item.market ?? "研究標的"}` }))}/>
             <Field label="週期">
               <select className={inputClass} value={interval} onChange={(event) => setInterval(event.target.value)}>{(selectedInstrument?.supported_intervals ?? ["1d"]).map((item) => <option key={item}>{item}</option>)}</select>
             </Field>

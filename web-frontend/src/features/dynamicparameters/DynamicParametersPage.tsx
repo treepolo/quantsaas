@@ -9,6 +9,8 @@ import { dynamicParametersApi, type CreateDynamicStudy, type ParameterMode } fro
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { ComputePlanSummary, ComputeProgress, ComputeStatusBadge } from "../computetasks/ComputeTaskComponents";
+import { ParameterPicker } from "../../shared/ui/ParameterPicker";
+import { SearchablePicker } from "../../shared/ui/SearchablePicker";
 
 const inputClass = "min-h-10 w-full rounded-lg border border-white/10 bg-slate-950/70 px-3 text-sm text-slate-200 outline-none focus:border-teal-400/50";
 const activeStatuses = new Set(["queued", "running", "partial"]);
@@ -104,10 +106,10 @@ export function DynamicParametersPage() {
     <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,.8fr)]">
       <Card><CardHeader><div><CardTitle>建立模型研究</CardTitle><CardDescription>選擇預測方法與要比較的回看天數；系統會分段驗證並保留表現接近最佳、但較簡單穩定的設定。</CardDescription></div></CardHeader>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <Field label="來源參數"><select className={inputClass} value={genomeId} onChange={(event) => setGenomeId(Number(event.target.value))}><option value={0}>選擇參數</option>{genomes.map((item) => <option key={item.id} value={item.id}>#{item.id} · {item.name || item.role}</option>)}</select></Field>
+          <ParameterPicker label="來源參數" genomes={genomes} value={genomeId} onChange={setGenomeId}/>
           <Field label="模型路線"><select className={inputClass} value={route} onChange={(event) => setRoute(event.target.value as CreateDynamicStudy["route"])}><option value="explainable_gam">可解釋特徵模型</option><option value="causal_tcn">因果擴張卷積模型</option></select></Field>
           <Field label="Beta 要如何變動"><select className={inputClass} value={mode} onChange={(event) => setMode(event.target.value as ParameterMode)}><option value="fixed">固定不變</option><option value="global">整段使用同一個預測調整值</option><option value="continuous">每天依預測連續調整</option><option value="six_state">依六種市場狀態切換</option></select></Field>
-          <Field label="標的（日線）"><select className={inputClass} value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)}>{instruments.filter((item) => item.supported_intervals.includes("1d")).map((item) => <option key={item.id} value={item.id}>{item.display_name} · {item.id}</option>)}</select></Field>
+          <SearchablePicker label="標的（日線）" value={instrumentId} onChange={setInstrumentId} options={instruments.filter((item) => item.supported_intervals.includes("1d")).map((item) => ({ value: item.id, label: item.display_name, detail: `${item.symbol} · ${item.market ?? "研究標的"}` }))}/>
           <Field label="執行時點"><select className={inputClass} value={executionMode} onChange={(event) => setExecutionMode(event.target.value as CreateDynamicStudy["execution_mode"])}><option value="close_next_open">收盤判斷、次日開盤執行</option><option value="close_same_bar">收盤判斷、同日收盤執行</option></select></Field>
           <Field label="分段驗證次數"><input className={inputClass} type="number" min={2} max={10} value={folds} onChange={(event) => setFolds(Number(event.target.value))} /></Field>
           <Field label="開始日期"><input className={inputClass} type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></Field><Field label="結束日期"><input className={inputClass} type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></Field>

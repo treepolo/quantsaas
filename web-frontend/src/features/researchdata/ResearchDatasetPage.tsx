@@ -6,6 +6,7 @@ import { researchDataApi, type IndicatorSelectionInput, type MissingPolicy, type
 import { Button } from "../../shared/ui/Button";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
+import { SearchablePicker } from "../../shared/ui/SearchablePicker";
 
 const intervalLabels: Record<string, string> = {
   "1d": "日 K",
@@ -277,14 +278,7 @@ export function ResearchDatasetPage() {
             </label>
           </div>
           <div className="grid gap-4 md:grid-cols-5">
-            <label>
-              <span className="mb-2 block text-sm text-slate-300">主商品</span>
-              <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={primary?.id ?? primaryID} onChange={(event) => changePrimary(event.target.value)}>
-                {instruments.map((item) => (
-                  <option key={item.id} value={item.id}>{item.display_name}</option>
-                ))}
-              </select>
-            </label>
+            <SearchablePicker label="主商品" value={primary?.id ?? primaryID} onChange={changePrimary} options={instruments.map((item) => ({ value: item.id, label: item.display_name, detail: `${item.symbol} · ${item.market ?? "研究標的"}` }))}/>
             <label>
               <span className="mb-2 block text-sm text-slate-300">主商品週期</span>
               <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={primaryInterval} onChange={(event) => changePrimaryInterval(event.target.value)}>
@@ -340,14 +334,7 @@ export function ResearchDatasetPage() {
                 const selected = instruments.find((item) => item.id === indicator.instrument_id);
                 return (
                   <div key={`${indicator.instrument_id}-${index}`} className="grid gap-3 rounded-lg border border-white/[0.05] p-3 md:grid-cols-[1fr_220px_auto]">
-                    <label>
-                      <span className="mb-2 block text-xs text-slate-500">序列</span>
-                      <select className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={indicator.instrument_id} onChange={(event) => updateIndicator(index, { instrument_id: event.target.value, interval: firstInterval(instruments.find((item) => item.id === event.target.value)) })}>
-                        {indicatorOptions.concat(selected && !indicatorOptions.some((item) => item.id === selected.id) ? [selected] : []).map((item) => (
-                          <option key={item.id} value={item.id}>{item.display_name}</option>
-                        ))}
-                      </select>
-                    </label>
+                    <SearchablePicker label="序列" value={indicator.instrument_id} onChange={(value) => updateIndicator(index, { instrument_id: value, interval: firstInterval(instruments.find((item) => item.id === value)) })} options={indicatorOptions.concat(selected && !indicatorOptions.some((item) => item.id === selected.id) ? [selected] : []).map((item) => ({ value: item.id, label: item.display_name, detail: `${item.symbol} · ${item.market ?? "參考指標"}` }))}/>
                     <label>
                       <span className="mb-2 block text-xs text-slate-500">週期</span>
                       <select className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={indicator.interval} onChange={(event) => updateIndicator(index, { interval: event.target.value })}>

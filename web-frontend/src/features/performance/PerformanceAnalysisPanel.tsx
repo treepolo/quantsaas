@@ -6,6 +6,7 @@ import type { ResearchInstrument } from "../../shared/services/marketData";
 import type { PerformanceReport } from "../../shared/services/performanceReports";
 import { performanceReportsApi } from "../../shared/services/performanceReports";
 import { Button } from "../../shared/ui/Button";
+import { SearchablePicker } from "../../shared/ui/SearchablePicker";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { cn } from "../../shared/lib/cn";
 import { BetaStats } from "./BetaStats";
@@ -160,13 +161,7 @@ export function PerformanceAnalysisPanel({ mode = "full", backtestResultId, repo
               <span className="mb-2 block text-xs text-slate-500">直方圖區間數</span>
               <input type="number" min="1" max="100" className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={histogramBins} onChange={(event) => setHistogramBins(Number(event.target.value))} />
             </label>
-            <label>
-              <span className="mb-2 block text-xs text-slate-500">Beta 基準（選填）</span>
-              <select className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={betaBenchmark} onChange={(event) => setBetaBenchmark(event.target.value)}>
-                <option value="">不計算 Beta</option>
-                {dailyBenchmarks.map((item) => <option key={item.id} value={item.id}>{item.display_name}（{item.symbol}）</option>)}
-              </select>
-            </label>
+            <SearchablePicker label="Beta 基準（選填）" value={betaBenchmark} onChange={setBetaBenchmark} options={[{ value: "", label: "不計算 Beta", detail: "略過 Beta 計算" }, ...dailyBenchmarks.map((item) => ({ value: item.id, label: item.display_name, detail: item.symbol }))]}/>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <Button type="submit" loading={createMutation.isPending} disabled={!backtestResultId}>建立報酬分析</Button>

@@ -8,6 +8,7 @@ import { researchApi, type ResearchModelPoint, type ResearchStatusItem } from ".
 import { marketDataApi } from "../../shared/services/marketData";
 import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Card";
 import { Button } from "../../shared/ui/Button";
+import { SearchablePicker } from "../../shared/ui/SearchablePicker";
 import { ChartRangeSlider } from "../../shared/ui/ChartRangeSlider";
 import { cn } from "../../shared/lib/cn";
 
@@ -335,14 +336,7 @@ export function MarketStatusPage() {
 
       <Card className="p-4">
         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-          <label>
-            <span className="mb-2 block text-sm text-slate-300">顯示標的</span>
-            <select className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" value={instrumentId} onChange={(event) => setInstrumentId(event.target.value)}>
-              {instruments.map((instrument) => (
-                <option key={instrument.id} value={instrument.id}>{instrument.display_name}</option>
-              ))}
-            </select>
-          </label>
+          <SearchablePicker label="顯示標的" value={instrumentId} onChange={setInstrumentId} options={instruments.map((instrument) => ({ value: instrument.id, label: instrument.display_name, detail: `${instrument.symbol} · ${instrument.market ?? "研究標的"}` }))}/>
           <div className="flex items-end">
             <Button icon={Home} variant={homeInstrument === instrumentId ? "secondary" : "primary"} onClick={() => setHomeInstrument(instrumentId)}>
               {homeInstrument === instrumentId ? "首頁標的" : "設為首頁"}
