@@ -16,6 +16,8 @@ export type MapData = { study_id:number;snapshot_id:number;axis_x:string;axis_y:
 export type PathSummary = { id:number;path_hash:string;evaluation_id:number;cell_index:number;outcome_state:string;pass_a:boolean;pass_b:boolean;q_rel:number;q_abs:number;backtest_result_id:number;permanent_reason:string };
 export type PathPage = { items:PathSummary[];page:number;page_size:number;total:number;total_pages:number };
 export type PathDetail = PathSummary & { warmup_length:number;evaluation_length:number;coordinates:Array<{g:number;b:number;u:number;d:number}>;ohlc:Array<{time_ms:number;open:number;high:number;low:number;close:number}>;features:Record<string,Record<string,number>>;performance_report_ids:number[] };
+export type ChartSeries = PathSummary & { warmup_length:number;evaluation_length:number;ohlc:Array<{time_ms:number;open:number;high:number;low:number;close:number}> };
+export type ChartSeriesData = { total_available:number;sampled_count:number;q_relative_stddev:number;series:ChartSeries[] };
 export type Lineage = { id:number;child_path_id:number;parent_path_id?:number;requested_operation:string;actual_operation:string;changed_start:number;changed_length:number;changed_channels:string[];amplitude:number;batch_id:number };
 export type Boundary = { anchor:PathSummary;points:Array<{child_path_id:number;operation:string;distance:{d_w:number;d_h:number;d_total:number};q_rel:number;q_abs:number;state:string;changed_start:number;changed_length:number;amplitude:number;batch_id:number}>;nearest_failure_a?:number;nearest_failure_b?:number;pass_curve_a:Array<{radius:number;passed:number;total:number;rate:number}>;pass_curve_b:Array<{radius:number;passed:number;total:number;rate:number}> };
 
@@ -38,6 +40,7 @@ export const klineInverseApi = {
   overview:(id:number)=>apiFetch<Overview>(`${root}/studies/${id}/overview`),
   map:(id:number,x:string,y:string,target:string,color:string)=>apiFetch<MapData>(`${root}/studies/${id}/map?axis_x=${x}&axis_y=${y}&target=${target}&color=${color}`),
   paths:(id:number,page=1,target="all")=>apiFetch<PathPage>(`${root}/studies/${id}/paths?page=${page}&page_size=50&permanent=true&target=${target}`),
+  chartSeries:(id:number)=>apiFetch<ChartSeriesData>(`${root}/studies/${id}/chart-series`),
   path:(id:number,pathId:number)=>apiFetch<PathDetail>(`${root}/studies/${id}/paths/${pathId}`),
   lineage:(id:number,pathId:number)=>apiFetch<Lineage[]>(`${root}/studies/${id}/paths/${pathId}/lineage`),
   boundary:(id:number,pathId:number)=>apiFetch<Boundary>(`${root}/studies/${id}/anchors/${pathId}/boundary`),

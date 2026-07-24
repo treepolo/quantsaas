@@ -299,6 +299,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	klineInverseAPI.GET("/studies/:id/overview", klineInverseHandler.Overview)
 	klineInverseAPI.GET("/studies/:id/map", klineInverseHandler.Map)
 	klineInverseAPI.GET("/studies/:id/paths", klineInverseHandler.Paths)
+	klineInverseAPI.GET("/studies/:id/chart-series", klineInverseHandler.ChartSeries)
 	klineInverseAPI.GET("/studies/:id/paths/:pathId", klineInverseHandler.Path)
 	klineInverseAPI.GET("/studies/:id/paths/:pathId/lineage", klineInverseHandler.Lineage)
 	klineInverseAPI.GET("/studies/:id/anchors/:pathId/boundary", klineInverseHandler.Boundary)

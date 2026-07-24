@@ -289,15 +289,15 @@ type MapResponse struct {
 
 // MapPoint 是每筆評估的精簡投影資料；OHLC 僅在使用者選取結果後才按需讀取。
 type MapPoint struct {
-	EvaluationID uint        `json:"evaluation_id"`
-	PathID       uint        `json:"path_id"`
-	OutcomeState string      `json:"outcome_state"`
-	PassA        bool        `json:"pass_a"`
-	PassB        bool        `json:"pass_b"`
-	QRelative    float64     `json:"q_rel"`
-	QAbsolute    float64     `json:"q_abs"`
-	X            float64     `json:"x"`
-	Y            float64     `json:"y"`
+	EvaluationID uint    `json:"evaluation_id"`
+	PathID       uint    `json:"path_id"`
+	OutcomeState string  `json:"outcome_state"`
+	PassA        bool    `json:"pass_a"`
+	PassB        bool    `json:"pass_b"`
+	QRelative    float64 `json:"q_rel"`
+	QAbsolute    float64 `json:"q_abs"`
+	X            float64 `json:"x"`
+	Y            float64 `json:"y"`
 }
 
 type PathSummary struct {
@@ -330,6 +330,22 @@ type PathDetail struct {
 	OHLC                 json.RawMessage `json:"ohlc"`
 	Features             json.RawMessage `json:"features"`
 	PerformanceReportIDs []uint          `json:"performance_report_ids"`
+}
+
+// ChartSeriesResponse 為多走勢總覽提供已完成測試的等距抽樣結果。
+// 前端只需 OHLC 與評估摘要，因此不傳回特徵與生成關係。
+type ChartSeriesResponse struct {
+	TotalAvailable  int64         `json:"total_available"`
+	SampledCount    int           `json:"sampled_count"`
+	QRelativeStdDev float64       `json:"q_relative_stddev"`
+	Series          []ChartSeries `json:"series"`
+}
+
+type ChartSeries struct {
+	PathSummary
+	WarmupLength     int             `json:"warmup_length"`
+	EvaluationLength int             `json:"evaluation_length"`
+	OHLC             json.RawMessage `json:"ohlc"`
 }
 
 type LineageEdgeDescriptor struct {

@@ -166,6 +166,72 @@ func (s *Service) Path(ctx context.Context, userID, studyID, pathID uint) (PathD
 	return PathDetail{PathSummary: summary, WarmupLength: path.WarmupLength, EvaluationLength: path.EvaluationLength, Coordinates: json.RawMessage(path.Coordinates), OHLC: json.RawMessage(path.OHLC), Features: json.RawMessage(evaluation.Features), PerformanceReportIDs: reportIDs}, nil
 }
 
+// ChartSeries 依相對最終淨值 log 排序後等距取樣，避免一次把所有走勢送到瀏覽器。
+func (s *Service) ChartSeries(ctx context.Context, userID, studyID uint) (ChartSeriesResponse, error) {
+	study, _, err := s.loadStudy(ctx, userID, studyID)
+	if err != nil {
+		return ChartSeriesResponse{}, err
+	}
+	var evaluations []saasstore.KlineInverseEvaluation
+	if err := s.db.WithContext(ctx).Where("study_id = ? AND status = ?", study.ID, "completed").Order("q_relative ASC, id ASC").Find(&evaluations).Error; err != nil {
+		return ChartSeriesResponse{}, err
+	}
+	response := ChartSeriesResponse{TotalAvailable: int64(len(evaluations)), Series: []ChartSeries{}}
+	if len(evaluations) == 0 {
+		return response, nil
+	}
+	mean := 0.0
+	for _, evaluation := range evaluations {
+		mean += evaluation.QRelative
+	}
+	mean /= float64(len(evaluations))
+	variance := 0.0
+	for _, evaluation := range evaluations {
+		delta := evaluation.QRelative - mean
+		variance += delta * delta
+	}
+	response.QRelativeStdDev = math.Sqrt(variance / float64(len(evaluations)))
+	selected := evenlySampleEvaluations(evaluations, 100)
+	pathIDs := make([]uint, 0, len(selected))
+	for _, evaluation := range selected {
+		pathIDs = append(pathIDs, evaluation.PathID)
+	}
+	var paths []saasstore.KlineInversePath
+	if err := s.db.WithContext(ctx).Where("id IN ?", pathIDs).Find(&paths).Error; err != nil {
+		return ChartSeriesResponse{}, err
+	}
+	pathByID := make(map[uint]saasstore.KlineInversePath, len(paths))
+	for _, path := range paths {
+		pathByID[path.ID] = path
+	}
+	response.Series = make([]ChartSeries, 0, len(selected))
+	for _, evaluation := range selected {
+		path, ok := pathByID[evaluation.PathID]
+		if !ok {
+			continue
+		}
+		summary, err := s.pathSummary(ctx, evaluation)
+		if err != nil {
+			return ChartSeriesResponse{}, err
+		}
+		response.Series = append(response.Series, ChartSeries{PathSummary: summary, WarmupLength: path.WarmupLength, EvaluationLength: path.EvaluationLength, OHLC: json.RawMessage(path.OHLC)})
+	}
+	response.SampledCount = len(response.Series)
+	return response, nil
+}
+
+func evenlySampleEvaluations(values []saasstore.KlineInverseEvaluation, limit int) []saasstore.KlineInverseEvaluation {
+	if len(values) <= limit {
+		return values
+	}
+	result := make([]saasstore.KlineInverseEvaluation, 0, limit)
+	for index := 0; index < limit; index++ {
+		position := int(math.Round(float64(index) * float64(len(values)-1) / float64(limit-1)))
+		result = append(result, values[position])
+	}
+	return result
+}
+
 func (s *Service) Lineage(ctx context.Context, userID, studyID, pathID uint) ([]LineageEdgeDescriptor, error) {
 	study, _, err := s.loadStudy(ctx, userID, studyID)
 	if err != nil {

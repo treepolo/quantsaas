@@ -225,6 +225,15 @@ func (h *KlineInverseHandler) Path(c *gin.Context) {
 	h.respond(c, http.StatusOK, result, err)
 }
 
+func (h *KlineInverseHandler) ChartSeries(c *gin.Context) {
+	id, ok := parseUintPath(c, "id")
+	if !ok {
+		return
+	}
+	result, err := h.service.ChartSeries(c.Request.Context(), currentUserID(c), id)
+	h.respond(c, http.StatusOK, result, err)
+}
+
 func (h *KlineInverseHandler) Lineage(c *gin.Context) {
 	studyID, ok := parseUintPath(c, "id")
 	if !ok {
