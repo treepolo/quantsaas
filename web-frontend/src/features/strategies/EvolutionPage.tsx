@@ -329,7 +329,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(true);
   const [evolveForceFullThreshold, setEvolveForceFullThreshold] = useState(true);
   const [evolveForceEmptyThreshold, setEvolveForceEmptyThreshold] = useState(true);
-  const [evolveGamma, setEvolveGamma] = useState(false);
+  const [evolveGamma, setEvolveGamma] = useState(true);
   const [enableWMean, setEnableWMean] = useState(true);
   const [enableWMomentum, setEnableWMomentum] = useState(true);
   const [enableWBreakout, setEnableWBreakout] = useState(true);
@@ -337,7 +337,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [tradePenalty, setTradePenalty] = useState(0);
   const [feeRate, setFeeRate] = useState(0);
   const [spreadRate, setSpreadRate] = useState(0);
-  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(true);
+  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(false);
   const [longTermFilterMonths, setLongTermFilterMonths] = useState(10);
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>("off");

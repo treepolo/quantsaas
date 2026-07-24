@@ -353,12 +353,12 @@ export function BacktestingPage() {
   const [scaleMode, setScaleMode] = useState<ScaleMode>("absolute");
   const [valueMode, setValueMode] = useState<ValueMode>("nav");
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const [overrideBacktestAssumptions, setOverrideBacktestAssumptions] = useState(false);
+  const [overrideBacktestAssumptions, setOverrideBacktestAssumptions] = useState(true);
   const [initialCapital, setInitialCapital] = useState(10000);
-  const [monthlyDCA, setMonthlyDCA] = useState(1000);
+  const [monthlyDCA, setMonthlyDCA] = useState(0);
   const [feeRate, setFeeRate] = useState(0);
   const [spreadRate, setSpreadRate] = useState(0);
-  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(true);
+  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(false);
   const [longTermFilterMonths, setLongTermFilterMonths] = useState(10);
   const linkedRunQuery = useQuery({ queryKey: ["backtest-run", initialRun], queryFn: () => backtestsApi.get(initialRun), enabled: initialRun > 0 });
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });
