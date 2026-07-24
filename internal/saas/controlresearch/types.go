@@ -181,27 +181,54 @@ type SnapshotDescriptor struct {
 	CreatedAt             string          `json:"created_at"`
 }
 
+type StudySettingsDescriptor struct {
+	SubjectDisplayName     string   `json:"subject_display_name"`
+	InstrumentID          string   `json:"instrument_id"`
+	InstrumentDisplayName string   `json:"instrument_display_name"`
+	DataSource            string   `json:"data_source"`
+	Symbol                string   `json:"symbol"`
+	Interval              string   `json:"interval"`
+	ExecutionMode         string   `json:"execution_mode"`
+	StartTimeMs           int64    `json:"start_time_ms"`
+	EndTimeMs             int64    `json:"end_time_ms"`
+	InitialCapital        float64  `json:"initial_capital"`
+	MonthlyDCA            float64  `json:"monthly_dca"`
+	FeeRate               float64  `json:"fee_rate"`
+	SpreadRate            float64  `json:"spread_rate"`
+	LongTermFilterEnabled bool     `json:"long_term_filter_enabled"`
+	LongTermFilterMonths  int      `json:"long_term_filter_months"`
+	RandomSeed            int64    `json:"random_seed"`
+	RandomCount           int      `json:"random_count"`
+	ShuffleSeed           int64    `json:"shuffle_seed"`
+	ShuffleCount          int      `json:"shuffle_count"`
+	ToggleEveryNBars      int      `json:"toggle_every_n_bars"`
+	RandomDimensionCount  int      `json:"random_dimension_count"`
+	FixedDimensionCount   int      `json:"fixed_dimension_count"`
+	MeaninglessRuleLabels []string `json:"meaningless_rule_labels"`
+}
+
 type TaskDescriptor struct {
-	ID                      uint                `json:"id"`
-	Name                    string              `json:"name"`
-	Notes                   string              `json:"notes"`
-	Tags                    []string            `json:"tags"`
-	Status                  string              `json:"status"`
-	SourceKind              string              `json:"source_kind"`
-	SourceGenomeID          *uint               `json:"source_genome_id,omitempty"`
-	CandidateID             *uint               `json:"candidate_id,omitempty"`
-	ResearchConfigurationID *uint               `json:"research_configuration_id,omitempty"`
-	RandomBatchID           uint                `json:"random_batch_id"`
-	RandomTargetCount       int                 `json:"random_target_count"`
-	ShuffleTargetCount      int                 `json:"shuffle_target_count"`
-	ToggleEveryNBars        int                 `json:"toggle_every_n_bars"`
-	SameStructure           bool                `json:"same_structure"`
-	ComputeTaskID           *uint               `json:"compute_task_id,omitempty"`
-	Stages                  []StageDescriptor   `json:"stages"`
-	LatestSnapshot          *SnapshotDescriptor `json:"latest_snapshot,omitempty"`
-	Archived                bool                `json:"archived"`
-	CreatedAt               string              `json:"created_at"`
-	CompletedAt             string              `json:"completed_at,omitempty"`
+	ID                      uint                    `json:"id"`
+	Name                    string                  `json:"name"`
+	Notes                   string                  `json:"notes"`
+	Tags                    []string                `json:"tags"`
+	Status                  string                  `json:"status"`
+	SourceKind              string                  `json:"source_kind"`
+	SourceGenomeID          *uint                   `json:"source_genome_id,omitempty"`
+	CandidateID             *uint                   `json:"candidate_id,omitempty"`
+	ResearchConfigurationID *uint                   `json:"research_configuration_id,omitempty"`
+	RandomBatchID           uint                    `json:"random_batch_id"`
+	RandomTargetCount       int                     `json:"random_target_count"`
+	ShuffleTargetCount      int                     `json:"shuffle_target_count"`
+	ToggleEveryNBars        int                     `json:"toggle_every_n_bars"`
+	SameStructure           bool                    `json:"same_structure"`
+	StudySettings           StudySettingsDescriptor `json:"study_settings"`
+	ComputeTaskID           *uint                   `json:"compute_task_id,omitempty"`
+	Stages                  []StageDescriptor       `json:"stages"`
+	LatestSnapshot          *SnapshotDescriptor     `json:"latest_snapshot,omitempty"`
+	Archived                bool                    `json:"archived"`
+	CreatedAt               string                  `json:"created_at"`
+	CompletedAt             string                  `json:"completed_at,omitempty"`
 }
 
 type RandomRecordDescriptor struct {

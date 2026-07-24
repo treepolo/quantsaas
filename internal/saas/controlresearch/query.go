@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	compute "quantsaas/internal/compute"
@@ -55,7 +56,63 @@ func (s *Service) Get(ctx context.Context, userID, taskID uint) (TaskDescriptor,
 func (s *Service) describeTask(ctx context.Context, task saasstore.ControlAnalysisTask) (TaskDescriptor, error) {
 	var tags []string
 	_ = json.Unmarshal(task.Tags, &tags)
-	descriptor := TaskDescriptor{ID: task.ID, Name: task.Name, Notes: task.Notes, Tags: tags, Status: task.Status, SourceKind: task.SourceKind, SourceGenomeID: task.SourceGenomeID, CandidateID: task.CandidateID, ResearchConfigurationID: task.ResearchConfigurationID, RandomBatchID: task.RandomBatchID, RandomTargetCount: task.RandomTargetCount, ShuffleTargetCount: task.ShuffleTargetCount, ToggleEveryNBars: task.ToggleEveryNBars, SameStructure: task.ResearchConfigurationID != nil, ComputeTaskID: task.ComputeTaskID, Archived: task.ArchivedAt != nil, CreatedAt: task.CreatedAt.UTC().Format(time.RFC3339)}
+	var canonical TaskCanonical
+	if err := json.Unmarshal(task.Canonical, &canonical); err != nil {
+		return TaskDescriptor{}, err
+	}
+	settings := StudySettingsDescriptor{
+		InstrumentID:          canonical.Backtest.InstrumentID,
+		DataSource:            canonical.Backtest.DataSource,
+		Symbol:                canonical.Backtest.Symbol,
+		Interval:              canonical.Backtest.Interval,
+		ExecutionMode:         canonical.Backtest.ExecutionMode,
+		StartTimeMs:           canonical.Backtest.StartTimeMs,
+		EndTimeMs:             canonical.Backtest.EndTimeMs,
+		InitialCapital:        float64Value(canonical.Backtest.InitialCapital),
+		MonthlyDCA:            float64Value(canonical.Backtest.MonthlyDCA),
+		FeeRate:               float64Value(canonical.Backtest.FeeRate),
+		SpreadRate:            float64Value(canonical.Backtest.SpreadRate),
+		LongTermFilterEnabled: boolValue(canonical.Backtest.LongTermFilterEnabled),
+		LongTermFilterMonths:  canonical.Backtest.LongTermFilterMonths,
+		RandomSeed:            canonical.RandomSeed,
+		RandomCount:           task.RandomTargetCount,
+		ShuffleSeed:           canonical.ShuffleSeed,
+		ShuffleCount:          task.ShuffleTargetCount,
+		ToggleEveryNBars:      canonical.ToggleEveryNBars,
+		RandomDimensionCount:  len(canonical.ParameterSpace.Axes),
+		FixedDimensionCount:   len(canonical.ParameterSpace.Fixed),
+		MeaninglessRuleLabels: []string{"奇數日買、偶數日賣", "偶數日買、奇數日賣", "固定週期切換", "開盤買、收盤賣"},
+	}
+	if task.CandidateID != nil {
+		var candidate saasstore.RobustCandidate
+		err := s.db.WithContext(ctx).Where("id = ? AND owner_user_id = ?", *task.CandidateID, task.OwnerUserID).First(&candidate).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return TaskDescriptor{}, err
+		}
+		if err == nil {
+			settings.SubjectDisplayName = strings.TrimSpace(candidate.Name)
+		}
+	} else if task.SourceGenomeID != nil {
+		var genome saasstore.GeneRecord
+		err := s.db.WithContext(ctx).First(&genome, *task.SourceGenomeID).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return TaskDescriptor{}, err
+		}
+		if err == nil {
+			settings.SubjectDisplayName = strings.TrimSpace(genome.Name)
+		}
+	}
+	if canonical.Backtest.InstrumentID != "" {
+		var instrument saasstore.ResearchInstrument
+		err := s.db.WithContext(ctx).First(&instrument, "id = ?", canonical.Backtest.InstrumentID).Error
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return TaskDescriptor{}, err
+		}
+		if err == nil {
+			settings.InstrumentDisplayName = strings.TrimSpace(instrument.DisplayName)
+		}
+	}
+	descriptor := TaskDescriptor{ID: task.ID, Name: task.Name, Notes: task.Notes, Tags: tags, Status: task.Status, SourceKind: task.SourceKind, SourceGenomeID: task.SourceGenomeID, CandidateID: task.CandidateID, ResearchConfigurationID: task.ResearchConfigurationID, RandomBatchID: task.RandomBatchID, RandomTargetCount: task.RandomTargetCount, ShuffleTargetCount: task.ShuffleTargetCount, ToggleEveryNBars: task.ToggleEveryNBars, SameStructure: task.ResearchConfigurationID != nil, StudySettings: settings, ComputeTaskID: task.ComputeTaskID, Archived: task.ArchivedAt != nil, CreatedAt: task.CreatedAt.UTC().Format(time.RFC3339)}
 	if task.CompletedAt != nil {
 		descriptor.CompletedAt = task.CompletedAt.UTC().Format(time.RFC3339)
 	}
@@ -76,6 +133,17 @@ func (s *Service) describeTask(ctx context.Context, task saasstore.ControlAnalys
 		descriptor.LatestSnapshot = &snapshot
 	}
 	return descriptor, nil
+}
+
+func float64Value(value *float64) float64 {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
 }
 
 func (s *Service) Snapshots(ctx context.Context, userID, taskID uint) ([]SnapshotDescriptor, error) {

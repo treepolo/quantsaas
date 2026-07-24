@@ -2,6 +2,7 @@ package controlresearch
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	saasstore "quantsaas/internal/saas/store"
@@ -59,5 +60,15 @@ func TestRepresentativeRolesFitStoredFieldForSingleResult(t *testing.T) {
 	}
 	if len(roles[1]) > 32 {
 		t.Fatalf("representative role exceeds stored field: %q", roles[1])
+	}
+}
+
+func TestConclusionLabelIncludesAllAvailableComparisonMetrics(t *testing.T) {
+	sortino := 73.8
+	label := conclusionLabel("曝險順序打亂分佈", PercentileSet{LogFinalNAVRatio: 50.4, MaxDrawdown: 96.0, Sortino: &sortino})
+	for _, expected := range []string{"評估對象於曝險順序打亂分佈", "報酬第 50.4 百分位", "最大回撤第 96.0 百分位", "Sortino 第 73.8 百分位"} {
+		if !strings.Contains(label, expected) {
+			t.Fatalf("conclusion label %q is missing %q", label, expected)
+		}
 	}
 }

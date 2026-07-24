@@ -340,7 +340,7 @@ func (s *Service) createSnapshot(ctx context.Context, task *saasstore.ControlAna
 		}
 		summary.RandomDistribution = &distribution
 		summary.RandomPercentiles = &percentiles
-		summary.ConclusionLabels = append(summary.ConclusionLabels, fmt.Sprintf("正式參數位於同結構隨機參數分佈第 %.1f 百分位", percentiles.LogFinalNAVRatio))
+		summary.ConclusionLabels = append(summary.ConclusionLabels, conclusionLabel("同結構隨機參數分佈", percentiles))
 	}
 	if len(shuffle) > 0 {
 		distribution, percentiles, err := distributionAndPercentiles(baselineMetrics, shuffle)
@@ -349,7 +349,7 @@ func (s *Service) createSnapshot(ctx context.Context, task *saasstore.ControlAna
 		}
 		summary.ShuffleDistribution = &distribution
 		summary.ShufflePercentiles = &percentiles
-		summary.ConclusionLabels = append(summary.ConclusionLabels, fmt.Sprintf("原始曝險時序位於打散分佈第 %.1f 百分位", percentiles.LogFinalNAVRatio))
+		summary.ConclusionLabels = append(summary.ConclusionLabels, conclusionLabel("曝險順序打亂分佈", percentiles))
 	}
 	for _, evaluation := range rules {
 		var metrics MetricSet
@@ -464,6 +464,17 @@ func distributionAndPercentiles(baseline MetricSet, evaluations []saasstore.Cont
 		percentiles.Sortino = &p
 	}
 	return distribution, percentiles, nil
+}
+
+func conclusionLabel(comparison string, percentiles PercentileSet) string {
+	metrics := []string{
+		fmt.Sprintf("報酬第 %.1f 百分位", percentiles.LogFinalNAVRatio),
+		fmt.Sprintf("最大回撤第 %.1f 百分位", percentiles.MaxDrawdown),
+	}
+	if percentiles.Sortino != nil {
+		metrics = append(metrics, fmt.Sprintf("Sortino 第 %.1f 百分位", *percentiles.Sortino))
+	}
+	return fmt.Sprintf("評估對象於%s：%s", comparison, strings.Join(metrics, "、"))
 }
 
 func representativeRoles(evaluations []saasstore.ControlEvaluation) map[uint]string {

@@ -29,12 +29,20 @@ export type ControlSnapshot = {
   shuffle_completed_count: number; rule_completed_count: number; failed_count: number;
   cancelled_count: number; cache_hit_count: number; content_hash: string; summary: SnapshotSummary; created_at: string;
 };
+export type ControlStudySettings = {
+  subject_display_name: string; instrument_id: string; instrument_display_name: string; data_source: string; symbol: string; interval: string; execution_mode: string;
+  start_time_ms: number; end_time_ms: number; initial_capital: number; monthly_dca: number;
+  fee_rate: number; spread_rate: number; long_term_filter_enabled: boolean; long_term_filter_months: number;
+  random_seed: number; random_count: number; shuffle_seed: number; shuffle_count: number;
+  toggle_every_n_bars: number; random_dimension_count: number; fixed_dimension_count: number;
+  meaningless_rule_labels: string[];
+};
 export type ControlStage = { id: number; key: string; type: string; status: string; completed_count: number; total_count: number; failed_count: number; progress: number; error?: string };
 export type ControlTask = {
   id: number; name: string; notes: string; tags: string[]; status: string; source_kind: string;
   source_genome_id?: number; candidate_id?: number; research_configuration_id?: number;
   random_batch_id: number; random_target_count: number; shuffle_target_count: number;
-  toggle_every_n_bars: number; same_structure: boolean; compute_task_id?: number;
+  toggle_every_n_bars: number; same_structure: boolean; study_settings: ControlStudySettings; compute_task_id?: number;
   stages: ControlStage[]; latest_snapshot?: ControlSnapshot; archived: boolean; created_at: string; completed_at?: string;
 };
 export type CompositePreview = {
