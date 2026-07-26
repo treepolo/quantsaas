@@ -332,7 +332,7 @@ func (s *Service) stageComputeSpec(ctx context.Context, userID uint, configurati
 	if canonical.DynamicPackage != nil {
 		executorType = dynamicparamsvc.MaterializeExecutorType
 	}
-	settings := map[string]any{"schema_version": StageSchemaVersion, "configuration_id": configuration.ID, "configuration_hash": configuration.ConfigHash, "stage_type": stageType, "manifest_hash": manifestHash(manifest), "geometry_package": canonical.GeometryPackage}
+	settings := map[string]any{"schema_version": StageSchemaVersion, "configuration_id": configuration.ID, "configuration_hash": configuration.ConfigHash, "stage_type": stageType, "manifest_hash": manifestHash(manifest)}
 	spec := computetask.CreateSpec{Kind: compute.TaskKindAtomic, TaskType: "p10.parameter-research." + stageType, Title: "參數研究：" + stageType, ExecutorType: executorType, Settings: settings, ResearchSettingID: fmt.Sprintf("p10-configuration:%d", configuration.ID), ResearchSettingHash: configuration.ConfigHash, StageKey: fmt.Sprintf("%s-%d", stageType, ordinal), StageType: stageType, StageOrder: ordinal, Items: items}
 	return spec, manifest, nil
 }

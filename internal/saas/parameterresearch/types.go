@@ -32,13 +32,6 @@ type DynamicReference struct {
 	PolicyArtifactID uint `json:"policy_artifact_id"`
 }
 
-type GeometryReference struct {
-	StudyID     uint   `json:"study_id"`
-	ArtifactID  uint   `json:"artifact_id"`
-	Horizon     int    `json:"horizon"`
-	ContentHash string `json:"content_hash"`
-}
-
 type DynamicSpaceDescriptor struct {
 	StudyID          uint                                    `json:"study_id"`
 	PolicyArtifactID uint                                    `json:"policy_artifact_id"`
@@ -65,7 +58,6 @@ type CreateConfigurationRequest struct {
 	BaseCoordinates []int                          `json:"base_coordinates"`
 	Backtest        robustnesssvc.BacktestSettings `json:"backtest"`
 	Dynamic         *DynamicReference              `json:"dynamic,omitempty"`
-	Geometry        *GeometryReference             `json:"geometry,omitempty"`
 }
 
 type ConfigurationCanonical struct {
@@ -76,7 +68,6 @@ type ConfigurationCanonical struct {
 	Backtest        robustnesssvc.BacktestSettings `json:"backtest"`
 	DatasetHash     string                         `json:"dataset_hash"`
 	DynamicPackage  *DynamicPackageReference       `json:"dynamic_package,omitempty"`
-	GeometryPackage *GeometryPackageReference      `json:"geometry_package,omitempty"`
 }
 
 type DynamicPackageReference struct {
@@ -88,15 +79,6 @@ type DynamicPackageReference struct {
 	BasePolicyHash         string `json:"base_policy_hash"`
 	ParameterSpaceVersion  string `json:"parameter_space_version"`
 	ParameterSpaceHash     string `json:"parameter_space_hash"`
-}
-
-type GeometryPackageReference struct {
-	StudyID       uint   `json:"study_id"`
-	ArtifactID    uint   `json:"artifact_id"`
-	Horizon       int    `json:"horizon"`
-	DatasetHash   string `json:"dataset_hash"`
-	ContentHash   string `json:"content_hash"`
-	SchemaVersion string `json:"schema_version"`
 }
 
 type ConfigurationDescriptor struct {
@@ -120,7 +102,6 @@ type ConfigurationDescriptor struct {
 	BaseCoordinates       []int                     `json:"base_coordinates"`
 	DynamicMode           bool                      `json:"dynamic_mode"`
 	DynamicPackage        *DynamicPackageReference  `json:"dynamic_package,omitempty"`
-	GeometryPackage       *GeometryPackageReference `json:"geometry_package,omitempty"`
 	Archived              bool                      `json:"archived"`
 	CreatedAt             string                    `json:"created_at"`
 }
