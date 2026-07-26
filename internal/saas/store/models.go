@@ -1412,6 +1412,63 @@ type DynamicReportBlock struct {
 	Study DynamicModelStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
 }
 
+// GeometryModelStudy is independent from P09 dynamic parameter studies. It
+// stores only the immutable training task identity and frozen geometry output.
+type GeometryModelStudy struct {
+	ID               uint `gorm:"primaryKey"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	OwnerUserID      uint   `gorm:"not null;index;uniqueIndex:idx_geometry_study_owner_key"`
+	StudyKey         string `gorm:"size:128;not null;uniqueIndex:idx_geometry_study_owner_key"`
+	Name             string `gorm:"size:180;not null"`
+	Status           string `gorm:"size:32;not null;index"`
+	InstrumentID     string `gorm:"size:64;not null;index"`
+	DataSource       string `gorm:"size:64;not null;index"`
+	Symbol           string `gorm:"size:64;not null"`
+	Interval         string `gorm:"size:16;not null;index"`
+	TrainStartTimeMs int64  `gorm:"not null;index"`
+	TrainEndTimeMs   int64  `gorm:"not null;index"`
+	DatasetHash      string `gorm:"size:128;not null;index"`
+	SettingVersion   string `gorm:"size:48;not null"`
+	SettingHash      string `gorm:"size:128;not null;index"`
+	Settings         JSONB  `gorm:"type:jsonb;not null"`
+	ComputeTaskID    *uint  `gorm:"index"`
+	ArtifactSetHash  string `gorm:"size:128;not null;default:''"`
+	PredictionID     *uint  `gorm:"index"`
+	ErrorMessage     string `gorm:"type:text"`
+	CompletedAt      *time.Time
+	Owner            User         `gorm:"foreignKey:OwnerUserID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+	ComputeTask      *ComputeTask `gorm:"foreignKey:ComputeTaskID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL;"`
+}
+
+type GeometryModelArtifact struct {
+	ID                  uint `gorm:"primaryKey"`
+	CreatedAt           time.Time
+	StudyID             uint               `gorm:"not null;index;uniqueIndex:idx_geometry_artifact_identity"`
+	ArtifactKey         string             `gorm:"size:128;not null;uniqueIndex:idx_geometry_artifact_identity"`
+	SchemaVersion       string             `gorm:"size:64;not null"`
+	Horizon             int                `gorm:"not null;index"`
+	Lookback            int                `gorm:"not null"`
+	DatasetHash         string             `gorm:"size:128;not null;index"`
+	TrainingStartTimeMs int64              `gorm:"not null"`
+	TrainingEndTimeMs   int64              `gorm:"not null"`
+	ContentHash         string             `gorm:"size:128;not null;index"`
+	Payload             JSONB              `gorm:"type:jsonb;not null"`
+	Study               GeometryModelStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
+type GeometryPredictionSnapshot struct {
+	ID              uint `gorm:"primaryKey"`
+	CreatedAt       time.Time
+	StudyID         uint               `gorm:"not null;uniqueIndex"`
+	SchemaVersion   string             `gorm:"size:64;not null"`
+	ArtifactSetHash string             `gorm:"size:128;not null;index"`
+	DatasetHash     string             `gorm:"size:128;not null;index"`
+	ContentHash     string             `gorm:"size:128;not null;index"`
+	Payload         JSONB              `gorm:"type:jsonb;not null"`
+	Study           GeometryModelStudy `gorm:"constraint:OnUpdate:CASCADE,OnDelete:RESTRICT;"`
+}
+
 // ResearchConfiguration is the immutable P10 research identity. Human-editable
 // metadata is deliberately kept in ResearchConfigurationMetadata.
 type ResearchConfiguration struct {

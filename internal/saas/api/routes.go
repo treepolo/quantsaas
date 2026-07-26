@@ -17,6 +17,7 @@ import (
 	controlresearchsvc "quantsaas/internal/saas/controlresearch"
 	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
 	"quantsaas/internal/saas/epoch"
+	geometrysvc "quantsaas/internal/saas/geometry"
 	"quantsaas/internal/saas/instance"
 	klineinversesvc "quantsaas/internal/saas/klineinverse"
 	"quantsaas/internal/saas/marketdata"
@@ -48,6 +49,7 @@ type RouterDeps struct {
 	MarketData        *marketdata.Service
 	Robustness        *robustnesssvc.Service
 	DynamicParameters *dynamicparamsvc.Service
+	Geometry          *geometrysvc.Service
 	ParameterResearch *parameterresearchsvc.Service
 	ControlResearch   *controlresearchsvc.Service
 	KlineInverse      *klineinversesvc.Service
@@ -107,6 +109,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 		dynamicParameters = dynamicparamsvc.NewService(deps.DB, deps.ComputeTasks)
 	}
 	dynamicParameterHandler := NewDynamicParameterHandler(dynamicParameters)
+	geometryStudies := deps.Geometry
+	if geometryStudies == nil {
+		geometryStudies = geometrysvc.NewService(deps.DB, deps.ComputeTasks)
+	}
+	geometryHandler := NewGeometryHandler(geometryStudies)
 	parameterResearch := deps.ParameterResearch
 	if parameterResearch == nil {
 		parameterResearch = parameterresearchsvc.NewService(deps.DB, deps.ComputeTasks, robustnessStudies)
@@ -221,6 +228,11 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/dynamic-parameters/studies/:id/materialize/preview", dynamicParameterHandler.PreviewMaterialize)
 	lab.POST("/dynamic-parameters/studies/:id/materialize", dynamicParameterHandler.Materialize)
 	lab.GET("/dynamic-parameters/studies/:id/report-blocks/:blockID", dynamicParameterHandler.ReportBlock)
+	lab.POST("/trend-geometry/studies/preview", geometryHandler.Preview)
+	lab.POST("/trend-geometry/studies", geometryHandler.Create)
+	lab.GET("/trend-geometry/studies", geometryHandler.List)
+	lab.GET("/trend-geometry/studies/:id", geometryHandler.Get)
+	lab.GET("/trend-geometry/artifacts", geometryHandler.Artifacts)
 	parameterResearchAPI := lab.Group("/lab/parameter-research")
 	parameterResearchAPI.POST("/configurations", parameterResearchHandler.CreateConfiguration)
 	parameterResearchAPI.GET("/dynamic-policy-spaces/:id", parameterResearchHandler.DynamicSpace)

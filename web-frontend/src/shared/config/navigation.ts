@@ -44,6 +44,7 @@ export const navItems: NavItem[] = [
   { to: "/parameter-research", labelKey: "優化實驗室", icon: Grid3X3, group: "researchExecution", feature: "backtesting" },
   { to: "/backtesting", labelKey: "nav.backtesting", icon: BarChart3, group: "researchExecution", feature: "backtesting" },
   { to: "/dynamic-parameters", labelKey: "預測與動態參數", icon: BrainCircuit, group: "researchExecution", feature: "backtesting" },
+  { to: "/trend-geometry", labelKey: "走勢幾何預測", icon: BrainCircuit, group: "researchExecution", feature: "backtesting" },
   { to: "/status", labelKey: "市場狀態", icon: Gauge, group: "analysis", feature: "backtesting" },
   { to: "/robustness", labelKey: "參數穩健性", icon: Grid3X3, group: "analysis", feature: "backtesting" },
   { to: "/control-analysis", labelKey: "隨機對照研究", icon: Dices, group: "analysis", feature: "backtesting" },

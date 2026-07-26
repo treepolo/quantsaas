@@ -18,6 +18,7 @@ import (
 	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
 	"quantsaas/internal/saas/epoch"
 	"quantsaas/internal/saas/ga"
+	geometrysvc "quantsaas/internal/saas/geometry"
 	"quantsaas/internal/saas/instance"
 	klineinversesvc "quantsaas/internal/saas/klineinverse"
 	"quantsaas/internal/saas/marketdata"
@@ -74,6 +75,7 @@ func main() {
 		robustnesssvc.NewPointExecutor(db.DB),
 		dynamicparamsvc.NewTrainExecutor(db.DB),
 		dynamicparamsvc.NewMaterializeExecutor(db.DB, backtestService),
+		geometrysvc.NewExecutor(db.DB),
 		controlresearchsvc.NewExecutor(db.DB, backtestService),
 		parameterresearchsvc.NewSurrogateExecutor(),
 		marketdata.NewRecompositionPreviewExecutor(marketDataService),
@@ -102,6 +104,7 @@ func main() {
 	marketDataService.SetComputeTasks(computeTasks)
 	robustnessStudies := robustnesssvc.NewService(db.DB, computeTasks)
 	dynamicParameterStudies := dynamicparamsvc.NewService(db.DB, computeTasks)
+	geometryStudies := geometrysvc.NewService(db.DB, computeTasks)
 	parameterResearch := parameterresearchsvc.NewService(db.DB, computeTasks, robustnessStudies)
 	perturbationStudies := perturbationsvc.NewService(db.DB, computeTasks, parameterResearch)
 	controlResearch := controlresearchsvc.NewService(db.DB, computeTasks, parameterResearch)
@@ -122,6 +125,7 @@ func main() {
 		MarketData:        marketDataService,
 		Robustness:        robustnessStudies,
 		DynamicParameters: dynamicParameterStudies,
+		Geometry:          geometryStudies,
 		ParameterResearch: parameterResearch,
 		ControlResearch:   controlResearch,
 		KlineInverse:      klineInverse,

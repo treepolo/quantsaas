@@ -18,6 +18,7 @@ import (
 	"quantsaas/internal/saas/backtestresult"
 	"quantsaas/internal/saas/computetask"
 	dynamicparamsvc "quantsaas/internal/saas/dynamicparam"
+	geometrysvc "quantsaas/internal/saas/geometry"
 	robustnesssvc "quantsaas/internal/saas/robustness"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
@@ -43,7 +44,7 @@ func (s *Service) CreateConfiguration(ctx context.Context, userID uint, req Crea
 	if userID == 0 {
 		return ConfigurationDescriptor{}, ErrInvalidRequest
 	}
-	canonical, dynamicReference, err := s.prepareConfiguration(ctx, userID, req)
+	canonical, dynamicReference, geometryReference, err := s.prepareConfiguration(ctx, userID, req)
 	if err != nil {
 		return ConfigurationDescriptor{}, err
 	}
@@ -69,6 +70,7 @@ func (s *Service) CreateConfiguration(ctx context.Context, userID uint, req Crea
 	if dynamicReference != nil {
 		model.DynamicStudyID, model.DynamicPolicyID = &dynamicReference.StudyID, &dynamicReference.PolicyArtifactID
 	}
+	_ = geometryReference
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		result := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "owner_user_id"}, {Name: "config_hash"}}, DoNothing: true}).Create(&model)
 		if result.Error != nil {
@@ -89,9 +91,9 @@ func (s *Service) CreateConfiguration(ctx context.Context, userID uint, req Crea
 	return s.GetConfiguration(ctx, userID, model.ID)
 }
 
-func (s *Service) prepareConfiguration(ctx context.Context, userID uint, req CreateConfigurationRequest) (ConfigurationCanonical, *DynamicPackageReference, error) {
+func (s *Service) prepareConfiguration(ctx context.Context, userID uint, req CreateConfigurationRequest) (ConfigurationCanonical, *DynamicPackageReference, *GeometryPackageReference, error) {
 	if req.GenomeID == 0 || robust.ValidateSpace(req.ParameterSpace) != nil || len(req.BaseCoordinates) != len(req.ParameterSpace.Axes) {
-		return ConfigurationCanonical{}, nil, ErrInvalidRequest
+		return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
 	}
 	req.Backtest.InstrumentID = strings.TrimSpace(req.Backtest.InstrumentID)
 	req.Backtest.DataSource = strings.TrimSpace(req.Backtest.DataSource)
@@ -99,49 +101,64 @@ func (s *Service) prepareConfiguration(ctx context.Context, userID uint, req Cre
 	req.Backtest.Interval = strings.TrimSpace(req.Backtest.Interval)
 	req.Backtest.ExecutionMode = strings.TrimSpace(req.Backtest.ExecutionMode)
 	if req.Backtest.InstrumentID == "" || req.Backtest.DataSource == "" || req.Backtest.Symbol == "" || req.Backtest.Interval == "" || req.Backtest.StartTimeMs <= 0 || req.Backtest.EndTimeMs <= req.Backtest.StartTimeMs {
-		return ConfigurationCanonical{}, nil, ErrInvalidRequest
+		return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
 	}
 	if req.Backtest.ExecutionMode == "" {
 		req.Backtest.ExecutionMode = saasstore.ExecutionModeCloseSameBar
 	}
 	if req.Backtest.ExecutionMode != saasstore.ExecutionModeCloseSameBar && req.Backtest.ExecutionMode != saasstore.ExecutionModeCloseNextOpen {
-		return ConfigurationCanonical{}, nil, ErrInvalidRequest
+		return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
 	}
 	var gene saasstore.GeneRecord
 	if err := s.db.WithContext(ctx).Where("id = ? AND strategy_id = ?", req.GenomeID, sigmoiddca.StrategyID).First(&gene).Error; err != nil {
-		return ConfigurationCanonical{}, nil, ErrInvalidRequest
+		return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
 	}
 	for i, value := range req.BaseCoordinates {
 		axis := req.ParameterSpace.Axes[i]
 		if value < axis.StudyStart || value > axis.StudyEnd {
-			return ConfigurationCanonical{}, nil, ErrInvalidRequest
+			return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
 		}
 	}
 	basePoint, err := pointForCoordinates(req.ParameterSpace, req.BaseCoordinates)
 	if err != nil {
-		return ConfigurationCanonical{}, nil, err
+		return ConfigurationCanonical{}, nil, nil, err
 	}
 	baseParams := sigmoiddca.ParseParamsFromParamPack(gene.ParamPack)
 	var dynamicReference *DynamicPackageReference
 	if req.Dynamic == nil {
 		chromosome, err := robust.ChromosomeWithValues(baseParams.Chromosome, basePoint.Parameters)
 		if err != nil {
-			return ConfigurationCanonical{}, nil, err
+			return ConfigurationCanonical{}, nil, nil, err
 		}
 		if err := quant.ValidateChromosome(chromosome); err != nil {
-			return ConfigurationCanonical{}, nil, err
+			return ConfigurationCanonical{}, nil, nil, err
 		}
 	} else {
 		dynamicReference, err = s.loadDynamicReference(ctx, userID, *req.Dynamic, req.ParameterSpace)
 		if err != nil {
-			return ConfigurationCanonical{}, nil, err
+			return ConfigurationCanonical{}, nil, nil, err
 		}
 	}
 	datasetHash, err := s.datasetHash(ctx, req.Backtest)
 	if err != nil {
-		return ConfigurationCanonical{}, nil, err
+		return ConfigurationCanonical{}, nil, nil, err
 	}
-	return ConfigurationCanonical{SchemaVersion: ConfigurationSchemaVersion, GenomeID: req.GenomeID, ParameterSpace: req.ParameterSpace, BaseCoordinates: append([]int(nil), req.BaseCoordinates...), Backtest: req.Backtest, DatasetHash: datasetHash, DynamicPackage: dynamicReference}, dynamicReference, nil
+	var geometryReference *GeometryPackageReference
+	if req.Dynamic != nil && req.Geometry != nil {
+		return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
+	}
+	if req.Geometry != nil {
+		var artifact saasstore.GeometryModelArtifact
+		if err := s.db.WithContext(ctx).Where("id = ? AND horizon = ? AND dataset_hash = ? AND content_hash = ?", req.Geometry.ArtifactID, req.Geometry.Horizon, datasetHash, req.Geometry.ContentHash).First(&artifact).Error; err != nil {
+			return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
+		}
+		var study saasstore.GeometryModelStudy
+		if err := s.db.WithContext(ctx).Where("id = ? AND owner_user_id = ? AND status = ? AND dataset_hash = ?", req.Geometry.StudyID, userID, geometrysvc.StudyStatusCompleted, datasetHash).First(&study).Error; err != nil || artifact.StudyID != study.ID {
+			return ConfigurationCanonical{}, nil, nil, ErrInvalidRequest
+		}
+		geometryReference = &GeometryPackageReference{StudyID: study.ID, ArtifactID: artifact.ID, Horizon: artifact.Horizon, DatasetHash: artifact.DatasetHash, ContentHash: artifact.ContentHash, SchemaVersion: artifact.SchemaVersion}
+	}
+	return ConfigurationCanonical{SchemaVersion: ConfigurationSchemaVersion, GenomeID: req.GenomeID, ParameterSpace: req.ParameterSpace, BaseCoordinates: append([]int(nil), req.BaseCoordinates...), Backtest: req.Backtest, DatasetHash: datasetHash, DynamicPackage: dynamicReference, GeometryPackage: geometryReference}, dynamicReference, geometryReference, nil
 }
 
 func (s *Service) loadDynamicReference(ctx context.Context, userID uint, reference DynamicReference, space robust.ParameterSpace) (*DynamicPackageReference, error) {
@@ -291,7 +308,7 @@ func (s *Service) describeConfiguration(ctx context.Context, row saasstore.Resea
 	}
 	var tags []string
 	_ = json.Unmarshal(metadata.Tags, &tags)
-	return ConfigurationDescriptor{ID: row.ID, Name: metadata.Name, Notes: metadata.Notes, Tags: tags, ConfigHash: row.ConfigHash, SchemaVersion: row.SchemaVersion, InstrumentID: row.InstrumentID, DataSource: row.DataSource, Symbol: row.Symbol, Interval: row.Interval, DatasetHash: row.DatasetHash, StartTimeMs: row.StartTimeMs, EndTimeMs: row.EndTimeMs, ExecutionMode: row.ExecutionMode, ParameterSpaceVersion: row.ParameterSpaceVersion, ParameterSpaceHash: row.ParameterSpaceHash, ParameterSpace: canonical.ParameterSpace, BaseCoordinates: canonical.BaseCoordinates, DynamicMode: row.DynamicMode, DynamicPackage: canonical.DynamicPackage, Archived: row.ArchivedAt != nil, CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339)}, nil
+	return ConfigurationDescriptor{ID: row.ID, Name: metadata.Name, Notes: metadata.Notes, Tags: tags, ConfigHash: row.ConfigHash, SchemaVersion: row.SchemaVersion, InstrumentID: row.InstrumentID, DataSource: row.DataSource, Symbol: row.Symbol, Interval: row.Interval, DatasetHash: row.DatasetHash, StartTimeMs: row.StartTimeMs, EndTimeMs: row.EndTimeMs, ExecutionMode: row.ExecutionMode, ParameterSpaceVersion: row.ParameterSpaceVersion, ParameterSpaceHash: row.ParameterSpaceHash, ParameterSpace: canonical.ParameterSpace, BaseCoordinates: canonical.BaseCoordinates, DynamicMode: row.DynamicMode, DynamicPackage: canonical.DynamicPackage, GeometryPackage: canonical.GeometryPackage, Archived: row.ArchivedAt != nil, CreatedAt: row.CreatedAt.UTC().Format(time.RFC3339)}, nil
 }
 
 func (s *Service) ArchiveConfiguration(ctx context.Context, userID, id uint) error {

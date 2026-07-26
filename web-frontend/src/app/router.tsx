@@ -16,6 +16,7 @@ import { SettingsPage } from "../features/settings/SettingsPage";
 import { ComputeTasksPage } from "../features/computetasks/ComputeTasksPage";
 import { RobustnessPage } from "../features/robustness/RobustnessPage";
 import { DynamicParametersPage } from "../features/dynamicparameters/DynamicParametersPage";
+import { TrendGeometryPage } from "../features/trendgeometry/TrendGeometryPage";
 import { ParameterResearchPage } from "../features/parameterresearch/ParameterResearchPage";
 import { ControlResearchPage } from "../features/controlresearch/ControlResearchPage";
 import { KlineInversePage } from "../features/klineinverse/KlineInversePage";
@@ -73,6 +74,7 @@ export function AppRouter() {
 				<Route path="kline-inverse" element={<KlineInversePage />} />
                 <Route path="robustness" element={<RobustnessPage />} />
                 <Route path="dynamic-parameters" element={<DynamicParametersPage />} />
+                <Route path="trend-geometry" element={<TrendGeometryPage />} />
                 <Route path="evolution" element={<EvolutionPage />} />
                 <Route path="parameter-research" element={<ParameterResearchPage />} />
                 <Route path="tasks" element={<ComputeTasksPage />} />

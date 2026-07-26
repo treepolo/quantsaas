@@ -8,6 +8,7 @@ export type ResearchConfiguration = {
   start_time_ms: number; end_time_ms: number; execution_mode: string; parameter_space_version: string;
   parameter_space_hash: string; parameter_space: ParameterSpace; base_coordinates: number[]; dynamic_mode: boolean;
   dynamic_package?: { study_id: number; policy_artifact_id: number; artifact_set_hash: string; prediction_snapshot_hash: string; parameter_space_hash: string };
+  geometry_package?: { study_id: number; artifact_id: number; horizon: number; dataset_hash: string; content_hash: string; schema_version: string };
   archived: boolean; created_at: string;
 };
 
@@ -26,7 +27,7 @@ const root = "/lab/parameter-research";
 export const parameterResearchApi = {
   listConfigurations: () => apiFetch<ResearchConfiguration[]>(`${root}/configurations`),
   dynamicSpace: (policyId: number) => apiFetch<DynamicSpace>(`${root}/dynamic-policy-spaces/${policyId}`),
-  createConfiguration: (input: { name: string; notes?: string; tags?: string[]; genome_id: number; parameter_space: ParameterSpace; base_coordinates: number[]; backtest: BacktestSettings; dynamic?: { study_id: number; policy_artifact_id: number } }) => apiFetch<ResearchConfiguration>(`${root}/configurations`, { method: "POST", body: JSON.stringify(input) }),
+  createConfiguration: (input: { name: string; notes?: string; tags?: string[]; genome_id: number; parameter_space: ParameterSpace; base_coordinates: number[]; backtest: BacktestSettings; dynamic?: { study_id: number; policy_artifact_id: number }; geometry?: { study_id: number; artifact_id: number; horizon: number; content_hash: string } }) => apiFetch<ResearchConfiguration>(`${root}/configurations`, { method: "POST", body: JSON.stringify(input) }),
   listRuns: (configurationId:number) => apiFetch<ResearchRun[]>(`${root}/configurations/${configurationId}/runs`),
   planRun: (configurationId: number, requestedSobol = 0) => apiFetch<ResearchPlan>(`${root}/configurations/${configurationId}/runs/plan`, { method: "POST", body: JSON.stringify({ requested_sobol: requestedSobol, root_seed: 0 }) }),
   startRun: (configurationId: number, plan: ResearchPlan, requestedSobol = 0, confirmSoftLimit = false) => apiFetch<ResearchRun>(`${root}/configurations/${configurationId}/runs`, { method: "POST", body: JSON.stringify({ plan: { requested_sobol: requestedSobol, root_seed: 0 }, plan_key: plan.plan_key, idempotency_key: crypto.randomUUID(), confirm_soft_limit: confirmSoftLimit }) }),
