@@ -6,7 +6,6 @@ import {
   Database,
 	Dices,
 	LineChart,
-  FlaskConical,
   Gauge,
   Layers3,
   Grid3X3,
@@ -49,7 +48,6 @@ export const navItems: NavItem[] = [
   { to: "/robustness", labelKey: "參數穩健性", icon: Grid3X3, group: "analysis", feature: "backtesting" },
   { to: "/control-analysis", labelKey: "隨機對照研究", icon: Dices, group: "analysis", feature: "backtesting" },
   { to: "/kline-inverse", labelKey: "K 線樣貌反推", icon: LineChart, group: "analysis", feature: "backtesting" },
-  { to: "/parameter-library", labelKey: "參數庫", icon: FlaskConical, group: "management", feature: "strategies" },
   { to: "/tasks", labelKey: "計算任務", icon: ClipboardList, group: "management", feature: "backtesting" },
   { to: "/settings", labelKey: "nav.settings", icon: Settings, group: "management", feature: "settings" }
 ];

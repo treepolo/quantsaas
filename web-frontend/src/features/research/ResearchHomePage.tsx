@@ -5,7 +5,7 @@ import { Card, CardDescription, CardHeader, CardTitle } from "../../shared/ui/Ca
 
 const items = [
   { to: "/evolution", icon: FlaskConical, title: "參數研究", body: "以實測地形、穩健區域與候選分析研究參數，並由人工決定是否採用。" },
-  { to: "/parameter-library", icon: Grid3X3, title: "參數庫", body: "管理候選、已採用與已退役參數，查看既有搜尋任務摘要。" },
+  { to: "/evolution?tab=library", icon: Grid3X3, title: "參數庫", body: "管理候選、已採用與已退役參數，查看既有搜尋任務摘要。" },
   { to: "/backtesting", icon: AreaChart, title: "回測", body: "用歷史資料檢查參數表現，確認結果是否穩定。" },
 	{ to: "/control-analysis", icon: Dices, title: "隨機對照研究", body: "比較合法隨機參數、無意義規則與曝險順序打亂結果。" },
 	{ to: "/kline-inverse", icon: LineChart, title: "K 線樣貌反推", body: "固定參數，搜尋可跑贏定投且具多樣性的合成 K 線樣貌。" },

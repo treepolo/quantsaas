@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
@@ -1073,7 +1073,17 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
 }
 
 export function EvolutionPage() {
-  const [tab, setTab] = useState<"optimize" | "library">("optimize");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get("tab") === "library" ? "library" : "optimize";
+  const setTab = (nextTab: "optimize" | "library") => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextTab === "library") {
+      nextParams.set("tab", "library");
+    } else {
+      nextParams.delete("tab");
+    }
+    setSearchParams(nextParams);
+  };
   const instrumentsQuery = useQuery({ queryKey: ["market-data-instruments"], queryFn: () => marketDataApi.instruments() });
   const instrumentNames = useMemo(() => Object.fromEntries((instrumentsQuery.data?.instruments ?? []).map((item) => [item.id, item.display_name])), [instrumentsQuery.data]);
   const { data: genomes = [] } = useQuery({ queryKey: ["genomes"], queryFn: () => evolutionApi.listGenomes() });

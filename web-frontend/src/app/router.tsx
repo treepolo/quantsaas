@@ -62,7 +62,7 @@ export function AppRouter() {
             <Route path="/" element={<AppShell />}>
               <Route index element={<ResearchHomePage />} />
               <Route element={<FeatureGate feature="strategies" />}>
-                <Route path="parameter-library" element={<EvolutionPage />} />
+                <Route path="parameter-library" element={<Navigate to="/evolution?tab=library" replace />} />
               </Route>
               <Route element={<FeatureGate feature="backtesting" />}>
                 <Route path="data" element={<MarketDataPage />} />
