@@ -26,7 +26,12 @@ type GenomeStore interface {
 // across separate tasks with the same search configuration.
 type CandidateReservationStore interface {
 	LoadReservedFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte) (map[uint64]bool, error)
-	ReserveFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte, taskID uint, generation int, fingerprints []uint64) error
+	ReserveCandidates(ctx context.Context, scope GeneScope, searchConfig []byte, taskID uint, generation int, candidates []CandidateReservation) error
+}
+
+type CandidateReservation struct {
+	Fingerprint uint64
+	ParamPack   []byte
 }
 
 type GeneScope struct {
@@ -394,24 +399,24 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 func (e *EvolutionEngine) candidateReservationConfig(cfg EpochConfig) []byte {
 	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	raw, err := json.Marshal(struct {
-		StrategyID       string                    `json:"strategy_id"`
-		Pair             string                    `json:"pair"`
-		InstrumentID     string                    `json:"instrument_id"`
-		DataSource       string                    `json:"data_source"`
-		Interval         string                    `json:"interval"`
-		ExecutionMode    string                    `json:"execution_mode"`
-		StartTimeMs      int64                     `json:"start_time_ms"`
-		EndTimeMs        int64                     `json:"end_time_ms"`
-		LotStepSize      float64                   `json:"lot_step_size"`
-		LotMinQty        float64                   `json:"lot_min_qty"`
-		InitialCapital   float64                   `json:"initial_capital"`
-		MonthlyDCA       float64                   `json:"monthly_dca"`
-		GeneOptions      GeneOptions               `json:"gene_options"`
-		FixedGene        *quant.Chromosome         `json:"fixed_gene,omitempty"`
-		Costs            quant.ExecutionCostConfig `json:"costs"`
-		TradePenalty     float64                   `json:"trade_penalty"`
-		LongTermFilter   backtestcore.LongTermFilterConfig `json:"long_term_filter"`
-		SpawnPoint       *quant.SpawnPoint         `json:"spawn_point"`
+		StrategyID     string                            `json:"strategy_id"`
+		Pair           string                            `json:"pair"`
+		InstrumentID   string                            `json:"instrument_id"`
+		DataSource     string                            `json:"data_source"`
+		Interval       string                            `json:"interval"`
+		ExecutionMode  string                            `json:"execution_mode"`
+		StartTimeMs    int64                             `json:"start_time_ms"`
+		EndTimeMs      int64                             `json:"end_time_ms"`
+		LotStepSize    float64                           `json:"lot_step_size"`
+		LotMinQty      float64                           `json:"lot_min_qty"`
+		InitialCapital float64                           `json:"initial_capital"`
+		MonthlyDCA     float64                           `json:"monthly_dca"`
+		GeneOptions    GeneOptions                       `json:"gene_options"`
+		FixedGene      *quant.Chromosome                 `json:"fixed_gene,omitempty"`
+		Costs          quant.ExecutionCostConfig         `json:"costs"`
+		TradePenalty   float64                           `json:"trade_penalty"`
+		LongTermFilter backtestcore.LongTermFilterConfig `json:"long_term_filter"`
+		SpawnPoint     *quant.SpawnPoint                 `json:"spawn_point"`
 	}{
 		StrategyID: e.evolvable.StrategyID(), Pair: cfg.Pair, InstrumentID: cfg.InstrumentID,
 		DataSource: cfg.DataSource, Interval: cfg.Interval, ExecutionMode: cfg.ExecutionMode,
@@ -657,13 +662,17 @@ func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []i
 		return population, nil
 	}
 	if reservations, ok := e.store.(CandidateReservationStore); ok {
-		fingerprints := make([]uint64, 0, unevaluated)
+		candidates := make([]CandidateReservation, 0, unevaluated)
 		for _, item := range population {
 			if !item.Evaluated {
-				fingerprints = append(fingerprints, e.evolvable.Fingerprint(item.Gene))
+				paramPack, err := e.evolvable.EncodeResult(item.Gene, plan.Spawn, cfg.GeneOptions)
+				if err != nil {
+					return nil, err
+				}
+				candidates = append(candidates, CandidateReservation{Fingerprint: e.evolvable.Fingerprint(item.Gene), ParamPack: paramPack})
 			}
 		}
-		if err := reservations.ReserveFingerprints(ctx, scope, searchConfig, cfg.TaskID, generation, fingerprints); err != nil {
+		if err := reservations.ReserveCandidates(ctx, scope, searchConfig, cfg.TaskID, generation, candidates); err != nil {
 			return nil, err
 		}
 	}

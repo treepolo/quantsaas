@@ -241,6 +241,10 @@ export type GeneObservationQuery = {
   limit?: number;
 };
 
+export type ParameterGridPoint = { value: number; count: number };
+export type ParameterGridAxis = { key: string; label: string; min: number; max: number; points: ParameterGridPoint[] };
+export type ParameterGridResponse = { task_id: number; axes: ParameterGridAxis[]; grid_point_count: number };
+
 export type EvolutionOverview = {
   current_task: EvolutionTask | null;
   running: boolean;
@@ -275,6 +279,9 @@ export const evolutionApi = {
       if (value !== undefined && value !== "" && value !== 0) params.set(key, String(value));
     });
     return apiFetch<GeneObservationResponse>(`/evolution/gene-observations?${params.toString()}`);
+  },
+  parameterGrid(taskId: number) {
+    return apiFetch<ParameterGridResponse>(`/evolution/tasks/${taskId}/parameter-grid`);
   },
   updateGenome(genomeId: number, input: { name?: string; notes?: string; tags?: string[] }) {
     return apiFetch<{ status: string; genome: GenomeRecord }>(`/evolution/genomes/${genomeId}`, {

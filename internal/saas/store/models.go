@@ -225,6 +225,17 @@ type GeneObservation struct {
 	Fatal         bool    `gorm:"not null;default:false"`
 }
 
+// GeneParameterGridPoint is the compact coverage index used by the parameter
+// laboratory. It stores one row per task, core parameter and 0.05 grid point,
+// rather than requiring the UI to load every historical candidate.
+type GeneParameterGridPoint struct {
+	ID           uint   `gorm:"primaryKey"`
+	TaskID       uint   `gorm:"not null;index;uniqueIndex:idx_gene_parameter_grid_unique"`
+	ParameterKey string `gorm:"size:64;not null;uniqueIndex:idx_gene_parameter_grid_unique"`
+	GridStep     int    `gorm:"not null;uniqueIndex:idx_gene_parameter_grid_unique"`
+	Count        int64  `gorm:"not null;default:0"`
+}
+
 type EvolutionTask struct {
 	ID            uint `gorm:"primaryKey"`
 	CreatedAt     time.Time

@@ -60,6 +60,7 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&AuditLog{},
 		&GeneRecord{},
 		&GeneObservation{},
+		&GeneParameterGridPoint{},
 		&EvolutionTask{},
 		&BacktestSpec{},
 		&BacktestResult{},

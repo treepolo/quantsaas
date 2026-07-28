@@ -69,6 +69,71 @@ func (h *EvolutionHandler) EstimateCompute(c *gin.Context) {
 	c.JSON(http.StatusOK, estimate)
 }
 
+type parameterGridPointResponse struct {
+	Value float64 `json:"value"`
+	Count int64   `json:"count"`
+}
+
+type parameterGridAxisResponse struct {
+	Key    string                       `json:"key"`
+	Label  string                       `json:"label"`
+	Min    float64                      `json:"min"`
+	Max    float64                      `json:"max"`
+	Points []parameterGridPointResponse `json:"points"`
+}
+
+// GetParameterGrid returns the compact, server-aggregated search coverage for
+// one task. Its response is bounded by the legal 0.05 lattice, not by the
+// number of candidates, so rendering it never requires a raw candidate dump.
+func (h *EvolutionHandler) GetParameterGrid(c *gin.Context) {
+	taskID, err := strconv.ParseUint(c.Param("taskID"), 10, 64)
+	if err != nil || taskID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "無效的任務編號"})
+		return
+	}
+	var task saasstore.EvolutionTask
+	if err := h.db.WithContext(c.Request.Context()).First(&task, uint(taskID)).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "找不到任務"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var rows []saasstore.GeneParameterGridPoint
+	if err := h.db.WithContext(c.Request.Context()).
+		Where("task_id = ?", task.ID).
+		Order("parameter_key ASC, grid_step ASC").
+		Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	pointsByKey := map[string][]parameterGridPointResponse{}
+	for _, row := range rows {
+		pointsByKey[row.ParameterKey] = append(pointsByKey[row.ParameterKey], parameterGridPointResponse{
+			Value: float64(row.GridStep) * 0.05,
+			Count: row.Count,
+		})
+	}
+	type axisDefinition struct{ key, label string }
+	definitions := []axisDefinition{
+		{"micro_reserve_pct", "微觀保留比例"}, {"beta", "Beta"}, {"gamma", "Gamma"},
+		{"w_mean", "均值權重"}, {"w_momentum", "動能權重"}, {"w_breakout", "突破權重"},
+		{"dust_usd", "最小交易金額"}, {"rebalance_threshold", "再平衡門檻"},
+		{"force_full_threshold", "強制滿倉門檻"}, {"force_empty_threshold", "強制空倉門檻"},
+		{"wedge_delta_threshold", "幾何變化門檻"}, {"wedge_vol_ratio_threshold", "幾何活動門檻"},
+		{"macro_bear_multiplier", "偏空倍率"}, {"macro_bull_multiplier", "偏多倍率"},
+		{"extra_deploy_pct", "額外投入比例"}, {"soft_release_months", "緩釋月數"},
+		{"soft_release_pct", "緩釋比例"}, {"hard_release_max_pct", "硬釋放上限"},
+	}
+	axes := make([]parameterGridAxisResponse, 0, len(definitions))
+	for _, definition := range definitions {
+		bound := quant.HardBounds[definition.key]
+		axes = append(axes, parameterGridAxisResponse{Key: definition.key, Label: definition.label, Min: bound.Min, Max: bound.Max, Points: pointsByKey[definition.key]})
+	}
+	c.JSON(http.StatusOK, gin.H{"task_id": task.ID, "axes": axes, "grid_point_count": len(rows)})
+}
+
 func (h *EvolutionHandler) ListTasks(c *gin.Context) {
 	if h.service != nil && h.service.CurrentTask() == nil {
 		now := time.Now().UTC()

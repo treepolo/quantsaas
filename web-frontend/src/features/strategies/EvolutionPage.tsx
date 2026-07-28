@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
-import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
+import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type ParameterGridAxis, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
 import { researchDataApi } from "../../shared/services/researchData";
 import { Button } from "../../shared/ui/Button";
@@ -253,6 +253,21 @@ function Metric({ label, value, danger = false }: { label: string; value: string
       <div className={cn("mt-1 font-mono text-lg", danger ? "text-[#fecaca]" : "text-slate-100")}>{value}</div>
     </div>
   );
+}
+
+function ParameterGridCoverage({ taskID, generation }: { taskID: number; generation?: number }) {
+  // generation is intentionally part of the query key: the grid is fetched
+  // only after a generation completes, never on a per-second timer.
+  const gridQuery = useQuery({ queryKey: ["parameter-grid", taskID, generation], queryFn: () => evolutionApi.parameterGrid(taskID), enabled: taskID > 0, refetchInterval: false });
+  const axes = gridQuery.data?.axes ?? [];
+  return <Card className="md:col-span-2"><CardHeader><div><CardTitle>核心參數格點覆蓋</CardTitle><CardDescription>每個大圓點代表至少出現過一次的 0.05 格點；圓點標示該格點出現次數。僅在完成一代後更新。</CardDescription></div><div className="text-right text-xs text-slate-500">{gridQuery.isFetching ? "更新中" : "已同步"}<br />{gridQuery.data?.grid_point_count ?? 0} 個已走過格點</div></CardHeader>{gridQuery.isLoading ? <div className="text-sm text-slate-500">載入格點覆蓋…</div> : null}{!gridQuery.isLoading && axes.every(axis => axis.points.length === 0) ? <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4 text-sm text-slate-500">目前尚無可顯示的格點；新任務完成第一代後會出現。</div> : null}{axes.some(axis => axis.points.length > 0) ? <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{axes.map(axis => <GridAxisChart key={axis.key} axis={axis} />)}</div> : null}</Card>;
+}
+
+function GridAxisChart({ axis }: { axis: ParameterGridAxis }) {
+  const width = 360, height = 92, padding = 22;
+  const pointX = (value: number) => padding + ((value - axis.min) / Math.max(0.000001, axis.max - axis.min)) * (width - padding * 2);
+  const maxCount = Math.max(1, ...axis.points.map(point => point.count));
+  return <div className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3"><div className="mb-1 flex items-center justify-between gap-2"><div className="truncate text-sm font-medium text-slate-200">{axis.label}</div><div className="font-mono text-xs text-slate-500">{axis.points.length} 格</div></div><svg viewBox={`0 0 ${width} ${height}`} className="h-24 w-full" role="img" aria-label={`${axis.label} 已走過格點`}><line x1={padding} x2={width - padding} y1={height / 2} y2={height / 2} stroke="rgba(148,163,184,0.28)" strokeWidth="2" />{axis.points.map(point => { const radius = 5 + Math.min(5, Math.log2(point.count + 1)); const opacity = 0.45 + 0.55 * Math.min(1, point.count / maxCount); return <g key={point.value}><title>{`${point.value.toFixed(2)} · 出現 ${point.count.toLocaleString("zh-TW")} 次`}</title><circle cx={pointX(point.value)} cy={height / 2} r={radius} fill="rgb(45,212,191)" opacity={opacity} /></g>; })}<text x={padding} y={height - 8} fontSize="10" fill="rgb(148,163,184)">{axis.min.toFixed(2)}</text><text x={width - padding} y={height - 8} textAnchor="end" fontSize="10" fill="rgb(148,163,184)">{axis.max.toFixed(2)}</text></svg></div>;
 }
 
 function ParameterLandscape({ query, live = false }: { query: GeneObservationQuery; live?: boolean }) {
@@ -583,7 +598,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           </div>
         </Card>
         <Card className="p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-sm font-semibold text-slate-200">參數分佈地圖</div><div className="mt-1 text-xs text-slate-500">預設關閉；打開後才查詢紀錄並計算圖表。</div></div><Button variant="secondary" onClick={() => setShowLandscape((value) => !value)}>{showLandscape ? "關閉地圖" : "顯示地圖"}</Button></div></Card>
-        {showLandscape ? <ParameterLandscape query={runningLandscapeQuery} live /> : null}
+        {showLandscape ? <ParameterGridCoverage taskID={running.id} generation={running.current_generation} /> : null}
         <CurrentBestCard task={running} />
         <TraceConsole task={running} />
       </div>
@@ -769,7 +784,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           </div>
           <NumberInput label="每次交易懲罰" min={0} max={1} step={0.0001} value={tradePenalty} onChange={setTradePenalty} />
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-sm font-semibold text-slate-300">參數分佈地圖</div><div className="mt-1 text-xs text-slate-500">預設關閉；打開後才查詢紀錄並計算圖表。</div></div><Button type="button" variant="secondary" onClick={() => setShowLandscape((value) => !value)}>{showLandscape ? "關閉地圖" : "顯示地圖"}</Button></div></div>
-          {showLandscape ? <ParameterLandscape query={landscapeQuery} /> : null}
+          {showLandscape ? <div className="md:col-span-2 rounded-lg border border-white/[0.04] bg-white/[0.02] p-4 text-sm text-slate-500">請先建立並啟動任務；格點覆蓋圖會依該任務的實際候選顯示。</div> : null}
           <div className="md:col-span-2">
             <Button type="submit" loading={createMutation.isPending} disabled={researchDatasetSearchBlocked || (!enableWMean && !enableWMomentum && !enableWBreakout)}>開始搜尋</Button>
             {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 
 	"quantsaas/internal/quant"
@@ -92,21 +93,93 @@ func (s *GormGenomeStore) LoadReservedFingerprints(ctx context.Context, scope Ge
 	return reserved, nil
 }
 
-func (s *GormGenomeStore) ReserveFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte, taskID uint, generation int, fingerprints []uint64) error {
-	if len(fingerprints) == 0 {
+func (s *GormGenomeStore) ReserveCandidates(ctx context.Context, scope GeneScope, searchConfig []byte, taskID uint, generation int, candidates []CandidateReservation) error {
+	if len(candidates) == 0 {
 		return nil
 	}
 	searchHash := candidateSearchHash(searchConfig)
-	rows := make([]saasstore.GeneObservation, 0, len(fingerprints))
-	for individual, fingerprint := range fingerprints {
+	rows := make([]saasstore.GeneObservation, 0, len(candidates))
+	for individual, candidate := range candidates {
+		paramPack := candidate.ParamPack
+		if !json.Valid(paramPack) {
+			paramPack = []byte(`{}`)
+		}
 		rows = append(rows, saasstore.GeneObservation{
 			StrategyID: scope.StrategyID, InstrumentID: scope.InstrumentID, DataSource: scope.DataSource,
 			Interval: scope.Interval, ExecutionMode: scope.ExecutionMode, SearchHash: searchHash,
 			TaskID: taskID, Generation: generation, Individual: individual,
-			Fingerprint: fmt.Sprintf("%016x", fingerprint), ParamPack: saasstore.JSONB(`{}`),
+			Fingerprint: fmt.Sprintf("%016x", candidate.Fingerprint), ParamPack: saasstore.JSONB(paramPack),
 		})
 	}
-	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error; err != nil {
+			return err
+		}
+		points := aggregateGridPoints(taskID, candidates)
+		if len(points) == 0 {
+			return nil
+		}
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "task_id"}, {Name: "parameter_key"}, {Name: "grid_step"}},
+			DoUpdates: clause.Assignments(map[string]any{"count": gorm.Expr("gene_parameter_grid_points.count + EXCLUDED.count")}),
+		}).Create(&points).Error
+	})
+}
+
+func aggregateGridPoints(taskID uint, candidates []CandidateReservation) []saasstore.GeneParameterGridPoint {
+	type gridPointKey struct {
+		parameter string
+		step      int
+	}
+	counts := map[gridPointKey]int64{}
+	for _, candidate := range candidates {
+		for _, chromosome := range candidateChromosomes(candidate.ParamPack) {
+			for key, value := range chromosomeGridValues(chromosome) {
+				step := int(math.Round(value / searchParameterStep))
+				counts[gridPointKey{parameter: key, step: step}]++
+			}
+		}
+	}
+	points := make([]saasstore.GeneParameterGridPoint, 0, len(counts))
+	for key, count := range counts {
+		points = append(points, saasstore.GeneParameterGridPoint{TaskID: taskID, ParameterKey: key.parameter, GridStep: key.step, Count: count})
+	}
+	return points
+}
+
+func candidateChromosomes(raw []byte) []quant.Chromosome {
+	var packed struct {
+		Chromosome   quant.Chromosome `json:"sigmoid_dca_config"`
+		MarketRegion struct {
+			Packs []struct {
+				Chromosome quant.Chromosome `json:"chromosome"`
+			} `json:"packs"`
+		} `json:"market_region"`
+	}
+	if json.Unmarshal(raw, &packed) != nil {
+		return nil
+	}
+	if len(packed.MarketRegion.Packs) > 0 {
+		out := make([]quant.Chromosome, 0, len(packed.MarketRegion.Packs))
+		for _, pack := range packed.MarketRegion.Packs {
+			out = append(out, pack.Chromosome)
+		}
+		return out
+	}
+	return []quant.Chromosome{packed.Chromosome}
+}
+
+func chromosomeGridValues(c quant.Chromosome) map[string]float64 {
+	return map[string]float64{
+		"micro_reserve_pct": c.MicroReservePct, "beta": c.Beta, "gamma": c.Gamma,
+		"w_mean": c.WMean, "w_momentum": c.WMomentum, "w_breakout": c.WBreakout,
+		"dust_usd": c.DustUSD, "rebalance_threshold": c.RebalanceThreshold,
+		"force_full_threshold": c.ForceFullThreshold, "force_empty_threshold": c.ForceEmptyThreshold,
+		"wedge_delta_threshold": c.WedgeDeltaThreshold, "wedge_vol_ratio_threshold": c.WedgeVolRatioThreshold,
+		"macro_bear_multiplier": c.MacroBearMultiplier, "macro_bull_multiplier": c.MacroBullMultiplier,
+		"extra_deploy_pct": c.ExtraDeployPct, "soft_release_months": float64(c.SoftReleaseMonths),
+		"soft_release_pct": c.SoftReleasePct, "hard_release_max_pct": c.HardReleaseMaxPct,
+	}
 }
 
 func candidateSearchHash(searchConfig []byte) string {
