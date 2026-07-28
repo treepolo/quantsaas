@@ -198,6 +198,41 @@ func TestSampleProducesValidForceThresholdOrder(t *testing.T) {
 	}
 }
 
+func TestMutationAndCrossoverOnlyProduceValidForceThresholdPairs(t *testing.T) {
+	rng := &cyclingRNG{}
+	base := quant.DefaultSeedChromosome
+	base.ForceFullThreshold = 0.82
+	base.ForceEmptyThreshold = 0.18
+	for index := 0; index < 200; index++ {
+		mutated := NewSigmoidDCAEvolvable().Mutate(base, 1, 25, rng).(quant.Chromosome)
+		if mutated.ForceFullThreshold < mutated.ForceEmptyThreshold {
+			t.Fatalf("mutation %d produced full %.4f below empty %.4f", index, mutated.ForceFullThreshold, mutated.ForceEmptyThreshold)
+		}
+		other := base
+		other.ForceFullThreshold = 0.35
+		other.ForceEmptyThreshold = 0.30
+		child := NewSigmoidDCAEvolvable().Crossover(base, other, rng).(quant.Chromosome)
+		if child.ForceFullThreshold < child.ForceEmptyThreshold {
+			t.Fatalf("crossover %d produced full %.4f below empty %.4f", index, child.ForceFullThreshold, child.ForceEmptyThreshold)
+		}
+	}
+}
+
+func TestNormalizeFixedForceThresholdKeepsGeneratedCounterpartLegal(t *testing.T) {
+	base := quant.DefaultSeedChromosome
+	base.ForceFullThreshold = 0.40
+	candidate := quant.DefaultSeedChromosome
+	candidate.ForceEmptyThreshold = 0.80
+	normalized := NewSigmoidDCAEvolvable().NormalizeGene(candidate, GeneOptions{
+		EvolveForceEmptyThreshold: true,
+		FixedParamKeys:            []string{"force_full_threshold"},
+		FixedGene:                 &base,
+	}).(quant.Chromosome)
+	if normalized.ForceFullThreshold < normalized.ForceEmptyThreshold {
+		t.Fatalf("fixed full %.4f below generated empty %.4f", normalized.ForceFullThreshold, normalized.ForceEmptyThreshold)
+	}
+}
+
 func TestNormalizeGeneDisablesGammaByDefault(t *testing.T) {
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome.Gamma = 4.2

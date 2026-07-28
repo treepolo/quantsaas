@@ -165,8 +165,7 @@ func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng Rando
 	c.WBreakout = mutateFloat(c.WBreakout, "w_breakout", prob, scale, rng)
 	c.DustUSD = mutateFloat(c.DustUSD, "dust_usd", prob, scale, rng)
 	c.RebalanceThreshold = mutateFloat(c.RebalanceThreshold, "rebalance_threshold", prob, scale, rng)
-	c.ForceFullThreshold = mutateFloat(c.ForceFullThreshold, "force_full_threshold", prob, scale, rng)
-	c.ForceEmptyThreshold = mutateFloat(c.ForceEmptyThreshold, "force_empty_threshold", prob, scale, rng)
+	c.ForceFullThreshold, c.ForceEmptyThreshold = mutateForceThresholdPair(c.ForceFullThreshold, c.ForceEmptyThreshold, prob, scale, rng)
 	c.WedgeDeltaThreshold = mutateFloat(c.WedgeDeltaThreshold, "wedge_delta_threshold", prob, scale, rng)
 	c.WedgeVolRatioThreshold = mutateFloat(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold", prob, scale, rng)
 	c.MacroBearMultiplier = mutateFloat(c.MacroBearMultiplier, "macro_bear_multiplier", prob, scale, rng)
@@ -207,8 +206,7 @@ func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
 	c.WBreakout = pick(rng, a.WBreakout, b.WBreakout)
 	c.DustUSD = pick(rng, a.DustUSD, b.DustUSD)
 	c.RebalanceThreshold = pick(rng, a.RebalanceThreshold, b.RebalanceThreshold)
-	c.ForceFullThreshold = pick(rng, a.ForceFullThreshold, b.ForceFullThreshold)
-	c.ForceEmptyThreshold = pick(rng, a.ForceEmptyThreshold, b.ForceEmptyThreshold)
+	c.ForceFullThreshold, c.ForceEmptyThreshold = crossoverForceThresholdPair(a.ForceFullThreshold, a.ForceEmptyThreshold, b.ForceFullThreshold, b.ForceEmptyThreshold, rng)
 	c.WedgeDeltaThreshold = pick(rng, a.WedgeDeltaThreshold, b.WedgeDeltaThreshold)
 	c.WedgeVolRatioThreshold = pick(rng, a.WedgeVolRatioThreshold, b.WedgeVolRatioThreshold)
 	c.MacroBearMultiplier = pick(rng, a.MacroBearMultiplier, b.MacroBearMultiplier)
@@ -303,8 +301,69 @@ func normalizeChromosome(c quant.Chromosome, options GeneOptions) quant.Chromoso
 	}
 	if options.FixedGene != nil && len(options.FixedParamKeys) > 0 {
 		c = applyFixedChromosomeFields(c, *options.FixedGene, options.FixedParamKeys)
+		c = constrainFixedForceThresholdPair(c, options.FixedParamKeys)
 	}
 	return quant.ClampChromosome(c)
+}
+
+// mutateForceThresholdPair preserves the structural chromosome relation while
+// producing a new pair. It never generates an invalid full/empty ordering for
+// ValidateChromosome to reject later.
+func mutateForceThresholdPair(full float64, empty float64, prob float64, scale float64, rng RandomSource) (float64, float64) {
+	empty = mutateFloat(empty, "force_empty_threshold", prob, scale, rng)
+	empty = clampRange(empty, quant.HardBounds["force_empty_threshold"])
+	if rng.Float64() < prob {
+		step := quant.GeneSteps["force_full_threshold"]
+		full += rng.NormFloat64() * step * scale
+	}
+	full = clampRange(full, quant.HardBounds["force_full_threshold"])
+	if full < empty {
+		// The valid proposal space for full is [empty, max]. Keeping empty and
+		// drawing inside that space preserves the intended mutation invariant.
+		full = empty + rng.Float64()*(quant.HardBounds["force_full_threshold"].Max-empty)
+	}
+	return full, empty
+}
+
+// crossoverForceThresholdPair chooses the empty threshold first, then only
+// uses a parent full threshold that is valid for that choice. No invalid child
+// chromosome is constructed and repaired afterwards.
+func crossoverForceThresholdPair(fullA float64, emptyA float64, fullB float64, emptyB float64, rng RandomSource) (float64, float64) {
+	if rng.Float64() < 0.5 {
+		if rng.Float64() < 0.5 && fullB >= emptyA {
+			return fullB, emptyA
+		}
+		return fullA, emptyA
+	}
+	if rng.Float64() < 0.5 && fullA >= emptyB {
+		return fullA, emptyB
+	}
+	return fullB, emptyB
+}
+
+func constrainFixedForceThresholdPair(c quant.Chromosome, fixedKeys []string) quant.Chromosome {
+	fullFixed, emptyFixed := false, false
+	for _, key := range fixedKeys {
+		fullFixed = fullFixed || key == "force_full_threshold"
+		emptyFixed = emptyFixed || key == "force_empty_threshold"
+	}
+	if fullFixed && !emptyFixed && c.ForceEmptyThreshold > c.ForceFullThreshold {
+		c.ForceEmptyThreshold = c.ForceFullThreshold
+	}
+	if emptyFixed && !fullFixed && c.ForceFullThreshold < c.ForceEmptyThreshold {
+		c.ForceFullThreshold = c.ForceEmptyThreshold
+	}
+	return c
+}
+
+func clampRange(value float64, bound quant.Bound) float64 {
+	if value < bound.Min {
+		return bound.Min
+	}
+	if value > bound.Max {
+		return bound.Max
+	}
+	return value
 }
 
 func applyFixedChromosomeFields(c quant.Chromosome, base quant.Chromosome, keys []string) quant.Chromosome {
