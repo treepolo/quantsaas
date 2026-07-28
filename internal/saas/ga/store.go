@@ -2,13 +2,16 @@ package ga
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"quantsaas/internal/quant"
 	saasstore "quantsaas/internal/saas/store"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type GormGenomeStore struct {
@@ -67,6 +70,48 @@ func (s *GormGenomeStore) SaveChallenger(ctx context.Context, scope GeneScope, p
 		return 0, err
 	}
 	return record.ID, nil
+}
+
+func (s *GormGenomeStore) LoadReservedFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte) (map[uint64]bool, error) {
+	searchHash := candidateSearchHash(searchConfig)
+	var rows []saasstore.GeneObservation
+	if err := s.db.WithContext(ctx).
+		Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND search_hash = ?",
+			scope.StrategyID, scope.InstrumentID, scope.DataSource, scope.Interval, scope.ExecutionMode, searchHash).
+		Select("fingerprint").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	reserved := make(map[uint64]bool, len(rows))
+	for _, row := range rows {
+		fingerprint, err := strconv.ParseUint(row.Fingerprint, 16, 64)
+		if err == nil {
+			reserved[fingerprint] = true
+		}
+	}
+	return reserved, nil
+}
+
+func (s *GormGenomeStore) ReserveFingerprints(ctx context.Context, scope GeneScope, searchConfig []byte, taskID uint, generation int, fingerprints []uint64) error {
+	if len(fingerprints) == 0 {
+		return nil
+	}
+	searchHash := candidateSearchHash(searchConfig)
+	rows := make([]saasstore.GeneObservation, 0, len(fingerprints))
+	for individual, fingerprint := range fingerprints {
+		rows = append(rows, saasstore.GeneObservation{
+			StrategyID: scope.StrategyID, InstrumentID: scope.InstrumentID, DataSource: scope.DataSource,
+			Interval: scope.Interval, ExecutionMode: scope.ExecutionMode, SearchHash: searchHash,
+			TaskID: taskID, Generation: generation, Individual: individual,
+			Fingerprint: fmt.Sprintf("%016x", fingerprint), ParamPack: saasstore.JSONB(`{}`),
+		})
+	}
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&rows).Error
+}
+
+func candidateSearchHash(searchConfig []byte) string {
+	digest := sha256.Sum256(searchConfig)
+	return fmt.Sprintf("%x", digest)
 }
 
 func (s *GormGenomeStore) LoadKLines(ctx context.Context, scope DatasetScope) ([]quant.Bar, error) {

@@ -397,6 +397,7 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 	var lastResult ga.EpochResult
 	var lastErr error
 	iteration := 0
+	reservedFingerprints := make(map[uint64]bool)
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -408,6 +409,7 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 		}
 		iteration++
 		cfg := s.epochConfig(req, spawn, taskID)
+		cfg.ReservedFingerprints = reservedFingerprints
 		cfg.RandomPopulation = req.ContinuousMode == "random"
 		if req.ContinuousMode == "standardized_best" && champion != nil {
 			cfg.SeedParamPack = champion.ParamPack

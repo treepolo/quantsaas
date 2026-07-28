@@ -18,6 +18,7 @@ const (
 	executionModeCloseSameBar  = "close_same_bar"
 	executionModeCloseNextOpen = "close_next_open"
 	executionModePreclose10m   = "preclose_10m"
+	searchParameterStep        = 0.05
 )
 
 type SigmoidDCAEvolvable struct{}
@@ -82,7 +83,7 @@ func (SigmoidDCAEvolvable) StrategyID() string {
 
 func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 	forceEmptyThreshold := sampleRange(rng, "force_empty_threshold")
-	forceFullThreshold := forceEmptyThreshold + rng.Float64()*(1-forceEmptyThreshold)
+	forceFullThreshold := sampleRangeAtLeast(rng, "force_full_threshold", forceEmptyThreshold)
 	c := quant.Chromosome{
 		MicroReservePct:        sampleRange(rng, "micro_reserve_pct"),
 		Beta:                   sampleRange(rng, "beta"),
@@ -103,7 +104,7 @@ func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 		SoftReleasePct:         sampleRange(rng, "soft_release_pct"),
 		HardReleaseMaxPct:      sampleRange(rng, "hard_release_max_pct"),
 	}
-	return quant.ClampChromosome(c)
+	return quantizeSearchChromosome(c, nil)
 }
 
 func (e SigmoidDCAEvolvable) SampleWithOptions(rng RandomSource, options GeneOptions) Gene {
@@ -174,7 +175,7 @@ func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng Rando
 	c.SoftReleaseMonths = int(math.Round(mutateFloat(float64(c.SoftReleaseMonths), "soft_release_months", prob, scale, rng)))
 	c.SoftReleasePct = mutateFloat(c.SoftReleasePct, "soft_release_pct", prob, scale, rng)
 	c.HardReleaseMaxPct = mutateFloat(c.HardReleaseMaxPct, "hard_release_max_pct", prob, scale, rng)
-	return quant.ClampChromosome(c)
+	return quantizeSearchChromosome(c, nil)
 }
 
 func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
@@ -215,7 +216,7 @@ func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
 	c.SoftReleaseMonths = int(pick(rng, float64(a.SoftReleaseMonths), float64(b.SoftReleaseMonths)))
 	c.SoftReleasePct = pick(rng, a.SoftReleasePct, b.SoftReleasePct)
 	c.HardReleaseMaxPct = pick(rng, a.HardReleaseMaxPct, b.HardReleaseMaxPct)
-	return quant.ClampChromosome(c)
+	return quantizeSearchChromosome(c, nil)
 }
 
 func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
@@ -303,7 +304,54 @@ func normalizeChromosome(c quant.Chromosome, options GeneOptions) quant.Chromoso
 		c = applyFixedChromosomeFields(c, *options.FixedGene, options.FixedParamKeys)
 		c = constrainFixedForceThresholdPair(c, options.FixedParamKeys)
 	}
+	return quantizeSearchChromosome(c, options.FixedParamKeys)
+}
+
+func quantizeSearchChromosome(c quant.Chromosome, fixedKeys []string) quant.Chromosome {
+	fixed := make(map[string]bool, len(fixedKeys))
+	for _, key := range fixedKeys {
+		fixed[key] = true
+	}
+	quantize := func(value float64, name string) float64 {
+		if fixed[name] {
+			return value
+		}
+		return quantizeSearchValue(value, quant.HardBounds[name])
+	}
+	c.MicroReservePct = quantize(c.MicroReservePct, "micro_reserve_pct")
+	c.Beta = quantize(c.Beta, "beta")
+	c.Gamma = quantize(c.Gamma, "gamma")
+	c.WMean = quantize(c.WMean, "w_mean")
+	c.WMomentum = quantize(c.WMomentum, "w_momentum")
+	c.WBreakout = quantize(c.WBreakout, "w_breakout")
+	c.DustUSD = quantize(c.DustUSD, "dust_usd")
+	c.RebalanceThreshold = quantize(c.RebalanceThreshold, "rebalance_threshold")
+	c.ForceFullThreshold = quantize(c.ForceFullThreshold, "force_full_threshold")
+	c.ForceEmptyThreshold = quantize(c.ForceEmptyThreshold, "force_empty_threshold")
+	c.WedgeDeltaThreshold = quantize(c.WedgeDeltaThreshold, "wedge_delta_threshold")
+	c.WedgeVolRatioThreshold = quantize(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold")
+	c.MacroBearMultiplier = quantize(c.MacroBearMultiplier, "macro_bear_multiplier")
+	c.MacroBullMultiplier = quantize(c.MacroBullMultiplier, "macro_bull_multiplier")
+	c.ExtraDeployPct = quantize(c.ExtraDeployPct, "extra_deploy_pct")
+	if !fixed["soft_release_months"] {
+		c.SoftReleaseMonths = int(math.Round(quantizeSearchValue(float64(c.SoftReleaseMonths), quant.HardBounds["soft_release_months"])))
+	}
+	c.SoftReleasePct = quantize(c.SoftReleasePct, "soft_release_pct")
+	c.HardReleaseMaxPct = quantize(c.HardReleaseMaxPct, "hard_release_max_pct")
 	return quant.ClampChromosome(c)
+}
+
+func quantizeSearchValue(value float64, bound quant.Bound) float64 {
+	minimum := math.Ceil(bound.Min/searchParameterStep) * searchParameterStep
+	maximum := math.Floor(bound.Max/searchParameterStep) * searchParameterStep
+	value = math.Round(value/searchParameterStep) * searchParameterStep
+	if value < minimum {
+		value = minimum
+	}
+	if value > maximum {
+		value = maximum
+	}
+	return math.Round(value*100) / 100
 }
 
 // mutateForceThresholdPair preserves the structural chromosome relation while
@@ -311,16 +359,11 @@ func normalizeChromosome(c quant.Chromosome, options GeneOptions) quant.Chromoso
 // ValidateChromosome to reject later.
 func mutateForceThresholdPair(full float64, empty float64, prob float64, scale float64, rng RandomSource) (float64, float64) {
 	empty = mutateFloat(empty, "force_empty_threshold", prob, scale, rng)
-	empty = clampRange(empty, quant.HardBounds["force_empty_threshold"])
-	if rng.Float64() < prob {
-		step := quant.GeneSteps["force_full_threshold"]
-		full += rng.NormFloat64() * step * scale
-	}
-	full = clampRange(full, quant.HardBounds["force_full_threshold"])
+	full = mutateFloat(full, "force_full_threshold", prob, scale, rng)
 	if full < empty {
 		// The valid proposal space for full is [empty, max]. Keeping empty and
-		// drawing inside that space preserves the intended mutation invariant.
-		full = empty + rng.Float64()*(quant.HardBounds["force_full_threshold"].Max-empty)
+		// drawing directly from that lattice preserves the invariant.
+		full = sampleRangeAtLeast(rng, "force_full_threshold", empty)
 	}
 	return full, empty
 }
@@ -798,19 +841,42 @@ func asChromosome(g Gene) quant.Chromosome {
 }
 
 func sampleRange(rng RandomSource, name string) float64 {
-	bound := quant.HardBounds[name]
-	return bound.Min + rng.Float64()*(bound.Max-bound.Min)
+	minimum, maximum := searchLatticeBounds(quant.HardBounds[name])
+	return float64(minimum+rng.Intn(maximum-minimum+1)) * searchParameterStep
 }
 
 func mutateFloat(v float64, name string, prob float64, scale float64, rng RandomSource) float64 {
-	if rng.Float64() >= prob {
-		return v
+	bound := quant.HardBounds[name]
+	if rng.Float64() < prob {
+		steps := int(math.Round(rng.NormFloat64() * math.Max(1, scale)))
+		if steps == 0 {
+			if rng.Float64() < 0.5 {
+				steps = -1
+			} else {
+				steps = 1
+			}
+		}
+		v = quantizeSearchValue(v, bound) + float64(steps)*searchParameterStep
 	}
-	step := quant.GeneSteps[name]
-	if step == 0 {
-		step = 0.01
+	return quantizeSearchValue(v, bound)
+}
+
+func sampleRangeAtLeast(rng RandomSource, name string, minimum float64) float64 {
+	minStep, maxStep := searchLatticeBounds(quant.HardBounds[name])
+	required := int(math.Ceil((minimum-1e-9)/searchParameterStep))
+	if required > minStep {
+		minStep = required
 	}
-	return v + rng.NormFloat64()*step*scale
+	if minStep > maxStep {
+		return float64(maxStep) * searchParameterStep
+	}
+	return float64(minStep+rng.Intn(maxStep-minStep+1)) * searchParameterStep
+}
+
+func searchLatticeBounds(bound quant.Bound) (int, int) {
+	minimum := int(math.Ceil(bound.Min/searchParameterStep - 1e-9))
+	maximum := int(math.Floor(bound.Max/searchParameterStep + 1e-9))
+	return minimum, maximum
 }
 
 func pick(rng RandomSource, a float64, b float64) float64 {
