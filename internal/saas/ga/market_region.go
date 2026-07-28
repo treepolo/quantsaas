@@ -210,6 +210,10 @@ func marketRegionKey(features []MarketRegionFeature, values map[string]float64) 
 }
 
 func marketRegionValues(bars []quant.Bar, features []MarketRegionFeature) ([]map[string]float64, error) {
+	return marketRegionValuesWithCache(bars, features, nil)
+}
+
+func marketRegionValuesWithCache(bars []quant.Bar, features []MarketRegionFeature, cache *MarketRegionFeatureCache) ([]map[string]float64, error) {
 	result := make([]map[string]float64, len(bars))
 	for i := range result {
 		result[i] = map[string]float64{}
@@ -219,17 +223,13 @@ func marketRegionValues(bars []quant.Bar, features []MarketRegionFeature) ([]map
 		byWindow[feature.Window] = append(byWindow[feature.Window], feature)
 	}
 	for window, group := range byWindow {
-		activity, err := dynamicparam.BuildFeaturePoints(bars, window)
-		if err != nil {
-			return nil, err
-		}
-		geometry, err := dynamicparam.BuildGeometryFeatures(bars, window)
+		series, err := cache.series(bars, window)
 		if err != nil {
 			return nil, err
 		}
 		for index := range bars {
 			for _, feature := range group {
-				if value, ok := marketRegionFeatureValue(feature.ID, activity[index], geometry[index]); ok {
+				if value, ok := marketRegionFeatureValue(feature.ID, series.activity[index], series.geometry[index]); ok {
 					result[index][feature.ID] = value
 				}
 			}
@@ -303,7 +303,11 @@ func marketRegionFeatureValue(id string, activity dynamicparam.FeaturePoint, geo
 }
 
 func newMarketRegionProvider(g MarketRegionGene, bars []quant.Bar) (backtestcore.ParameterProvider, error) {
-	values, err := marketRegionValues(bars, g.Features)
+	return newMarketRegionProviderWithCache(g, bars, nil)
+}
+
+func newMarketRegionProviderWithCache(g MarketRegionGene, bars []quant.Bar, cache *MarketRegionFeatureCache) (backtestcore.ParameterProvider, error) {
+	values, err := marketRegionValuesWithCache(bars, g.Features, cache)
 	if err != nil {
 		return nil, err
 	}
@@ -311,30 +315,44 @@ func newMarketRegionProvider(g MarketRegionGene, bars []quant.Bar) (backtestcore
 	for _, pack := range g.Packs {
 		packs[pack.Key] = pack.Chromosome
 	}
+	selected := make([]quant.Chromosome, len(values))
+	selectedStates := make([]string, len(values))
+	fallbackKey := marketRegionKeys(g.Features)[0]
+	for index, row := range values {
+		key, ok := marketRegionKey(g.Features, row)
+		if !ok {
+			key = fallbackKey
+		}
+		chromosome, exists := packs[key]
+		if !exists {
+			return nil, fmt.Errorf("market region pack %q is missing", key)
+		}
+		selected[index] = chromosome
+		selectedStates[index] = key
+	}
 	return func(context backtestcore.ParameterContext) (backtestcore.EffectiveParameters, error) {
 		if context.Index < 0 || context.Index >= len(values) {
 			return backtestcore.EffectiveParameters{}, fmt.Errorf("market region index %d is unavailable", context.Index)
 		}
-		key, ok := marketRegionKey(g.Features, values[context.Index])
-		if !ok {
-			key = marketRegionKeys(g.Features)[0]
-		}
-		chromosome, ok := packs[key]
-		if !ok {
-			return backtestcore.EffectiveParameters{}, fmt.Errorf("market region pack %q is missing", key)
-		}
-		return backtestcore.EffectiveParameters{Chromosome: chromosome, Metadata: backtestcore.ParameterMetadata{StructureState: key, ModelVersion: MarketRegionSchemaVersion}}, nil
+		return backtestcore.EffectiveParameters{Chromosome: selected[context.Index], Metadata: backtestcore.ParameterMetadata{StructureState: selectedStates[context.Index], ModelVersion: MarketRegionSchemaVersion}}, nil
 	}, nil
 }
 
 // MarketRegionParameterProvider exposes the same causal interval selection
 // used by GA evaluation to ordinary backtests that receive a stored JSON pack.
 func MarketRegionParameterProvider(raw []byte, bars []quant.Bar) (backtestcore.ParameterProvider, bool, error) {
+	return MarketRegionParameterProviderWithCache(raw, bars, nil)
+}
+
+// MarketRegionParameterProviderWithCache is identical to
+// MarketRegionParameterProvider but reuses immutable exact feature series in a
+// caller-owned task cache.
+func MarketRegionParameterProviderWithCache(raw []byte, bars []quant.Bar, cache *MarketRegionFeatureCache) (backtestcore.ParameterProvider, bool, error) {
 	pack, ok := decodeMarketRegionParamPack(raw)
 	if !ok {
 		return nil, false, nil
 	}
-	provider, err := newMarketRegionProvider(pack.MarketRegion, bars)
+	provider, err := newMarketRegionProviderWithCache(pack.MarketRegion, bars, cache)
 	if err != nil {
 		return nil, true, err
 	}

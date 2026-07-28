@@ -83,6 +83,18 @@ func futureActivity(anchorClose float64, bars []quant.Bar) ActivityVector {
 }
 
 func BuildFeaturePoints(bars []quant.Bar, lookback int) ([]FeaturePoint, error) {
+	return buildFeaturePoints(bars, lookback, true)
+}
+
+// BuildFeaturePointsWithoutRawSequence preserves the exact causal activity and
+// history-ratio values from BuildFeaturePoints, but omits RawSequence. Consumers
+// that only need the numerical market values must use this form so a long-lived
+// cache does not retain one OHLC slice per bar.
+func BuildFeaturePointsWithoutRawSequence(bars []quant.Bar, lookback int) ([]FeaturePoint, error) {
+	return buildFeaturePoints(bars, lookback, false)
+}
+
+func buildFeaturePoints(bars []quant.Bar, lookback int, includeRawSequence bool) ([]FeaturePoint, error) {
 	if lookback < 2 {
 		return nil, fmt.Errorf("lookback must be at least 2")
 	}
@@ -105,7 +117,9 @@ func BuildFeaturePoints(bars []quant.Bar, lookback int) ([]FeaturePoint, error) 
 			continue
 		}
 		point.Activity = activity
-		point.RawSequence = normalizedOHLC(bars[index-lookback+1 : index+1])
+		if includeRawSequence {
+			point.RawSequence = normalizedOHLC(bars[index-lookback+1 : index+1])
+		}
 		point.HistoryRatio = activityRatios(activity, history)
 		point.Available = activityVectorValid(activity) && activityVectorValid(point.HistoryRatio)
 		if !point.Available {

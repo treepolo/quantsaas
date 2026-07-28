@@ -1,10 +1,13 @@
 package backtest
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
+	"quantsaas/internal/backtestcore"
 	"quantsaas/internal/quant"
 	"quantsaas/internal/strategies/sigmoiddca"
 )
@@ -27,6 +30,33 @@ func TestNormalizeSpawnPointKeepsZeroMonthlyDCA(t *testing.T) {
 	}
 	if spawn.Policy.MonthlyInjectUSDT != 0 {
 		t.Fatalf("monthly DCA = %v, want 0", spawn.Policy.MonthlyInjectUSDT)
+	}
+}
+
+func TestScoreWindowsParallelMatchesIndependentWindowRuns(t *testing.T) {
+	bars := make([]quant.Bar, 0, 2500)
+	for index := 0; index < 2500; index++ {
+		open := 100.0 + float64(index)*0.03
+		close := open + 0.1 + float64(index%5)*0.01
+		bars = append(bars, quant.Bar{OpenTime: int64(index+1) * 86_400_000, Open: open, High: close + 0.2, Low: open - 0.2, Close: close})
+	}
+	spawn := sigmoiddca.DefaultParams().Spawn
+	costs := quant.ExecutionCostConfig{}
+	windows := quant.BuildCrucibleWindows(bars, 1200)
+	want := make([]WindowResult, 0, len(windows))
+	for _, window := range windows {
+		outcome := scoreWindow(context.Background(), window, "BTCUSDT", "1d", "close_same_bar", quant.DefaultSeedChromosome, &spawn, costs, sigmoiddca.PositionStructureFloatingOnly, backtestcore.LongTermFilterConfig{}, nil, nil)
+		if outcome.err != nil {
+			t.Fatalf("independent window %s: %v", window.Label, outcome.err)
+		}
+		want = append(want, outcome.detail)
+	}
+	_, got, err := scoreWindows(context.Background(), bars, "BTCUSDT", "1d", "close_same_bar", quant.DefaultSeedChromosome, &spawn, costs, sigmoiddca.PositionStructureFloatingOnly, backtestcore.LongTermFilterConfig{}, nil, nil)
+	if err != nil {
+		t.Fatalf("parallel window scoring: %v", err)
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatal("parallel window scoring changed an independent window result")
 	}
 }
 

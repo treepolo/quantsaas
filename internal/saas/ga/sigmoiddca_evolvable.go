@@ -386,7 +386,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			if plan.ComputeStep != nil {
 				plan.ComputeStep(marketRegionProviderUnits(region, window.Bars))
 			}
-			provider, providerErr = newMarketRegionProvider(region, window.Bars)
+			provider, providerErr = newMarketRegionProviderWithCache(region, window.Bars, plan.MarketRegionCache)
 			if providerErr != nil {
 				return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
 			}

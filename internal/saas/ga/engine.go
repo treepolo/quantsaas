@@ -439,20 +439,21 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 	}
 
 	return EvaluablePlan{
-		Pair:           cfg.Pair,
-		Interval:       cfg.Interval,
-		ExecutionMode:  cfg.ExecutionMode,
-		TemplateName:   e.evolvable.StrategyID(),
-		Spawn:          spawn,
-		Costs:          costs,
-		TradePenalty:   math.Max(0, cfg.TradePenalty),
-		LongTermFilter: cfg.LongTermFilter,
-		GeneOptions:    cfg.GeneOptions,
-		LotStep:        cfg.LotStepSize,
-		LotMin:         cfg.LotMinQty,
-		Windows:        windows,
-		DCABaselines:   baselines,
-		AggregateCache: map[string]any{},
+		Pair:              cfg.Pair,
+		Interval:          cfg.Interval,
+		ExecutionMode:     cfg.ExecutionMode,
+		TemplateName:      e.evolvable.StrategyID(),
+		Spawn:             spawn,
+		Costs:             costs,
+		TradePenalty:      math.Max(0, cfg.TradePenalty),
+		LongTermFilter:    cfg.LongTermFilter,
+		GeneOptions:       cfg.GeneOptions,
+		LotStep:           cfg.LotStepSize,
+		LotMin:            cfg.LotMinQty,
+		Windows:           windows,
+		DCABaselines:      baselines,
+		AggregateCache:    map[string]any{},
+		MarketRegionCache: NewMarketRegionFeatureCache(),
 	}, nil
 }
 

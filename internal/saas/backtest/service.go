@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"quantsaas/internal/backtestcore"
@@ -245,6 +247,7 @@ type preparedBacktest struct {
 	identity          backtestresult.Identity
 	parameterProvider backtestcore.ParameterProvider
 	marketRegionRaw   []byte
+	marketRegionCache *ga.MarketRegionFeatureCache
 }
 
 type DynamicExecutionMetadata struct {
@@ -725,6 +728,7 @@ func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req Creat
 	var effectiveParametersHash string
 	var parameterProvider backtestcore.ParameterProvider
 	var marketRegionRaw []byte
+	marketRegionCache := ga.NewMarketRegionFeatureCache()
 	if dynamic != nil {
 		modelArtifactHash = dynamic.ModelArtifactHash
 		predictionSchemaHash = dynamic.PredictionSchemaHash
@@ -734,7 +738,7 @@ func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req Creat
 		effectiveParametersHash = dynamic.EffectiveParametersHash
 		parameterProvider = dynamic.ParameterProvider
 	} else {
-		provider, raw, handled, providerErr := s.resolveMarketRegionProvider(ctx, req, bars)
+		provider, raw, handled, providerErr := s.resolveMarketRegionProvider(ctx, req, bars, marketRegionCache)
 		if providerErr != nil {
 			return preparedBacktest{}, providerErr
 		}
@@ -764,7 +768,7 @@ func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req Creat
 		return preparedBacktest{}, err
 	}
 	coreSpec.DatasetHash = identity.Snapshot.DatasetHash
-	prepared := preparedBacktest{req: req, params: params, bars: bars, costs: costs, coreSpec: coreSpec, identity: identity, parameterProvider: parameterProvider, marketRegionRaw: marketRegionRaw}
+	prepared := preparedBacktest{req: req, params: params, bars: bars, costs: costs, coreSpec: coreSpec, identity: identity, parameterProvider: parameterProvider, marketRegionRaw: marketRegionRaw, marketRegionCache: marketRegionCache}
 	return prepared, nil
 }
 
@@ -792,7 +796,7 @@ func (s *Service) executePrepared(ctx context.Context, prepared preparedBacktest
 	windows := map[string]float64{}
 	windowDetails := []WindowResult{}
 	if prepared.coreSpec.PrefixMode != backtestcore.PrefixModeHistoryOnly {
-		windows, windowDetails, err = scoreWindows(ctx, prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter, prepared.marketRegionRaw)
+		windows, windowDetails, err = scoreWindows(ctx, prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter, prepared.marketRegionRaw, prepared.marketRegionCache)
 		if err != nil {
 			return backtestresult.Artifacts{}, err
 		}
@@ -1415,7 +1419,7 @@ func (s *Service) resolveParams(ctx context.Context, userID uint, req CreateRequ
 	return params, nil
 }
 
-func (s *Service) resolveMarketRegionProvider(ctx context.Context, req CreateRequest, bars []quant.Bar) (backtestcore.ParameterProvider, []byte, bool, error) {
+func (s *Service) resolveMarketRegionProvider(ctx context.Context, req CreateRequest, bars []quant.Bar, cache *ga.MarketRegionFeatureCache) (backtestcore.ParameterProvider, []byte, bool, error) {
 	var raw []byte
 	switch req.Source {
 	case SourceChampion:
@@ -1445,7 +1449,7 @@ func (s *Service) resolveMarketRegionProvider(ctx context.Context, req CreateReq
 	default:
 		return nil, nil, false, nil
 	}
-	provider, handled, err := ga.MarketRegionParameterProvider(raw, bars)
+	provider, handled, err := ga.MarketRegionParameterProviderWithCache(raw, bars, cache)
 	return provider, raw, handled, err
 }
 
@@ -1771,78 +1775,116 @@ func practicalPath(points []backtestcore.NAVPoint) []backtestcore.NAVPoint {
 	return result
 }
 
-func scoreWindows(ctx context.Context, bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig, marketRegionRaw []byte) (map[string]float64, []WindowResult, error) {
+func scoreWindows(ctx context.Context, bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig, marketRegionRaw []byte, marketRegionCache *ga.MarketRegionFeatureCache) (map[string]float64, []WindowResult, error) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
+	type windowOutcome struct {
+		detail WindowResult
+		err    error
+	}
+	outcomes := make([]windowOutcome, len(windows))
+	workers := min(runtime.NumCPU(), len(windows))
+	if workers < 1 {
+		workers = 1
+	}
+	tasks := make(chan int, len(windows))
+	var group sync.WaitGroup
+	for worker := 0; worker < workers; worker++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for index := range tasks {
+				outcomes[index] = scoreWindow(ctx, windows[index], symbol, interval, executionMode, chromosome, spawn, costs, positionStructure, longTermFilter, marketRegionRaw, marketRegionCache)
+			}
+		}()
+	}
+	for index := range windows {
+		tasks <- index
+	}
+	close(tasks)
+	group.Wait()
 	details := make([]WindowResult, 0, len(windows))
-	for _, window := range windows {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
+	for index, window := range windows {
+		outcome := outcomes[index]
+		if outcome.err != nil {
+			return nil, nil, outcome.err
 		}
-		params := sigmoiddca.DefaultParams()
-		params.Chromosome = chromosome
-		params.Spawn = *spawn
-		params.PositionStructure = positionStructure
-		var provider backtestcore.ParameterProvider
-		if len(marketRegionRaw) > 0 {
-			var handled bool
-			var providerErr error
-			provider, handled, providerErr = ga.MarketRegionParameterProvider(marketRegionRaw, window.Bars)
-			if providerErr != nil {
-				return nil, nil, providerErr
-			}
-			if !handled {
-				return nil, nil, errors.New("market region parameter pack cannot be loaded")
-			}
-		}
-		path, err := backtestcore.RunSigmoidDCA(backtestcore.SigmoidDCARequest{
-			Context: ctx,
-			Spec: backtestcore.Spec{
-				Symbol:               symbol,
-				Interval:             interval,
-				ExecutionMode:        executionMode,
-				PositionStructure:    positionStructure,
-				StartTimeMs:          window.Bars[0].OpenTime,
-				EndTimeMs:            window.Bars[len(window.Bars)-1].OpenTime,
-				EvaluationStartMs:    window.EvalStartMs,
-				EvaluationEndMs:      window.Bars[len(window.Bars)-1].OpenTime,
-				InitialCapital:       spawn.Policy.InitialUSDT,
-				MonthlyContribution:  spawn.Policy.MonthlyInjectUSDT,
-				InitialAssetQuantity: spawn.Policy.ColdSealedBTC,
-				Costs:                costs,
-				LongTermFilter:       longTermFilter,
-			},
-			Bars:              window.Bars,
-			Params:            params,
-			ParameterProvider: provider,
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		pathMaxDrawdown := maxDrawdown(path.Path)
-		baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
-			InitialUSDT:       spawn.Policy.InitialUSDT,
-			MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
-			UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
-			Costs:             costs,
-		})
-		alpha := path.TotalReturn - baseline.ROI
-		score := alpha - 1.5*math.Max(0, pathMaxDrawdown-baseline.MaxDrawdown)
-		if pathMaxDrawdown >= 0.88 {
-			score = ga.FatalFitnessScore
-		}
-		scores[window.Label] = score
-		details = append(details, WindowResult{
-			Window:            window.Label,
-			Score:             score,
-			TotalReturn:       path.TotalReturn,
-			BenchmarkReturn:   baseline.ROI,
-			Alpha:             alpha,
-			MaxDrawdown:       pathMaxDrawdown,
-			BenchmarkDrawdown: baseline.MaxDrawdown,
-		})
+		scores[window.Label] = outcome.detail.Score
+		details = append(details, outcome.detail)
 	}
 	return scores, details, nil
+}
+
+func scoreWindow(ctx context.Context, window quant.CrucibleWindow, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig, marketRegionRaw []byte, marketRegionCache *ga.MarketRegionFeatureCache) (outcome struct {
+	detail WindowResult
+	err    error
+}) {
+	if err := ctx.Err(); err != nil {
+		outcome.err = err
+		return outcome
+	}
+	params := sigmoiddca.DefaultParams()
+	params.Chromosome = chromosome
+	params.Spawn = *spawn
+	params.PositionStructure = positionStructure
+	var provider backtestcore.ParameterProvider
+	if len(marketRegionRaw) > 0 {
+		var handled bool
+		provider, handled, outcome.err = ga.MarketRegionParameterProviderWithCache(marketRegionRaw, window.Bars, marketRegionCache)
+		if outcome.err != nil || !handled {
+			if outcome.err == nil {
+				outcome.err = errors.New("market region parameter pack cannot be loaded")
+			}
+			return outcome
+		}
+	}
+	path, err := backtestcore.RunSigmoidDCA(backtestcore.SigmoidDCARequest{
+		Context: ctx,
+		Spec: backtestcore.Spec{
+			Symbol:               symbol,
+			Interval:             interval,
+			ExecutionMode:        executionMode,
+			PositionStructure:    positionStructure,
+			StartTimeMs:          window.Bars[0].OpenTime,
+			EndTimeMs:            window.Bars[len(window.Bars)-1].OpenTime,
+			EvaluationStartMs:    window.EvalStartMs,
+			EvaluationEndMs:      window.Bars[len(window.Bars)-1].OpenTime,
+			InitialCapital:       spawn.Policy.InitialUSDT,
+			MonthlyContribution:  spawn.Policy.MonthlyInjectUSDT,
+			InitialAssetQuantity: spawn.Policy.ColdSealedBTC,
+			Costs:                costs,
+			LongTermFilter:       longTermFilter,
+		},
+		Bars:              window.Bars,
+		Params:            params,
+		ParameterProvider: provider,
+	})
+	if err != nil {
+		outcome.err = err
+		return outcome
+	}
+	pathMaxDrawdown := maxDrawdown(path.Path)
+	baseline := quant.SimulateGhostDCAFrom(window.Bars, window.EvalStartMs, quant.GhostDCAConfig{
+		InitialUSDT:       spawn.Policy.InitialUSDT,
+		MonthlyInjectUSDT: spawn.Policy.MonthlyInjectUSDT,
+		UseOpenExecution:  executionMode == marketdata.ExecutionModeCloseNextOpen,
+		Costs:             costs,
+	})
+	alpha := path.TotalReturn - baseline.ROI
+	score := alpha - 1.5*math.Max(0, pathMaxDrawdown-baseline.MaxDrawdown)
+	if pathMaxDrawdown >= 0.88 {
+		score = ga.FatalFitnessScore
+	}
+	outcome.detail = WindowResult{
+		Window:            window.Label,
+		Score:             score,
+		TotalReturn:       path.TotalReturn,
+		BenchmarkReturn:   baseline.ROI,
+		Alpha:             alpha,
+		MaxDrawdown:       pathMaxDrawdown,
+		BenchmarkDrawdown: baseline.MaxDrawdown,
+	}
+	return outcome
 }
 
 func mergeNAV(strategy []ga.BacktestPoint, baseline quant.GhostDCAResult) []EquitySnapshot {
