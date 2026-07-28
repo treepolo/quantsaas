@@ -192,7 +192,7 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		unitsPerIndividual := units / int64(max(1, len(population)))
 		cfg.OnComputePlan(ComputePlan{
 			UnitsPerIndividual: unitsPerIndividual,
-			PlannedUnits:       unitsPerIndividual * int64(e.popSize(cfg)) * int64(e.maxGenerations(cfg)+1),
+			PlannedUnits:       plan.InitializationUnits + unitsPerIndividual*int64(e.popSize(cfg))*int64(e.maxGenerations(cfg)+1),
 		})
 	}
 	population = e.evaluatePopulation(ctx, population, plan, 0, cfg)
@@ -379,6 +379,7 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		"bars":     len(bars),
 	})
 	windows := quant.BuildCrucibleWindows(bars, 1200)
+	initializationUnits := int64(0)
 	if cfg.GeneOptions.MarketRegionEnabled {
 		maxWindow := len(bars)
 		for _, window := range windows {
@@ -390,10 +391,23 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 			return EvaluablePlan{}, fmt.Errorf("market region search requires at least two bars in every evaluation window")
 		}
 		cfg.GeneOptions.MarketRegionMaxWindow = maxWindow
-		ranges, rangeErr := marketRegionFeatureRanges(bars, maxWindow)
+		// Range discovery is real causal work and may be expensive for large
+		// histories. Start the monitor before it so a running task never looks
+		// like a stalled zero-progress task while it is preparing candidates.
+		initializationUnits = 2 * int64(len(bars)) * int64(maxWindow)
+		if cfg.OnComputePlan != nil {
+			cfg.OnComputePlan(ComputePlan{PlannedUnits: initializationUnits})
+		}
+		e.trace(cfg, TraceModeSummary, "evolution", "market_region.ranges.start", "preparing market-region threshold ranges", map[string]any{
+			"bars": len(bars), "max_window": maxWindow,
+		})
+		ranges, rangeErr := marketRegionFeatureRangesWithProgress(bars, maxWindow, cfg.OnComputeStep)
 		if rangeErr != nil {
 			return EvaluablePlan{}, rangeErr
 		}
+		e.trace(cfg, TraceModeSummary, "evolution", "market_region.ranges.done", "market-region threshold ranges prepared", map[string]any{
+			"feature_count": len(ranges),
+		})
 		cfg.GeneOptions.MarketRegionFeatureRanges = ranges
 	}
 	costs := quant.NormalizeExecutionCosts(cfg.Costs)
@@ -439,26 +453,27 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 	}
 
 	return EvaluablePlan{
-		Pair:              cfg.Pair,
-		Interval:          cfg.Interval,
-		ExecutionMode:     cfg.ExecutionMode,
-		TemplateName:      e.evolvable.StrategyID(),
-		Spawn:             spawn,
-		Costs:             costs,
-		TradePenalty:      math.Max(0, cfg.TradePenalty),
-		LongTermFilter:    cfg.LongTermFilter,
-		GeneOptions:       cfg.GeneOptions,
-		LotStep:           cfg.LotStepSize,
-		LotMin:            cfg.LotMinQty,
-		Windows:           windows,
-		DCABaselines:      baselines,
-		AggregateCache:    map[string]any{},
-		MarketRegionCache: NewMarketRegionFeatureCache(),
+		Pair:                cfg.Pair,
+		Interval:            cfg.Interval,
+		ExecutionMode:       cfg.ExecutionMode,
+		TemplateName:        e.evolvable.StrategyID(),
+		Spawn:               spawn,
+		Costs:               costs,
+		TradePenalty:        math.Max(0, cfg.TradePenalty),
+		LongTermFilter:      cfg.LongTermFilter,
+		GeneOptions:         cfg.GeneOptions,
+		LotStep:             cfg.LotStepSize,
+		LotMin:              cfg.LotMinQty,
+		Windows:             windows,
+		DCABaselines:        baselines,
+		AggregateCache:      map[string]any{},
+		MarketRegionCache:   NewMarketRegionFeatureCache(),
+		InitializationUnits: initializationUnits,
 	}, nil
 }
 
 func planComputeUnits(plan EvaluablePlan) int64 {
-	var total int64
+	total := plan.InitializationUnits
 	for _, window := range plan.Windows {
 		total += int64(len(window.Bars))
 		if plan.GeneOptions.MarketRegionEnabled {

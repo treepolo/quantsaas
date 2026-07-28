@@ -94,6 +94,16 @@ func TrendSlope(bars []quant.Bar) (float64, error) {
 
 // BuildGeometryFeatures computes each point using only bars ending at index.
 func BuildGeometryFeatures(bars []quant.Bar, lookback int) ([]GeometryPoint, error) {
+	return buildGeometryFeatures(bars, lookback, nil)
+}
+
+// BuildGeometryFeaturesWithProgress has the same output contract as
+// BuildGeometryFeatures and reports completed causal geometry work in batches.
+func BuildGeometryFeaturesWithProgress(bars []quant.Bar, lookback int, progress func(int64)) ([]GeometryPoint, error) {
+	return buildGeometryFeatures(bars, lookback, progress)
+}
+
+func buildGeometryFeatures(bars []quant.Bar, lookback int, progress func(int64)) ([]GeometryPoint, error) {
 	if lookback < 2 {
 		return nil, fmt.Errorf("geometry lookback must be at least two")
 	}
@@ -101,6 +111,10 @@ func BuildGeometryFeatures(bars []quant.Bar, lookback int) ([]GeometryPoint, err
 		return nil, err
 	}
 	result := make([]GeometryPoint, len(bars))
+	workspace := geometryWorkspace{
+		points: make([]geometryXY, 0, lookback*2), unique: make([]geometryXY, 0, lookback*2),
+		lower: make([]geometryXY, 0, lookback*2), upper: make([]geometryXY, 0, lookback*2), hull: make([]geometryXY, 0, lookback*2),
+	}
 	for index, bar := range bars {
 		point := GeometryPoint{SchemaVersion: GeometrySchemaVersion, Index: index, TimeMs: bar.OpenTime, Lookback: lookback}
 		if index+1 < lookback {
@@ -109,17 +123,85 @@ func BuildGeometryFeatures(bars []quant.Bar, lookback int) ([]GeometryPoint, err
 			continue
 		}
 		window := bars[index-lookback+1 : index+1]
-		area, areaErr := ConvexHullArea(window)
-		slope, slopeErr := TrendSlope(window)
-		if areaErr != nil || slopeErr != nil {
-			point.UnavailableReason = "invalid_geometry_window"
-			result[index] = point
-			continue
-		}
-		point.CoverageArea, point.TrendSlope, point.Available = area, slope, true
+		point.CoverageArea = convexHullAreaOrdered(window, &workspace)
+		point.TrendSlope = trendSlopeValidated(window)
+		point.Available = true
 		result[index] = point
+		if progress != nil && (index+1)%64 == 0 {
+			progress(int64(64 * lookback))
+		}
+	}
+	if progress != nil {
+		remaining := len(bars) % 64
+		if remaining > 0 {
+			progress(int64(remaining * lookback))
+		}
 	}
 	return result, nil
+}
+
+type geometryWorkspace struct {
+	points, unique, lower, upper, hull []geometryXY
+}
+
+// convexHullAreaOrdered is equivalent to ConvexHullArea for validated OHLC
+// windows. Its input order is already the exact X/Y order that geometryHull
+// would create, so it reuses workspace buffers instead of allocating several
+// large slices for every causal bar.
+func convexHullAreaOrdered(bars []quant.Bar, workspace *geometryWorkspace) float64 {
+	workspace.points = workspace.points[:0]
+	for index, bar := range bars {
+		workspace.points = append(workspace.points, geometryXY{X: float64(index), Y: bar.Low}, geometryXY{X: float64(index), Y: bar.High})
+	}
+	workspace.unique = workspace.unique[:0]
+	for _, point := range workspace.points {
+		if len(workspace.unique) == 0 || point != workspace.unique[len(workspace.unique)-1] {
+			workspace.unique = append(workspace.unique, point)
+		}
+	}
+	workspace.lower = workspace.lower[:0]
+	for _, point := range workspace.unique {
+		for len(workspace.lower) >= 2 && cross(workspace.lower[len(workspace.lower)-2], workspace.lower[len(workspace.lower)-1], point) <= 0 {
+			workspace.lower = workspace.lower[:len(workspace.lower)-1]
+		}
+		workspace.lower = append(workspace.lower, point)
+	}
+	workspace.upper = workspace.upper[:0]
+	for index := len(workspace.unique) - 1; index >= 0; index-- {
+		point := workspace.unique[index]
+		for len(workspace.upper) >= 2 && cross(workspace.upper[len(workspace.upper)-2], workspace.upper[len(workspace.upper)-1], point) <= 0 {
+			workspace.upper = workspace.upper[:len(workspace.upper)-1]
+		}
+		workspace.upper = append(workspace.upper, point)
+	}
+	workspace.hull = append(workspace.hull[:0], workspace.lower[:len(workspace.lower)-1]...)
+	workspace.hull = append(workspace.hull, workspace.upper[:len(workspace.upper)-1]...)
+	if len(workspace.hull) < 3 {
+		return 0
+	}
+	area := 0.0
+	for index, point := range workspace.hull {
+		next := workspace.hull[(index+1)%len(workspace.hull)]
+		area += point.X*next.Y - next.X*point.Y
+	}
+	return math.Abs(area) / 2
+}
+
+func trendSlopeValidated(bars []quant.Bar) float64 {
+	n := float64(len(bars))
+	meanX := (n - 1) / 2
+	meanY := 0.0
+	for _, bar := range bars {
+		meanY += bar.Close
+	}
+	meanY /= n
+	denominator, numerator := 0.0, 0.0
+	for index, bar := range bars {
+		dx := float64(index) - meanX
+		numerator += dx * (bar.Close - meanY)
+		denominator += dx * dx
+	}
+	return numerator / denominator
 }
 
 // BuildGeometryTargets creates targets from t+1 through t+horizon.

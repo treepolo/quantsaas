@@ -239,19 +239,26 @@ func marketRegionValuesWithCache(bars []quant.Bar, features []MarketRegionFeatur
 }
 
 func marketRegionFeatureRanges(bars []quant.Bar, window int) (map[string][2]float64, error) {
-	features := make([]MarketRegionFeature, 0, len(MarketRegionFeatureIDs))
-	for _, id := range MarketRegionFeatureIDs {
-		features = append(features, MarketRegionFeature{ID: id, Window: window})
-	}
-	values, err := marketRegionValues(bars, features)
+	return marketRegionFeatureRangesWithProgress(bars, window, nil)
+}
+
+func marketRegionFeatureRangesWithProgress(bars []quant.Bar, window int, progress func(int64)) (map[string][2]float64, error) {
+	activity, err := dynamicparam.BuildFeaturePointsWithoutRawSequence(bars, window)
 	if err != nil {
 		return nil, err
 	}
-	ranges := make(map[string][2]float64, len(features))
+	if progress != nil {
+		progress(int64(len(bars) * window))
+	}
+	geometry, err := dynamicparam.BuildGeometryFeaturesWithProgress(bars, window, progress)
+	if err != nil {
+		return nil, err
+	}
+	ranges := make(map[string][2]float64, len(MarketRegionFeatureIDs))
 	for _, id := range MarketRegionFeatureIDs {
 		minimum, maximum, found := 0.0, 0.0, false
-		for _, row := range values {
-			value, ok := row[id]
+		for index := range bars {
+			value, ok := marketRegionFeatureValue(id, activity[index], geometry[index])
 			if !ok || math.IsNaN(value) || math.IsInf(value, 0) {
 				continue
 			}

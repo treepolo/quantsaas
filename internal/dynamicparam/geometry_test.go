@@ -26,6 +26,35 @@ func TestConvexHullAreaDropsInteriorAndCollinearPoints(t *testing.T) {
 	}
 }
 
+func TestReusableGeometryWorkspaceMatchesPublicCalculationExactly(t *testing.T) {
+	bars := make([]quant.Bar, 0, 80)
+	for index := 0; index < 80; index++ {
+		open := 100.0 + float64(index)*0.4
+		close := open + float64((index%7)-3)*0.13
+		bars = append(bars, quant.Bar{OpenTime: int64(index + 1), Open: open, High: math.Max(open, close) + float64(index%5)*0.11 + 0.2, Low: math.Min(open, close) - float64(index%3)*0.09 - 0.2, Close: close})
+	}
+	workspace := geometryWorkspace{points: make([]geometryXY, 0, 40), unique: make([]geometryXY, 0, 40), lower: make([]geometryXY, 0, 40), upper: make([]geometryXY, 0, 40), hull: make([]geometryXY, 0, 40)}
+	for start := 0; start < len(bars)-2; start++ {
+		for end := start + 2; end <= len(bars) && end-start <= 20; end++ {
+			want, err := ConvexHullArea(bars[start:end])
+			if err != nil {
+				t.Fatalf("public area: %v", err)
+			}
+			got := convexHullAreaOrdered(bars[start:end], &workspace)
+			if want != got {
+				t.Fatalf("area differs for [%d:%d]: want %.17g got %.17g", start, end, want, got)
+			}
+			wantSlope, err := TrendSlope(bars[start:end])
+			if err != nil {
+				t.Fatalf("public slope: %v", err)
+			}
+			if gotSlope := trendSlopeValidated(bars[start:end]); wantSlope != gotSlope {
+				t.Fatalf("slope differs for [%d:%d]: want %.17g got %.17g", start, end, wantSlope, gotSlope)
+			}
+		}
+	}
+}
+
 func TestTrendSlopeUsesRawCloseScale(t *testing.T) {
 	bars := geometryBars([4]float64{10, 11, 9, 10}, [4]float64{20, 21, 19, 20}, [4]float64{30, 31, 29, 30})
 	slope, err := TrendSlope(bars)
