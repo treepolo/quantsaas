@@ -72,7 +72,15 @@ type GeneOptions struct {
 	EnableWBreakout           bool
 	PositionStructure         string
 	FixedParamKeys            []string
-	FixedGene                 *quant.Chromosome `json:"-"`
+	FixedGene                 *quant.Chromosome     `json:"-"`
+	MarketRegionEnabled       bool                  `json:"market_region_enabled"`
+	MarketRegionMaxThresholds int                   `json:"market_region_max_thresholds"`
+	MarketRegionMaxWindow     int                   `json:"market_region_max_window"`
+	MarketRegionFeatureRanges map[string][2]float64 `json:"market_region_feature_ranges,omitempty"`
+}
+
+type GeneOptionSampler interface {
+	SampleWithOptions(rng RandomSource, options GeneOptions) Gene
 }
 
 type GeneNormalizer interface {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"quantsaas/internal/backtestcore"
+	"quantsaas/internal/compute"
 	"quantsaas/internal/marketversion"
 	"quantsaas/internal/quant"
 	"quantsaas/internal/saas/backtestresult"
@@ -243,6 +244,7 @@ type preparedBacktest struct {
 	coreSpec          backtestcore.Spec
 	identity          backtestresult.Identity
 	parameterProvider backtestcore.ParameterProvider
+	marketRegionRaw   []byte
 }
 
 type DynamicExecutionMetadata struct {
@@ -721,6 +723,8 @@ func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req Creat
 	var dynamicPolicyHash string
 	var dynamicControlMode string
 	var effectiveParametersHash string
+	var parameterProvider backtestcore.ParameterProvider
+	var marketRegionRaw []byte
 	if dynamic != nil {
 		modelArtifactHash = dynamic.ModelArtifactHash
 		predictionSchemaHash = dynamic.PredictionSchemaHash
@@ -728,6 +732,17 @@ func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req Creat
 		dynamicPolicyHash = dynamic.DynamicPolicyHash
 		dynamicControlMode = dynamic.DynamicControlMode
 		effectiveParametersHash = dynamic.EffectiveParametersHash
+		parameterProvider = dynamic.ParameterProvider
+	} else {
+		provider, raw, handled, providerErr := s.resolveMarketRegionProvider(ctx, req, bars)
+		if providerErr != nil {
+			return preparedBacktest{}, providerErr
+		}
+		if handled {
+			parameterProvider = provider
+			effectiveParametersHash = compute.HashBytes(raw)
+			marketRegionRaw = raw
+		}
 	}
 	identity, err := backtestresult.BuildIdentity(backtestresult.SpecInput{
 		StrategyID:                 req.StrategyID,
@@ -749,10 +764,7 @@ func (s *Service) prepareWithDynamic(ctx context.Context, userID uint, req Creat
 		return preparedBacktest{}, err
 	}
 	coreSpec.DatasetHash = identity.Snapshot.DatasetHash
-	prepared := preparedBacktest{req: req, params: params, bars: bars, costs: costs, coreSpec: coreSpec, identity: identity}
-	if dynamic != nil {
-		prepared.parameterProvider = dynamic.ParameterProvider
-	}
+	prepared := preparedBacktest{req: req, params: params, bars: bars, costs: costs, coreSpec: coreSpec, identity: identity, parameterProvider: parameterProvider, marketRegionRaw: marketRegionRaw}
 	return prepared, nil
 }
 
@@ -780,7 +792,7 @@ func (s *Service) executePrepared(ctx context.Context, prepared preparedBacktest
 	windows := map[string]float64{}
 	windowDetails := []WindowResult{}
 	if prepared.coreSpec.PrefixMode != backtestcore.PrefixModeHistoryOnly {
-		windows, windowDetails, err = scoreWindows(ctx, prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter)
+		windows, windowDetails, err = scoreWindows(ctx, prepared.bars, prepared.req.Symbol, prepared.req.Interval, prepared.req.ExecutionMode, prepared.params.Chromosome, &spawn, prepared.costs, prepared.params.PositionStructure, prepared.coreSpec.LongTermFilter, prepared.marketRegionRaw)
 		if err != nil {
 			return backtestresult.Artifacts{}, err
 		}
@@ -1403,6 +1415,40 @@ func (s *Service) resolveParams(ctx context.Context, userID uint, req CreateRequ
 	return params, nil
 }
 
+func (s *Service) resolveMarketRegionProvider(ctx context.Context, req CreateRequest, bars []quant.Bar) (backtestcore.ParameterProvider, []byte, bool, error) {
+	var raw []byte
+	switch req.Source {
+	case SourceChampion:
+		record, err := s.loadLatestGene(ctx, req, saasstore.GeneRoleChampion)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil, false, nil
+		}
+		if err != nil {
+			return nil, nil, false, err
+		}
+		raw = []byte(record.ParamPack)
+	case SourceCandidate:
+		id := req.CandidateID
+		if id == 0 {
+			id = req.GenomeID
+		}
+		if id == 0 {
+			return nil, nil, false, nil
+		}
+		record, err := s.loadGeneByID(ctx, id)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		raw = []byte(record.ParamPack)
+	case SourceCustom:
+		raw = []byte(req.CustomParams)
+	default:
+		return nil, nil, false, nil
+	}
+	provider, handled, err := ga.MarketRegionParameterProvider(raw, bars)
+	return provider, raw, handled, err
+}
+
 func (s *Service) loadLatestGene(ctx context.Context, req CreateRequest, role string) (saasstore.GeneRecord, error) {
 	var record saasstore.GeneRecord
 	err := s.db.WithContext(ctx).
@@ -1725,7 +1771,7 @@ func practicalPath(points []backtestcore.NAVPoint) []backtestcore.NAVPoint {
 	return result
 }
 
-func scoreWindows(ctx context.Context, bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig) (map[string]float64, []WindowResult, error) {
+func scoreWindows(ctx context.Context, bars []quant.Bar, symbol string, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, costs quant.ExecutionCostConfig, positionStructure string, longTermFilter backtestcore.LongTermFilterConfig, marketRegionRaw []byte) (map[string]float64, []WindowResult, error) {
 	windows := quant.BuildCrucibleWindows(bars, 1200)
 	scores := make(map[string]float64, len(windows))
 	details := make([]WindowResult, 0, len(windows))
@@ -1737,6 +1783,18 @@ func scoreWindows(ctx context.Context, bars []quant.Bar, symbol string, interval
 		params.Chromosome = chromosome
 		params.Spawn = *spawn
 		params.PositionStructure = positionStructure
+		var provider backtestcore.ParameterProvider
+		if len(marketRegionRaw) > 0 {
+			var handled bool
+			var providerErr error
+			provider, handled, providerErr = ga.MarketRegionParameterProvider(marketRegionRaw, window.Bars)
+			if providerErr != nil {
+				return nil, nil, providerErr
+			}
+			if !handled {
+				return nil, nil, errors.New("market region parameter pack cannot be loaded")
+			}
+		}
 		path, err := backtestcore.RunSigmoidDCA(backtestcore.SigmoidDCARequest{
 			Context: ctx,
 			Spec: backtestcore.Spec{
@@ -1754,8 +1812,9 @@ func scoreWindows(ctx context.Context, bars []quant.Bar, symbol string, interval
 				Costs:                costs,
 				LongTermFilter:       longTermFilter,
 			},
-			Bars:   window.Bars,
-			Params: params,
+			Bars:              window.Bars,
+			Params:            params,
+			ParameterProvider: provider,
 		})
 		if err != nil {
 			return nil, nil, err

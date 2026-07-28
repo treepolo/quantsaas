@@ -70,6 +70,8 @@ export type EvolutionTask = {
   standard_champion_score?: number;
   seed_gene_id?: number;
   fixed_param_keys?: string[];
+	market_region_enabled?: boolean;
+	market_region_max_thresholds?: number;
   best_score?: number;
   max_drawdown?: number;
   window_score?: Record<string, number>;
@@ -186,6 +188,8 @@ export type CreateTaskInput = {
   standard_end_ms?: number;
   seed_gene_id?: number;
   fixed_param_keys?: string[];
+	market_region_enabled?: boolean;
+	market_region_max_thresholds?: number;
 };
 
 export type ComputeEstimate = {

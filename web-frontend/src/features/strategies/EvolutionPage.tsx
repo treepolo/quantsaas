@@ -349,6 +349,8 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [standardEndDate, setStandardEndDate] = useState(endDate);
   const [seedGenomeId, setSeedGenomeId] = useState("");
   const [fixedParamKeys, setFixedParamKeys] = useState<string[]>([]);
+	const [marketRegionEnabled, setMarketRegionEnabled] = useState(false);
+	const [marketRegionMaxThresholds, setMarketRegionMaxThresholds] = useState(1);
   const selectedResearchDataset = useMemo(
     () => researchDatasets.find((item) => String(item.id) === researchDatasetId),
     [researchDatasetId, researchDatasets]
@@ -445,8 +447,10 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
     standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined,
     seed_gene_id: selectedSeedGenome?.id,
-    fixed_param_keys: selectedSeedGenome ? fixedParamKeys : undefined
-  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, fixedParamKeys, generations, instrumentId, interval, longTermFilterEnabled, longTermFilterMonths, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, selectedSeedGenome, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+		fixed_param_keys: selectedSeedGenome ? fixedParamKeys : undefined,
+		market_region_enabled: marketRegionEnabled,
+		market_region_max_thresholds: marketRegionEnabled ? marketRegionMaxThresholds : undefined
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, fixedParamKeys, generations, instrumentId, interval, longTermFilterEnabled, longTermFilterMonths, marketRegionEnabled, marketRegionMaxThresholds, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, selectedSeedGenome, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
   const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
   const computeEstimateQuery = useQuery({
     queryKey: ["evolution-compute-estimate", taskInput],
@@ -662,6 +666,14 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <NumberInput label="世代數" min={5} max={50} value={generations} onChange={setGenerations} />
           <ReadOnlyMetric label="初始本金" value={formatMoney(SEARCH_INITIAL_CAPITAL)} />
           <NumberInput label="每月投入" min={0} max={1000000000} value={monthlyDCA} onChange={setMonthlyDCA} />
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <div className="mb-2 text-sm font-semibold text-slate-300">市場內涵資料區間參數搜尋</div>
+            <label className="flex items-start gap-3 text-sm text-slate-300">
+              <input className="mt-1" type="checkbox" checked={marketRegionEnabled} onChange={(event) => setMarketRegionEnabled(event.target.checked)} />
+              <span><span className="block">依市場內涵資料的區間，選擇完整核心參數包</span><span className="mt-1 block text-xs text-slate-500">使用全部 OHLC 活動值與歷史比率、走勢外框面積及收盤回歸斜率；不使用預測模型或市場狀態標籤。窗口大小由搜尋探索所有可用整數值。</span></span>
+            </label>
+            {marketRegionEnabled ? <div className="mt-3 max-w-xs"><NumberInput label="每項資料最多判定值 X" min={0} value={marketRegionMaxThresholds} onChange={setMarketRegionMaxThresholds} /></div> : null}
+          </div>
           <NumberInput label="手續費率" min={0} max={0.2} step={0.0001} value={feeRate} onChange={setFeeRate} />
           <NumberInput label="價差 / 滑價率" min={0} max={0.2} step={0.0001} value={spreadRate} onChange={setSpreadRate} />
           <label className="flex items-center gap-2 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">

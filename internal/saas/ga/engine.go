@@ -3,6 +3,7 @@ package ga
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"runtime"
@@ -156,17 +157,13 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		})
 		return EpochResult{}, err
 	}
+	// The upper window bound is derived from the actual evaluation data, not a
+	// fixed menu. It becomes part of every candidate created in this run.
+	cfg.GeneOptions = plan.GeneOptions
 	plan.Trace = cfg.OnTrace
 	plan.TraceMode = cfg.TraceMode
 	plan.TraceModeFunc = cfg.TraceModeFunc
 	plan.ComputeStep = cfg.OnComputeStep
-	if cfg.OnComputePlan != nil {
-		unitsPerIndividual := planComputeUnits(plan)
-		cfg.OnComputePlan(ComputePlan{
-			UnitsPerIndividual: unitsPerIndividual,
-			PlannedUnits:       unitsPerIndividual * int64(e.popSize(cfg)) * int64(e.maxGenerations(cfg)+1),
-		})
-	}
 	searchConfig := e.searchConfig(cfg)
 	scope := GeneScope{
 		StrategyID:    e.evolvable.StrategyID(),
@@ -187,6 +184,17 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		return EpochResult{}, err
 	}
 	population = e.deduplicatePopulation(population, knownFingerprints, rng, true, cfg)
+	if cfg.OnComputePlan != nil {
+		var units int64
+		for _, item := range population {
+			units += candidateComputeUnits(plan, item.Gene)
+		}
+		unitsPerIndividual := units / int64(max(1, len(population)))
+		cfg.OnComputePlan(ComputePlan{
+			UnitsPerIndividual: unitsPerIndividual,
+			PlannedUnits:       unitsPerIndividual * int64(e.popSize(cfg)) * int64(e.maxGenerations(cfg)+1),
+		})
+	}
 	population = e.evaluatePopulation(ctx, population, plan, 0, cfg)
 
 	best := bestIndividual(population)
@@ -287,6 +295,7 @@ func (e *EvolutionEngine) EvaluateParamPack(ctx context.Context, cfg EpochConfig
 	if err != nil {
 		return FitnessResult{}, err
 	}
+	cfg.GeneOptions = plan.GeneOptions
 	plan.Trace = cfg.OnTrace
 	plan.TraceMode = cfg.TraceMode
 	plan.TraceModeFunc = cfg.TraceModeFunc
@@ -370,6 +379,23 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 		"bars":     len(bars),
 	})
 	windows := quant.BuildCrucibleWindows(bars, 1200)
+	if cfg.GeneOptions.MarketRegionEnabled {
+		maxWindow := len(bars)
+		for _, window := range windows {
+			if len(window.Bars) < maxWindow {
+				maxWindow = len(window.Bars)
+			}
+		}
+		if maxWindow < 2 {
+			return EvaluablePlan{}, fmt.Errorf("market region search requires at least two bars in every evaluation window")
+		}
+		cfg.GeneOptions.MarketRegionMaxWindow = maxWindow
+		ranges, rangeErr := marketRegionFeatureRanges(bars, maxWindow)
+		if rangeErr != nil {
+			return EvaluablePlan{}, rangeErr
+		}
+		cfg.GeneOptions.MarketRegionFeatureRanges = ranges
+	}
 	costs := quant.NormalizeExecutionCosts(cfg.Costs)
 	spawn := cfg.SpawnPointOverride
 	if spawn == nil {
@@ -434,6 +460,21 @@ func planComputeUnits(plan EvaluablePlan) int64 {
 	var total int64
 	for _, window := range plan.Windows {
 		total += int64(len(window.Bars))
+		if plan.GeneOptions.MarketRegionEnabled {
+			total += marketRegionMaximumProviderUnits(plan.GeneOptions.MarketRegionMaxWindow, len(window.Bars))
+		}
+	}
+	return total
+}
+
+func candidateComputeUnits(plan EvaluablePlan, g Gene) int64 {
+	var total int64
+	region, regionMode := isMarketRegionGene(g)
+	for _, window := range plan.Windows {
+		total += int64(len(window.Bars))
+		if regionMode {
+			total += marketRegionProviderUnits(region, window.Bars)
+		}
 	}
 	return total
 }
@@ -457,6 +498,13 @@ func (e *EvolutionEngine) normalizeGene(cfg EpochConfig, gene Gene) Gene {
 		return normalizer.NormalizeGene(gene, cfg.GeneOptions)
 	}
 	return gene
+}
+
+func (e *EvolutionEngine) sampleGene(cfg EpochConfig, rng RandomSource) Gene {
+	if sampler, ok := e.evolvable.(GeneOptionSampler); ok {
+		return sampler.SampleWithOptions(rng, cfg.GeneOptions)
+	}
+	return e.evolvable.Sample(rng)
 }
 
 func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochConfig, rng RandomSource) ([]individual, error) {
@@ -499,7 +547,7 @@ func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochCon
 	}
 
 	for len(population) < popSize {
-		population = append(population, individual{Gene: e.normalizeGene(cfg, e.evolvable.Sample(rng))})
+		population = append(population, individual{Gene: e.normalizeGene(cfg, e.sampleGene(cfg, rng))})
 	}
 	e.trace(cfg, TraceModeSummary, "evolution", "population.initialized", "initial population initialized", map[string]any{
 		"population":  len(population),
@@ -599,7 +647,7 @@ func (e *EvolutionEngine) deduplicatePopulation(population []individual, knownFi
 			continue
 		}
 		out[i].Gene = e.uniqueGene(out[i].Gene, knownFingerprints, rng, func() Gene {
-			return e.normalizeGene(cfg, e.evolvable.Sample(rng))
+			return e.normalizeGene(cfg, e.sampleGene(cfg, rng))
 		})
 		out[i].Gene = e.normalizeGene(cfg, out[i].Gene)
 		knownFingerprints[e.evolvable.Fingerprint(out[i].Gene)] = true

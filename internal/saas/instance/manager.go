@@ -9,6 +9,7 @@ import (
 
 	"quantsaas/internal/protocol"
 	"quantsaas/internal/quant"
+	"quantsaas/internal/saas/ga"
 	saasstore "quantsaas/internal/saas/store"
 	"quantsaas/internal/strategies/sigmoiddca"
 
@@ -120,12 +121,12 @@ func (m *Manager) Tick(ctx context.Context, instanceID uint) error {
 		}
 	}
 
-	params, err := m.loadStrategyParams(ctx)
+	closes := quant.ExtractCloses(bars)
+	timestamps := quant.ExtractTimestamps(bars)
+	params, err := m.loadStrategyParams(ctx, bars)
 	if err != nil {
 		return err
 	}
-	closes := quant.ExtractCloses(bars)
-	timestamps := quant.ExtractTimestamps(bars)
 	lots, err := m.loadLots(ctx, inst.ID)
 	if err != nil {
 		return err
@@ -188,7 +189,7 @@ func (m *Manager) Tick(ctx context.Context, instanceID uint) error {
 		Update("last_processed_bar_time", latestBarTime).Error
 }
 
-func (m *Manager) loadStrategyParams(ctx context.Context) (sigmoiddca.Params, error) {
+func (m *Manager) loadStrategyParams(ctx context.Context, bars []quant.Bar) (sigmoiddca.Params, error) {
 	var record saasstore.GeneRecord
 	err := m.db.WithContext(ctx).
 		Where("strategy_id = ? AND role = ?", m.strategy, saasstore.GeneRoleChampion).
@@ -199,6 +200,9 @@ func (m *Manager) loadStrategyParams(ctx context.Context) (sigmoiddca.Params, er
 	}
 	if err != nil {
 		return sigmoiddca.Params{}, err
+	}
+	if params, handled, resolveErr := ga.ResolveMarketRegionParams([]byte(record.ParamPack), bars); handled {
+		return params, resolveErr
 	}
 	return sigmoiddca.ParseParamsFromParamPack([]byte(record.ParamPack)), nil
 }

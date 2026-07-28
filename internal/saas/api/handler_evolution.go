@@ -389,6 +389,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		StandardEndMs             int64    `json:"standard_end_ms"`
 		SeedGeneID                uint     `json:"seed_gene_id"`
 		FixedParamKeys            []string `json:"fixed_param_keys"`
+		MarketRegionEnabled       bool     `json:"market_region_enabled"`
+		MarketRegionMaxThresholds int      `json:"market_region_max_thresholds"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -498,6 +500,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"standard_champion_score":      result.StandardChampionScore,
 		"seed_gene_id":                 cfg.SeedGeneID,
 		"fixed_param_keys":             cfg.FixedParamKeys,
+		"market_region_enabled":        cfg.MarketRegionEnabled,
+		"market_region_max_thresholds": cfg.MarketRegionMaxThresholds,
 		"best_score":                   bestScore,
 		"max_drawdown":                 maxDrawdown,
 		"window_score":                 crucibleScores(result.WindowScores),

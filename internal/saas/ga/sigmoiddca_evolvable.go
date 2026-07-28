@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"hash/fnv"
 	"math"
+	"sort"
 	"strings"
 
 	"quantsaas/internal/backtestcore"
@@ -43,6 +44,9 @@ func NormalizeGeneOptions(options GeneOptions) GeneOptions {
 		options.EnableWBreakout = true
 	}
 	options.FixedParamKeys = NormalizeFixedParamKeys(options.FixedParamKeys)
+	if options.MarketRegionEnabled && options.MarketRegionMaxThresholds < 0 {
+		options.MarketRegionMaxThresholds = 0
+	}
 	return options
 }
 
@@ -102,7 +106,56 @@ func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 	return quant.ClampChromosome(c)
 }
 
+func (e SigmoidDCAEvolvable) SampleWithOptions(rng RandomSource, options GeneOptions) Gene {
+	options = NormalizeGeneOptions(options)
+	if !options.MarketRegionEnabled {
+		return e.Sample(rng)
+	}
+	maxWindow := options.MarketRegionMaxWindow
+	if maxWindow < 2 {
+		maxWindow = 2
+	}
+	features := make([]MarketRegionFeature, 0, len(MarketRegionFeatureIDs))
+	for _, id := range MarketRegionFeatureIDs {
+		feature := MarketRegionFeature{ID: id, Window: 2 + rng.Intn(maxWindow-1)}
+		if options.MarketRegionMaxThresholds > 0 && rng.Float64() < 0.22 {
+			if limits, ok := options.MarketRegionFeatureRanges[id]; ok && limits[1] > limits[0] {
+				count := 1 + rng.Intn(options.MarketRegionMaxThresholds)
+				for i := 0; i < count; i++ {
+					feature.Thresholds = append(feature.Thresholds, limits[0]+rng.Float64()*(limits[1]-limits[0]))
+				}
+				sort.Float64s(feature.Thresholds)
+			}
+		}
+		features = append(features, feature)
+	}
+	for len(marketRegionKeys(features)) > maxMarketRegionPacks {
+		for i := len(features) - 1; i >= 0; i-- {
+			if len(features[i].Thresholds) > 0 {
+				features[i].Thresholds = features[i].Thresholds[:len(features[i].Thresholds)-1]
+				break
+			}
+		}
+	}
+	gene := MarketRegionGene{SchemaVersion: MarketRegionSchemaVersion, Features: features}
+	for _, key := range marketRegionKeys(features) {
+		gene.Packs = append(gene.Packs, MarketRegionPack{Key: key, Chromosome: asChromosome(e.Sample(rng))})
+	}
+	return gene
+}
+
 func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng RandomSource) Gene {
+	if region, ok := isMarketRegionGene(g); ok {
+		for i := range region.Features {
+			if rng.Float64() < prob {
+				region.Features[i].Window += int(math.Round(rng.NormFloat64() * scale))
+			}
+		}
+		for i := range region.Packs {
+			region.Packs[i].Chromosome = asChromosome(SigmoidDCAEvolvable{}.Mutate(region.Packs[i].Chromosome, prob, scale, rng))
+		}
+		return region
+	}
 	c := asChromosome(g)
 	c.MicroReservePct = mutateFloat(c.MicroReservePct, "micro_reserve_pct", prob, scale, rng)
 	c.Beta = mutateFloat(c.Beta, "beta", prob, scale, rng)
@@ -126,6 +179,23 @@ func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng Rando
 }
 
 func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
+	left, leftOK := isMarketRegionGene(p1)
+	right, rightOK := isMarketRegionGene(p2)
+	if leftOK && rightOK && len(left.Features) == len(right.Features) && len(left.Packs) == len(right.Packs) {
+		child := left
+		// Keep the interval layout of one parent. Recombining a different number
+		// of thresholds would change the Cartesian keys and detach packs from
+		// their regions; threshold layouts evolve through fresh samples instead.
+		for i := range child.Features {
+			if rng.Float64() < 0.5 {
+				child.Features[i].Window = right.Features[i].Window
+			}
+		}
+		for i := range child.Packs {
+			child.Packs[i].Chromosome = asChromosome(SigmoidDCAEvolvable{}.Crossover(left.Packs[i].Chromosome, right.Packs[i].Chromosome, rng))
+		}
+		return child
+	}
 	a := asChromosome(p1)
 	b := asChromosome(p2)
 	c := quant.Chromosome{}
@@ -151,6 +221,9 @@ func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
 }
 
 func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
+	if region, ok := isMarketRegionGene(g); ok {
+		return marketRegionFingerprint(region)
+	}
 	c := asChromosome(g)
 	h := fnv.New64a()
 	writeQuantized(h, c.MicroReservePct)
@@ -175,7 +248,29 @@ func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
 }
 
 func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
+	if region, ok := isMarketRegionGene(g); ok {
+		for i := range region.Features {
+			if region.Features[i].Window < 2 {
+				region.Features[i].Window = 2
+			}
+			if options.MarketRegionMaxWindow >= 2 && region.Features[i].Window > options.MarketRegionMaxWindow {
+				region.Features[i].Window = options.MarketRegionMaxWindow
+			}
+			if options.MarketRegionMaxThresholds >= 0 && len(region.Features[i].Thresholds) > options.MarketRegionMaxThresholds {
+				region.Features[i].Thresholds = region.Features[i].Thresholds[:options.MarketRegionMaxThresholds]
+			}
+		}
+		normalized, err := normalizeMarketRegionGene(region, options)
+		if err != nil {
+			return region
+		}
+		return normalized
+	}
 	c := asChromosome(g)
+	return normalizeChromosome(c, options)
+}
+
+func normalizeChromosome(c quant.Chromosome, options GeneOptions) quant.Chromosome {
 	options = NormalizeGeneOptions(options)
 	if !options.EvolveRebalanceThreshold {
 		c.RebalanceThreshold = 0
@@ -258,15 +353,19 @@ func applyFixedChromosomeFields(c quant.Chromosome, base quant.Chromosome, keys 
 }
 
 func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan EvaluablePlan) (FitnessResult, error) {
-	c := e.NormalizeGene(g, plan.GeneOptions).(quant.Chromosome)
-	if err := quant.ValidateChromosome(c); err != nil {
-		trace(plan, TraceModeDetailed, "strategy", "individual.evaluate.invalid_gene", "invalid chromosome rejected", map[string]any{
-			"generation": plan.Generation,
-			"individual": plan.Individual,
-			"worker":     plan.Worker,
-			"error":      err.Error(),
-		})
-		return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
+	normalized := e.NormalizeGene(g, plan.GeneOptions)
+	region, regionMode := isMarketRegionGene(normalized)
+	if !regionMode {
+		c := normalized.(quant.Chromosome)
+		if err := quant.ValidateChromosome(c); err != nil {
+			trace(plan, TraceModeDetailed, "strategy", "individual.evaluate.invalid_gene", "invalid chromosome rejected", map[string]any{
+				"generation": plan.Generation,
+				"individual": plan.Individual,
+				"worker":     plan.Worker,
+				"error":      err.Error(),
+			})
+			return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
+		}
 	}
 	result := FitnessResult{}
 	for i, window := range plan.Windows {
@@ -280,6 +379,20 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			"window":     window.Label,
 			"bars":       len(window.Bars),
 		})
+		c := quant.DefaultSeedChromosome
+		var provider backtestcore.ParameterProvider
+		if regionMode {
+			var providerErr error
+			if plan.ComputeStep != nil {
+				plan.ComputeStep(marketRegionProviderUnits(region, window.Bars))
+			}
+			provider, providerErr = newMarketRegionProvider(region, window.Bars)
+			if providerErr != nil {
+				return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
+			}
+		} else {
+			c = normalized.(quant.Chromosome)
+		}
 		metrics := runSigmoidDCAPathBacktestWithTraceAndMode(window.Bars, window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
 			Trace:         plan.Trace,
 			Mode:          plan.TraceMode,
@@ -289,7 +402,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			Individual:    plan.Individual,
 			Worker:        plan.Worker,
 			Window:        window.Label,
-		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair, plan.LongTermFilter).Metrics
+		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair, plan.LongTermFilter, provider).Metrics
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown) - plan.TradePenalty*float64(metrics.TradeCount)
@@ -351,12 +464,37 @@ func (SigmoidDCAEvolvable) DecodeElite(raw []byte) Gene {
 	if len(raw) == 0 {
 		return quant.DefaultSeedChromosome
 	}
+	if pack, ok := decodeMarketRegionParamPack(raw); ok {
+		return pack.MarketRegion
+	}
+	var region MarketRegionGene
+	if json.Unmarshal(raw, &region) == nil && region.SchemaVersion == MarketRegionSchemaVersion {
+		return region
+	}
 	params := sigmoiddca.ParseParamsFromParamPack(raw)
 	return params.Chromosome
 }
 
 func (e SigmoidDCAEvolvable) EncodeResult(g Gene, spawn *quant.SpawnPoint, options GeneOptions) ([]byte, error) {
 	options = NormalizeGeneOptions(options)
+	if region, ok := isMarketRegionGene(g); ok {
+		normalized, err := normalizeMarketRegionGene(region, options)
+		if err != nil {
+			return nil, err
+		}
+		params := sigmoiddca.DefaultParams()
+		params.PositionStructure = options.PositionStructure
+		if spawn != nil {
+			params.Spawn = *spawn
+		}
+		return json.Marshal(marketRegionParamPack{
+			SchemaVersion:     MarketRegionSchemaVersion,
+			Chromosome:        params.Chromosome,
+			Spawn:             params.Spawn,
+			PositionStructure: params.PositionStructure,
+			MarketRegion:      normalized,
+		})
+	}
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome = e.NormalizeGene(g, options).(quant.Chromosome)
 	if err := quant.ValidateChromosome(params.Chromosome); err != nil {
@@ -435,7 +573,7 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 	return runSigmoidDCAPathBacktestWithTraceAndMode(bars, evalStartMs, interval, executionMode, chromosome, spawn, traceCfg, quant.ExecutionCostConfig{}, sigmoiddca.PositionStructureDualLayer, "BTCUSDT", backtestcore.LongTermFilterConfig{})
 }
 
-func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string, symbol string, longTermFilter backtestcore.LongTermFilterConfig) SigmoidDCAPathResult {
+func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string, symbol string, longTermFilter backtestcore.LongTermFilterConfig, provider ...backtestcore.ParameterProvider) SigmoidDCAPathResult {
 	executionMode = normalizeBacktestExecutionMode(executionMode)
 	if len(bars) == 0 || bars[0].Close <= 0 || executionMode == executionModePreclose10m {
 		return SigmoidDCAPathResult{}
@@ -472,6 +610,10 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			})
 		}
 	}
+	var parameterProvider backtestcore.ParameterProvider
+	if len(provider) > 0 {
+		parameterProvider = provider[0]
+	}
 	result, err := backtestcore.RunSigmoidDCA(backtestcore.SigmoidDCARequest{
 		Spec: backtestcore.Spec{
 			Symbol:               symbol,
@@ -488,9 +630,10 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 			Costs:                costs,
 			LongTermFilter:       longTermFilter,
 		},
-		Bars:   bars,
-		Params: params,
-		Hooks:  hooks,
+		Bars:              bars,
+		Params:            params,
+		ParameterProvider: parameterProvider,
+		Hooks:             hooks,
 	})
 	if err != nil {
 		return SigmoidDCAPathResult{}

@@ -86,6 +86,8 @@ type CreateTaskRequest struct {
 	StandardEndMs             int64             `json:"standard_end_ms"`
 	SeedGeneID                uint              `json:"seed_gene_id"`
 	FixedParamKeys            []string          `json:"fixed_param_keys"`
+	MarketRegionEnabled       bool              `json:"market_region_enabled"`
+	MarketRegionMaxThresholds int               `json:"market_region_max_thresholds"`
 	seedParamPack             []byte
 	fixedGene                 *quant.Chromosome
 }
@@ -114,7 +116,7 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Service{
+	service := &Service{
 		db:          db,
 		engine:      engine,
 		instruments: marketdata.NewInstrumentStore(db),
@@ -124,6 +126,24 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 		traceModes:  map[uint]ga.TraceMode{},
 		computes:    map[uint]*computeMonitor{},
 	}
+	if err := service.recoverInterruptedTasks(); err != nil {
+		logger.Warn("failed to recover interrupted evolution tasks", zap.Error(err))
+	}
+	return service
+}
+
+// Evolution work and trace buffers are in memory. After a SaaS restart a row
+// still marked running has no executing goroutine behind it, so leaving it
+// running makes the lab permanently show zero progress and blocks new tasks.
+func (s *Service) recoverInterruptedTasks() error {
+	now := time.Now().UTC()
+	return s.db.Model(&saasstore.EvolutionTask{}).
+		Where("status = ?", TaskStatusRunning).
+		Updates(map[string]any{
+			"status":        TaskStatusFailed,
+			"error_message": "服務重啟，原本執行中的演化任務已中斷；請重新建立任務。",
+			"finished_at":   now,
+		}).Error
 }
 
 func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (*saasstore.EvolutionTask, error) {
@@ -1029,6 +1049,9 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 }
 
 func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) error {
+	if req.MarketRegionEnabled && req.MarketRegionMaxThresholds < 0 {
+		return errors.New("market_region_max_thresholds must not be negative")
+	}
 	if req.ResearchDatasetID > 0 {
 		dataset, err := s.loadResearchDataset(ctx, req.ResearchDatasetID)
 		if err != nil {
@@ -1230,6 +1253,8 @@ func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
 		EnableWBreakout:           boolValue(req.EnableWBreakout),
 		PositionStructure:         normalizedPositionStructure(req.PositionStructure),
 		FixedParamKeys:            req.FixedParamKeys,
+		MarketRegionEnabled:       req.MarketRegionEnabled,
+		MarketRegionMaxThresholds: req.MarketRegionMaxThresholds,
 		FixedGene:                 req.fixedGene,
 	}
 }
