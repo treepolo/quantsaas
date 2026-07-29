@@ -62,6 +62,24 @@ func TestMicroWedgeForcesMinimumOrder(t *testing.T) {
 	}
 }
 
+func TestMicroDisabledDustFilterUsesTheoreticalOrder(t *testing.T) {
+	input := baseMicroInput(0.01)
+	input.TotalEquity = 100
+	input.SpendableUSDT = 100
+	input.DisableDustFilter = true
+	input.DustUSD = 25
+	input.WedgeDeltaThreshold = 0.15
+	input.WedgeVolRatioThreshold = 2.5
+
+	out := ComputeMicroDecisionV4(input)
+	if out.TheoreticalUSD == 0 {
+		t.Fatal("test setup expected a non-zero theoretical order")
+	}
+	if out.OrderUSDT != RoundToUSDT(out.TheoreticalUSD) {
+		t.Fatalf("order = %.8f, want theoretical %.8f", out.OrderUSDT, RoundToUSDT(out.TheoreticalUSD))
+	}
+}
+
 func baseMicroInput(signal float64) MicroDecisionInput {
 	return MicroDecisionInput{
 		Price:                  100,

@@ -117,7 +117,7 @@ func TestForceTargetThresholdsOnlyAffectPracticalPath(t *testing.T) {
 	}
 }
 
-func TestPracticalTargetDoesNotAdoptUnexecutableForcedTarget(t *testing.T) {
+func TestZeroCostFloatingModeDoesNotSuppressForcedTargetAsDust(t *testing.T) {
 	params := sigmoiddca.DefaultParams()
 	params.Spawn.Policy.InitialUSDT = 10
 	params.Spawn.Policy.MonthlyInjectUSDT = 0
@@ -146,8 +146,8 @@ func TestPracticalTargetDoesNotAdoptUnexecutableForcedTarget(t *testing.T) {
 	if math.Abs(first.ModelTargetWeight-(1/(1+math.Exp(-0.5)))) > 1e-12 {
 		t.Fatalf("model target weight = %.12f, want raw baseline target", first.ModelTargetWeight)
 	}
-	if math.Abs(first.PracticalTargetWeight) > 1e-12 {
-		t.Fatalf("practical target weight = %.12f, want actual cash position when order is below dust", first.PracticalTargetWeight)
+	if math.Abs(first.PracticalTargetWeight-1) > 1e-12 {
+		t.Fatalf("practical target weight = %.12f, want forced target when minimum-trade filtering is disabled", first.PracticalTargetWeight)
 	}
 }
 

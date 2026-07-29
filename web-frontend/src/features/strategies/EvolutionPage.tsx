@@ -1,9 +1,9 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, CheckCircle2, FlaskConical, Save, Square, TerminalSquare, Trash2, X } from "lucide-react";
 import { formatMoney, formatPercent, relativeTime, shortDateTime } from "../../shared/lib/format";
-import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type TraceMode } from "../../shared/services/evolution";
+import { evolutionApi, type CreateTaskInput, type EvolutionTask, type GeneObservation, type GeneObservationAxis, type GeneObservationQuery, type GenomeRecord, type MultiMarketSelection, type ParameterGridAxis, type TraceMode } from "../../shared/services/evolution";
 import { marketDataApi } from "../../shared/services/marketData";
 import { researchDataApi } from "../../shared/services/researchData";
 import { Button } from "../../shared/ui/Button";
@@ -27,6 +27,29 @@ const traceModeOptions: Array<[TraceMode, string, string]> = [
 ];
 
 const SEARCH_INITIAL_CAPITAL = 1_000_000;
+const SEARCH_SETTINGS_STORAGE_KEY = "quantsaas.evolution-search-settings.v2";
+
+type SavedSearchSettings = {
+  version: 2;
+  input: Partial<CreateTaskInput>;
+  researchDatasetId?: string;
+  seedGenomeId?: string;
+  fixedParamKeys?: string[];
+  showGridCoverage?: boolean;
+};
+
+function loadSavedSearchSettings(): SavedSearchSettings | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(SEARCH_SETTINGS_STORAGE_KEY) ?? "null");
+    if (!parsed || typeof parsed !== "object") return null;
+    const value = parsed as Partial<SavedSearchSettings>;
+    if (value.version !== 2 || !value.input || typeof value.input !== "object") return null;
+    return value as SavedSearchSettings;
+  } catch {
+    return null;
+  }
+}
 const coreParamOptions = [
   ["micro_reserve_pct", "微觀保留比例"],
   ["beta", "Beta"],
@@ -54,11 +77,15 @@ function dateInputValue(date: Date) {
 }
 
 function dayStartMs(value: string) {
-  return new Date(`${value}T00:00:00.000Z`).getTime();
+  if (!value) return undefined;
+  const parsed = new Date(`${value}T00:00:00.000Z`).getTime();
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function dayEndMs(value: string) {
-  return new Date(`${value}T23:59:59.999Z`).getTime();
+  if (!value) return undefined;
+  const parsed = new Date(`${value}T23:59:59.999Z`).getTime();
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function msToDateInput(value?: number) {
@@ -236,13 +263,30 @@ function CurrentBestCard({ task }: { task: EvolutionTask }) {
       </CardHeader>
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Metric label="最佳評分" value={(task.best_score ?? 0).toFixed(4)} />
-          <Metric label="最大回撤" value={formatPercent(task.max_drawdown ?? 0)} danger />
+          <Metric label="最佳評分" value={task.best_valid && task.best_score !== null && task.best_score !== undefined ? task.best_score.toFixed(4) : "尚無有效結果"} />
+          <Metric label="最大回撤" value={task.best_valid && task.max_drawdown !== null && task.max_drawdown !== undefined ? formatPercent(task.max_drawdown) : "尚無有效結果"} danger />
           {Object.entries(task.window_score ?? {}).map(([key, value]) => <Metric key={key} label={key} value={value.toFixed(4)} />)}
         </div>
+        {(task.market_performance?.length ?? 0) > 0 ? <MarketPerformanceGrid markets={task.market_performance ?? []} /> : null}
         <JsonPreview value={task.best_param_pack} />
       </div>
     </Card>
+  );
+}
+
+function MarketPerformanceGrid({ markets }: { markets: NonNullable<EvolutionTask["market_performance"]> }) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {markets.map((market) => (
+        <div key={`${market.instrument_id}-${market.pair}`} className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3 text-sm">
+          <div className="mb-2 font-semibold text-slate-200">{market.pair || market.instrument_id}</div>
+          <div className="text-slate-400">總報酬 <span className="float-right font-mono text-slate-200">{formatPercent(market.total_return)}</span></div>
+          <div className="text-slate-400">年化報酬 <span className="float-right font-mono text-slate-200">{market.annualized_return === null || market.annualized_return === undefined ? "無法定義" : formatPercent(market.annualized_return)}</span></div>
+          <div className="text-slate-400">最大回撤 <span className="float-right font-mono text-[#fecaca]">{formatPercent(market.max_drawdown)}</span></div>
+          {market.failure_reason ? <div className="mt-2 text-xs text-[#fecaca]">{market.failure_reason}</div> : null}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -251,6 +295,59 @@ function Metric({ label, value, danger = false }: { label: string; value: string
     <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
       <div className="text-xs text-slate-500">{label}</div>
       <div className={cn("mt-1 font-mono text-lg", danger ? "text-[#fecaca]" : "text-slate-100")}>{value}</div>
+    </div>
+  );
+}
+
+function ParameterGridCoverage({ taskID, generation }: { taskID: number; generation?: number }) {
+  const gridQuery = useQuery({
+    queryKey: ["parameter-grid", taskID, generation ?? 0],
+    queryFn: () => evolutionApi.gridCoverage(taskID),
+    enabled: taskID > 0,
+    placeholderData: (previous) => previous
+  });
+  const axes = gridQuery.data?.axes ?? [];
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <CardTitle>核心參數格點覆蓋</CardTitle>
+          <CardDescription>獨立讀取輕量彙總；演化、固定與停用欄位均會明示，且相同搜尋身分會延續累積。</CardDescription>
+        </div>
+        <div className="text-right text-xs text-slate-500">{gridQuery.isFetching ? "更新中" : "已同步"}<br />{axes.length} 個參數軸</div>
+      </CardHeader>
+      {gridQuery.isLoading ? <div className="text-sm text-slate-500">載入格點覆蓋…</div> : null}
+      {!gridQuery.isLoading && axes.length === 0 ? <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-4 text-sm text-slate-500">候選點保留後才會出現覆蓋資料。</div> : null}
+      {axes.length > 0 ? <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{axes.map((axis) => <GridAxisChart key={axis.key} axis={axis} />)}</div> : null}
+    </Card>
+  );
+}
+
+function GridAxisChart({ axis }: { axis: ParameterGridAxis }) {
+  const width = 360;
+  const height = 92;
+  const padding = 22;
+  const range = Math.max(0.000001, axis.maximum - axis.minimum);
+  const pointX = (value: number) => padding + ((value - axis.minimum) / range) * (width - padding * 2);
+  const maxCount = Math.max(1, ...axis.points.map((point) => point.count));
+  const stateLabel = axis.state === "evolving" ? "演化中" : axis.state === "fixed" ? "固定" : "停用";
+  return (
+    <div className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="truncate text-sm font-medium text-slate-200">{axis.label || labelForCoreParam(axis.key)}</div>
+        <div className={cn("text-xs", axis.state === "evolving" ? "text-[#99f6e4]" : "text-slate-500")}>{stateLabel}</div>
+      </div>
+      <div className="mb-1 font-mono text-xs text-slate-500">{axis.points.length} / {axis.grid_size} 格 · {axis.total_count.toLocaleString("zh-TW")} 次</div>
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-24 w-full" role="img" aria-label={`${axis.label} 已走過格點`}>
+        <line x1={padding} x2={width - padding} y1={height / 2} y2={height / 2} stroke="rgba(148,163,184,0.28)" strokeWidth="2" />
+        {axis.points.map((point) => {
+          const radius = 5 + Math.min(5, Math.log2(point.count + 1));
+          const opacity = 0.45 + 0.55 * Math.min(1, point.count / maxCount);
+          return <g key={point.value}><title>{`${point.value} · ${point.count.toLocaleString("zh-TW")} 次`}</title><circle cx={pointX(point.value)} cy={height / 2} r={radius} fill="rgb(45,212,191)" opacity={opacity} /></g>;
+        })}
+        <text x={padding} y={height - 8} fontSize="10" fill="rgb(148,163,184)">{axis.minimum}</text>
+        <text x={width - padding} y={height - 8} textAnchor="end" fontSize="10" fill="rgb(148,163,184)">{axis.maximum}</text>
+      </svg>
     </div>
   );
 }
@@ -314,48 +411,58 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const instruments = instrumentsQuery.data?.instruments ?? [];
   const researchDatasets = researchDatasetsQuery.data?.datasets ?? [];
   const genomes = genomesQuery.data ?? [];
+  const savedSearchSettings = useMemo(loadSavedSearchSettings, []);
+  const savedInput = savedSearchSettings?.input;
+  const preserveRestoredDatesRef = useRef(Boolean(savedInput?.train_start_ms || savedInput?.train_end_ms));
   const [expanded, setExpanded] = useState(false);
   const [showLandscape, setShowLandscape] = useState(false);
-  const [researchDatasetId, setResearchDatasetId] = useState("");
-  const [instrumentId, setInstrumentId] = useState("BTCUSDT");
+  const [showGridCoverage, setShowGridCoverage] = useState(() => savedSearchSettings?.showGridCoverage ?? true);
+  const [researchDatasetId, setResearchDatasetId] = useState(() => savedSearchSettings?.researchDatasetId ?? (savedInput?.research_dataset_id ? String(savedInput.research_dataset_id) : ""));
+  const [instrumentId, setInstrumentId] = useState(() => savedInput?.instrument_id ?? "BTCUSDT");
   const selected = instruments.find((item) => item.id === instrumentId);
-  const [interval, setInterval] = useState("1d");
-  const [executionMode, setExecutionMode] = useState("close_next_open");
-  const [startDate, setStartDate] = useState(dateInputValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
-  const [endDate, setEndDate] = useState(dateInputValue(new Date()));
-  const [population, setPopulation] = useState(300);
-  const [generations, setGenerations] = useState(25);
-  const [monthlyDCA, setMonthlyDCA] = useState(0);
-  const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(true);
-  const [evolveForceFullThreshold, setEvolveForceFullThreshold] = useState(true);
-  const [evolveForceEmptyThreshold, setEvolveForceEmptyThreshold] = useState(true);
-  const [evolveGamma, setEvolveGamma] = useState(true);
-  const [enableWMean, setEnableWMean] = useState(true);
-  const [enableWMomentum, setEnableWMomentum] = useState(true);
-  const [enableWBreakout, setEnableWBreakout] = useState(true);
-  const [positionStructure, setPositionStructure] = useState<"dual_layer" | "floating_only">("floating_only");
-  const [tradePenalty, setTradePenalty] = useState(0);
-  const [feeRate, setFeeRate] = useState(0);
-  const [spreadRate, setSpreadRate] = useState(0);
-  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(false);
-  const [longTermFilterMonths, setLongTermFilterMonths] = useState(10);
-  const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">("inherit");
-  const [traceMode, setTraceMode] = useState<TraceMode>("off");
-  const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(false);
-  const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">("");
-  const [continuousIterations, setContinuousIterations] = useState(3);
-  const [continuousUnlimited, setContinuousUnlimited] = useState(false);
-  const [standardStartDate, setStandardStartDate] = useState(startDate);
-  const [standardEndDate, setStandardEndDate] = useState(endDate);
-  const [seedGenomeId, setSeedGenomeId] = useState("");
-  const [fixedParamKeys, setFixedParamKeys] = useState<string[]>([]);
+  const [interval, setInterval] = useState(() => savedInput?.interval ?? "1d");
+  const [executionMode, setExecutionMode] = useState(() => savedInput?.execution_mode ?? "close_next_open");
+  const [startDate, setStartDate] = useState(() => msToDateInput(savedInput?.train_start_ms) || dateInputValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
+  const [endDate, setEndDate] = useState(() => msToDateInput(savedInput?.train_end_ms) || dateInputValue(new Date()));
+  const [population, setPopulation] = useState(() => savedInput?.pop_size ?? 300);
+  const [generations, setGenerations] = useState(() => savedInput?.max_generations ?? 25);
+  const [monthlyDCA, setMonthlyDCA] = useState(() => savedInput?.monthly_dca ?? 0);
+  const [evolveRebalanceThreshold, setEvolveRebalanceThreshold] = useState(() => savedInput?.evolve_rebalance_threshold ?? true);
+  const [evolveForceFullThreshold, setEvolveForceFullThreshold] = useState(() => savedInput?.evolve_force_full_threshold ?? true);
+  const [evolveForceEmptyThreshold, setEvolveForceEmptyThreshold] = useState(() => savedInput?.evolve_force_empty_threshold ?? true);
+  const [evolveGamma, setEvolveGamma] = useState(() => savedInput?.evolve_gamma ?? true);
+  const [enableWMean, setEnableWMean] = useState(() => savedInput?.enable_w_mean ?? true);
+  const [enableWMomentum, setEnableWMomentum] = useState(() => savedInput?.enable_w_momentum ?? true);
+  const [enableWBreakout, setEnableWBreakout] = useState(() => savedInput?.enable_w_breakout ?? true);
+  const [positionStructure, setPositionStructure] = useState<"dual_layer" | "floating_only">(() => savedInput?.position_structure ?? "floating_only");
+  const [tradePenalty, setTradePenalty] = useState(() => savedInput?.trade_penalty ?? 0);
+  const [feeRate, setFeeRate] = useState(() => savedInput?.fee_rate ?? 0);
+  const [spreadRate, setSpreadRate] = useState(() => savedInput?.spread_rate ?? 0);
+  const [longTermFilterEnabled, setLongTermFilterEnabled] = useState(() => savedInput?.long_term_filter_enabled ?? false);
+  const [longTermFilterMonths, setLongTermFilterMonths] = useState(() => savedInput?.long_term_filter_months ?? 10);
+  const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">(() => savedInput?.spawn_mode ?? "inherit");
+  const [traceMode, setTraceMode] = useState<TraceMode>(() => savedInput?.trace_mode ?? "off");
+  const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(() => savedInput?.compute_monitor_enabled ?? false);
+  const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">(() => savedInput?.continuous_mode ?? "");
+  const [continuousIterations, setContinuousIterations] = useState(() => savedInput?.continuous_iterations ?? 3);
+  const [continuousUnlimited, setContinuousUnlimited] = useState(() => savedInput?.continuous_unlimited ?? false);
+  const [standardStartDate, setStandardStartDate] = useState(() => msToDateInput(savedInput?.standard_start_ms) || msToDateInput(savedInput?.train_start_ms) || dateInputValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
+  const [standardEndDate, setStandardEndDate] = useState(() => msToDateInput(savedInput?.standard_end_ms) || msToDateInput(savedInput?.train_end_ms) || dateInputValue(new Date()));
+  const [seedGenomeId, setSeedGenomeId] = useState(() => savedSearchSettings?.seedGenomeId ?? (savedInput?.seed_gene_id ? String(savedInput.seed_gene_id) : ""));
+  const [fixedParamKeys, setFixedParamKeys] = useState<string[]>(() => savedSearchSettings?.fixedParamKeys ?? savedInput?.fixed_param_keys ?? []);
+  const [multiMarketEnabled, setMultiMarketEnabled] = useState(() => savedInput?.multi_market_enabled ?? false);
+  const [multiMarketSelections, setMultiMarketSelections] = useState<MultiMarketSelection[]>(() => savedInput?.multi_market_selections ?? []);
+  const availableIntervals = useMemo(() => {
+    if (!multiMarketEnabled) return selected?.supported_intervals ?? ["1d"];
+    return Array.from(new Set(instruments.flatMap((item) => item.supported_intervals)));
+  }, [instruments, multiMarketEnabled, selected?.supported_intervals]);
   const selectedResearchDataset = useMemo(
     () => researchDatasets.find((item) => String(item.id) === researchDatasetId),
     [researchDatasetId, researchDatasets]
   );
   const selectedDataSource = selectedResearchDataset?.primary.data_source ?? selected?.data_source;
   const compatibleSeedGenomes = useMemo(
-    () => genomes.filter((genome) =>
+    () => multiMarketEnabled ? [] : genomes.filter((genome) =>
       genome.strategy_id === "sigmoid-dca-btc" &&
       genome.instrument_id === instrumentId &&
       genome.data_source === selectedDataSource &&
@@ -363,7 +470,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
       genome.execution_mode === executionMode &&
       ["challenger", "champion", "retired"].includes(genome.role)
     ),
-    [executionMode, genomes, instrumentId, interval, selectedDataSource]
+    [executionMode, genomes, instrumentId, interval, multiMarketEnabled, selectedDataSource]
   );
   const selectedSeedGenome = compatibleSeedGenomes.find((genome) => String(genome.id) === seedGenomeId);
   const selectedSeedValues = chromosomeValuesFromParamPack(selectedSeedGenome?.param_pack);
@@ -376,10 +483,56 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     () => marketDatasetQuery.data?.datasets.find((item) => item.interval === interval),
     [marketDatasetQuery.data, interval]
   );
+  const multiMarketStatusQueries = useQueries({
+    queries: multiMarketSelections.map((selection) => ({
+      queryKey: ["market-data", selection.instrument_id],
+      queryFn: () => marketDataApi.status(selection.instrument_id),
+      enabled: multiMarketEnabled
+    }))
+  });
+  const multiMarketDatasets = useMemo(() => {
+    const result: Record<string, { first_open_ms?: number; last_open_ms?: number }> = {};
+    multiMarketSelections.forEach((selection, index) => {
+      const status = multiMarketStatusQueries[index]?.data;
+      const dataset = status?.datasets.find((item) => item.interval === (selection.interval || interval));
+      if (dataset) result[selection.instrument_id] = dataset;
+    });
+    return result;
+  }, [interval, multiMarketSelections, multiMarketStatusQueries]);
+  const resolvedMultiMarketSelections = useMemo(() => multiMarketSelections.map((selection) => {
+    if (selection.use_all_data) {
+      return { ...selection, start_time_ms: undefined, end_time_ms: undefined };
+    }
+    const dataset = multiMarketDatasets[selection.instrument_id];
+    return {
+      ...selection,
+      start_time_ms: Number.isFinite(selection.start_time_ms) ? selection.start_time_ms : dataset?.first_open_ms,
+      end_time_ms: Number.isFinite(selection.end_time_ms) ? selection.end_time_ms : dataset?.last_open_ms
+    };
+  }), [multiMarketDatasets, multiMarketSelections]);
+  const invalidMultiMarketRanges = multiMarketEnabled && resolvedMultiMarketSelections.some((selection) =>
+    !selection.use_all_data &&
+    (!Number.isFinite(selection.start_time_ms) || !Number.isFinite(selection.end_time_ms) || Number(selection.start_time_ms) > Number(selection.end_time_ms))
+  );
+  const missingSavedInstrumentIDs = useMemo(() => {
+    if (instruments.length === 0) return [];
+    const available = new Set(instruments.map((item) => item.id));
+    const requested = new Set<string>();
+    if (instrumentId && !available.has(instrumentId)) requested.add(instrumentId);
+    multiMarketSelections.forEach((item) => {
+      if (!available.has(item.instrument_id)) requested.add(item.instrument_id);
+    });
+    return [...requested];
+  }, [instrumentId, instruments, multiMarketSelections]);
 
   useEffect(() => {
     if (selectedResearchDataset) return;
+    if (multiMarketEnabled) return;
     if (!selectedMarketDataset?.first_open_ms || !selectedMarketDataset?.last_open_ms) return;
+    if (preserveRestoredDatesRef.current) {
+      preserveRestoredDatesRef.current = false;
+      return;
+    }
     const nextStart = msToDateInput(selectedMarketDataset.first_open_ms);
     const nextEnd = msToDateInput(selectedMarketDataset.last_open_ms);
     if (!nextStart || !nextEnd) return;
@@ -387,7 +540,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     setEndDate(nextEnd);
     setStandardStartDate(nextStart);
     setStandardEndDate(nextEnd);
-  }, [instrumentId, interval, selectedMarketDataset?.first_open_ms, selectedMarketDataset?.last_open_ms, selectedResearchDataset]);
+  }, [instrumentId, interval, multiMarketEnabled, selectedMarketDataset?.first_open_ms, selectedMarketDataset?.last_open_ms, selectedResearchDataset]);
 
   useEffect(() => {
     if (!selectedResearchDataset) return;
@@ -407,19 +560,19 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     setFixedParamKeys([]);
   }, [compatibleSeedGenomes, seedGenomeId]);
   const overviewQuery = useQuery({ queryKey: ["evolution-tasks"], queryFn: () => evolutionApi.listTasks(), refetchInterval: 1_000 });
-  const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => task.status === "running");
+  const running = overviewQuery.data?.current_task ?? overviewQuery.data?.tasks.find((task) => ["pending", "running", "cancelling"].includes(task.status));
   const animatedComputedUnits = useAnimatedNumber(running?.computed_units ?? 0);
   const researchDatasetSearchBlocked = Boolean(selectedResearchDataset && !selectedResearchDataset.can_search);
   const taskInput = useMemo<CreateTaskInput>(() => ({
     strategy_id: "sigmoid-dca-btc",
-    research_dataset_id: selectedResearchDataset?.id,
+    research_dataset_id: multiMarketEnabled ? undefined : selectedResearchDataset?.id,
     pair: selectedResearchDataset?.primary.symbol ?? selected?.symbol ?? instrumentId,
     instrument_id: instrumentId,
     data_source: selectedResearchDataset?.primary.data_source ?? selected?.data_source,
     interval,
     execution_mode: executionMode,
-    train_start_ms: dayStartMs(startDate),
-    train_end_ms: dayEndMs(endDate),
+    train_start_ms: multiMarketEnabled ? undefined : dayStartMs(startDate),
+    train_end_ms: multiMarketEnabled ? undefined : dayEndMs(endDate),
     monthly_dca: monthlyDCA,
     evolve_rebalance_threshold: evolveRebalanceThreshold,
     evolve_force_full_threshold: evolveForceFullThreshold,
@@ -445,9 +598,12 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     standard_start_ms: continuousMode === "standardized_best" ? dayStartMs(standardStartDate) : undefined,
     standard_end_ms: continuousMode === "standardized_best" ? dayEndMs(standardEndDate) : undefined,
     seed_gene_id: selectedSeedGenome?.id,
-    fixed_param_keys: selectedSeedGenome ? fixedParamKeys : undefined
-  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, fixedParamKeys, generations, instrumentId, interval, longTermFilterEnabled, longTermFilterMonths, monthlyDCA, population, positionStructure, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, selectedSeedGenome, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
-  const canEstimateCompute = expanded && computeMonitorEnabled && Boolean(selected) && (enableWMean || enableWMomentum || enableWBreakout);
+    fixed_param_keys: selectedSeedGenome ? fixedParamKeys : undefined,
+    multi_market_enabled: multiMarketEnabled,
+    multi_market_selections: multiMarketEnabled ? resolvedMultiMarketSelections.map((selection) => ({ ...selection, interval: selection.interval || interval })) : undefined,
+    grid_coverage_enabled: showGridCoverage
+  }), [computeMonitorEnabled, continuousIterations, continuousMode, continuousUnlimited, enableWBreakout, enableWMean, enableWMomentum, endDate, evolveForceEmptyThreshold, evolveForceFullThreshold, evolveGamma, evolveRebalanceThreshold, executionMode, feeRate, fixedParamKeys, generations, instrumentId, interval, longTermFilterEnabled, longTermFilterMonths, monthlyDCA, multiMarketEnabled, population, positionStructure, resolvedMultiMarketSelections, selected?.data_source, selected?.symbol, selectedResearchDataset?.id, selectedResearchDataset?.primary.data_source, selectedResearchDataset?.primary.symbol, selectedSeedGenome, showGridCoverage, spawnMode, spreadRate, standardEndDate, standardStartDate, startDate, traceMode, tradePenalty]);
+  const canEstimateCompute = expanded && computeMonitorEnabled && (multiMarketEnabled ? multiMarketSelections.length >= 2 && !invalidMultiMarketRanges : Boolean(selected)) && missingSavedInstrumentIDs.length === 0 && (enableWMean || enableWMomentum || enableWBreakout);
   const computeEstimateQuery = useQuery({
     queryKey: ["evolution-compute-estimate", taskInput],
     queryFn: () => evolutionApi.estimateCompute(taskInput),
@@ -457,6 +613,15 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const createMutation = useMutation({
     mutationFn: () => evolutionApi.createTask(taskInput),
     onSuccess: () => {
+      const saved: SavedSearchSettings = {
+        version: 2,
+        input: taskInput,
+        researchDatasetId,
+        seedGenomeId,
+        fixedParamKeys,
+        showGridCoverage
+      };
+      window.localStorage.setItem(SEARCH_SETTINGS_STORAGE_KEY, JSON.stringify(saved));
       setExpanded(false);
       queryClient.invalidateQueries({ queryKey: ["evolution-tasks"] });
     }
@@ -481,6 +646,9 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     event.preventDefault();
     if (!enableWMean && !enableWMomentum && !enableWBreakout) return;
     if (researchDatasetSearchBlocked) return;
+    if (multiMarketEnabled && multiMarketSelections.length < 2) return;
+    if (invalidMultiMarketRanges) return;
+    if (missingSavedInstrumentIDs.length > 0) return;
     createMutation.mutate();
   }
 
@@ -492,7 +660,46 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   }
 
   function changeResearchDataset(nextId: string) {
+    setMultiMarketEnabled(false);
+    setMultiMarketSelections([]);
     setResearchDatasetId(nextId);
+  }
+
+  function changeInterval(nextInterval: string) {
+    setInterval(nextInterval);
+    if (multiMarketEnabled) {
+      setMultiMarketSelections((current) => current
+        .filter((selection) => instruments.find((item) => item.id === selection.instrument_id)?.supported_intervals.includes(nextInterval))
+        .map((selection) => ({ ...selection, interval: nextInterval })));
+    }
+  }
+
+  function toggleMultiMarket(enabled: boolean) {
+    setMultiMarketEnabled(enabled);
+    if (enabled) {
+      setResearchDatasetId("");
+      setSeedGenomeId("");
+      setFixedParamKeys([]);
+    }
+  }
+
+  function toggleMultiMarketInstrument(id: string, checked: boolean) {
+    setMultiMarketSelections((current) => {
+      if (!checked) return current.filter((item) => item.instrument_id !== id);
+      if (current.some((item) => item.instrument_id === id)) return current;
+      const instrument = instruments.find((item) => item.id === id);
+      return [...current, {
+        instrument_id: id,
+        pair: instrument?.symbol,
+        data_source: instrument?.data_source,
+        interval,
+        use_all_data: true
+      }];
+    });
+  }
+
+  function updateMultiMarket(id: string, updates: Partial<MultiMarketSelection>) {
+    setMultiMarketSelections((current) => current.map((item) => item.instrument_id === id ? { ...item, ...updates } : item));
   }
 
   function changeSeedGenome(nextId: string) {
@@ -508,7 +715,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     const current = running.current_generation ?? Math.round((running.progress || 0) * (running.max_generations ?? 25));
     const max = running.max_generations ?? 25;
     const progressPct = Math.min(100, Math.round((running.progress || 0) * 100));
-    const evaluated = running.evaluated_individuals ?? current * (running.pop_size ?? 0);
+    const evaluated = running.evaluated_count ?? running.evaluated_individuals ?? 0;
     const planned = running.planned_evaluations ?? (running.pop_size ?? 0) * max;
     const plannedComputeUnits = running.planned_compute_units ?? 0;
     const computedUnits = running.computed_units ?? 0;
@@ -520,11 +727,11 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <CardHeader>
             <div>
               <CardTitle>參數搜尋運行中</CardTitle>
-              <CardDescription>{labelForInstrument(running.instrument_id, instrumentNames)} · {intervalLabels[running.interval ?? "1d"] ?? running.interval}</CardDescription>
+              <CardDescription>{running.multi_market_enabled ? `${running.multi_market_selections?.length ?? 0} 個市場共同評分` : `${labelForInstrument(running.instrument_id, instrumentNames)} · ${intervalLabels[running.interval ?? "1d"] ?? running.interval}`}</CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              <StatusBadge status="running" />
-              <Button icon={Square} variant="secondary" loading={cancelMutation.isPending} onClick={() => cancelMutation.mutate(running.id)}>中止</Button>
+              <StatusBadge status={running.status} />
+              <Button icon={Square} variant="secondary" loading={cancelMutation.isPending || running.status === "cancelling"} disabled={running.status === "cancelling"} onClick={() => cancelMutation.mutate(running.id)}>{running.status === "cancelling" ? "取消中" : "中止"}</Button>
             </div>
           </CardHeader>
           <div className="space-y-4">
@@ -533,9 +740,10 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <Metric label="任務 ID" value={`#${running.id}`} />
                 {running.continuous_mode ? <Metric label="連續輪次" value={running.continuous_unlimited ? `${running.current_iteration ?? 0} / 無上限` : `${running.current_iteration ?? 0} / ${running.continuous_iterations ?? 0}`} /> : null}
-                <Metric label="資料範圍" value={`${msToDateInput(running.train_start_ms) || "-"} ~ ${msToDateInput(running.train_end_ms) || "-"}`} />
+                <Metric label="資料範圍" value={running.multi_market_enabled ? "依各市場設定" : `${msToDateInput(running.train_start_ms) || "-"} ~ ${msToDateInput(running.train_end_ms) || "-"}`} />
                 <Metric label="進度" value={`${progressPct}%`} />
                 <Metric label="已評估" value={planned ? `${evaluated.toLocaleString("zh-TW")} / ${planned.toLocaleString("zh-TW")}` : evaluated.toLocaleString("zh-TW")} />
+                <Metric label="有效 / 跳過 / 失敗" value={`${running.valid_count ?? 0} / ${running.skipped_count ?? 0} / ${running.failed_count ?? 0}`} />
                 {running.compute_monitor_enabled ? <Metric label="計算量" value={plannedComputeUnits ? `${formatUnits(animatedComputedUnits)} / ${formatUnits(plannedComputeUnits)}` : formatUnits(animatedComputedUnits)} /> : null}
                 {running.compute_monitor_enabled ? <Metric label="計算速度" value={formatUnitRate(running.compute_units_per_sec)} /> : null}
                 {running.compute_monitor_enabled ? <Metric label="預估剩餘" value={formatDurationSeconds(running.compute_remaining_sec)} /> : null}
@@ -546,9 +754,9 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 <Metric label="長週期風險濾網" value={running.long_term_filter_enabled ? `${running.long_term_filter_months ?? 10} 月線` : "關閉"} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
                 <Metric label="價差 / 滑價率" value={running.spread_rate !== undefined ? formatPercent(running.spread_rate) : "0.00%"} />
-                <Metric label="最佳評分" value={(running.best_score ?? 0).toFixed(4)} />
+                <Metric label="最佳評分" value={running.best_valid && running.best_score !== null && running.best_score !== undefined ? running.best_score.toFixed(4) : "尚無有效結果"} />
                 {running.standard_champion_gene_id ? <Metric label="標準化冠軍" value={`#${running.standard_champion_gene_id} / ${(running.standard_champion_score ?? 0).toFixed(4)}`} /> : null}
-                <Metric label="最大回撤" value={running.max_drawdown !== undefined ? formatPercent(running.max_drawdown) : "等待回報"} danger />
+                <Metric label="最大回撤" value={running.best_valid && running.max_drawdown !== undefined && running.max_drawdown !== null ? formatPercent(running.max_drawdown) : "尚無有效結果"} danger />
                 <Metric label="變異機率" value={running.mutation_probability !== undefined ? formatPercent(running.mutation_probability) : "等待回報"} />
                 <Metric label="最後更新" value={monitorValue(running.monitor_updated_at ? shortDateTime(running.monitor_updated_at) : undefined).toString()} />
               </div>
@@ -580,6 +788,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
         </Card>
         <Card className="p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-sm font-semibold text-slate-200">參數分佈地圖</div><div className="mt-1 text-xs text-slate-500">預設關閉；打開後才查詢紀錄並計算圖表。</div></div><Button variant="secondary" onClick={() => setShowLandscape((value) => !value)}>{showLandscape ? "關閉地圖" : "顯示地圖"}</Button></div></Card>
         {showLandscape ? <ParameterLandscape query={runningLandscapeQuery} live /> : null}
+        {running.grid_coverage_enabled ? <ParameterGridCoverage taskID={running.id} generation={running.current_generation} /> : null}
         <CurrentBestCard task={running} />
         <TraceConsole task={running} />
       </div>
@@ -597,7 +806,53 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
       </CardHeader>
       {expanded ? (
         <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
-          <Select
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <label className="flex items-start gap-3 text-sm text-slate-300">
+              <input className="mt-1" type="checkbox" checked={multiMarketEnabled} onChange={(event) => toggleMultiMarket(event.target.checked)} />
+              <span><span className="block font-semibold">多市場共同評分</span><span className="mt-1 block text-xs text-slate-500">明確啟用後至少選兩個市場；所有市場共用同一候選參數，分數為各市場總報酬對數之和。上方單市場選擇不參與評分。</span></span>
+            </label>
+            {multiMarketEnabled ? <div className="mt-3 grid gap-2 md:grid-cols-3">
+              {instruments.filter((item) => item.supported_intervals.includes(interval)).map((item) => (
+                <label key={item.id} className="flex items-center gap-2 rounded border border-white/[0.04] bg-slate-950/40 px-3 py-2 text-sm text-slate-300">
+                  <input type="checkbox" checked={multiMarketSelections.some((selection) => selection.instrument_id === item.id)} onChange={(event) => toggleMultiMarketInstrument(item.id, event.target.checked)} />
+                  {item.display_name}
+                </label>
+              ))}
+            </div> : null}
+            {multiMarketEnabled && multiMarketSelections.length > 0 ? <div className="mt-4 space-y-3">
+              {multiMarketSelections.map((selection) => {
+                const instrument = instruments.find((item) => item.id === selection.instrument_id);
+                const dataset = multiMarketDatasets[selection.instrument_id];
+                const first = dataset?.first_open_ms;
+                const last = dataset?.last_open_ms;
+                return (
+                  <div key={selection.instrument_id} className="rounded-lg border border-white/[0.04] bg-slate-950/40 p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <span className="text-sm font-medium text-slate-200">{instrument?.display_name ?? selection.instrument_id}</span>
+                      <label className="flex items-center gap-2 text-sm text-slate-300">
+                        <input type="checkbox" checked={selection.use_all_data} onChange={(event) => updateMultiMarket(selection.instrument_id, {
+                          use_all_data: event.target.checked,
+                          start_time_ms: event.target.checked ? undefined : selection.start_time_ms ?? first,
+                          end_time_ms: event.target.checked ? undefined : selection.end_time_ms ?? last
+                        })} />
+                        使用全部資料
+                      </label>
+                    </div>
+                    {selection.use_all_data ? <div className="mt-2 text-xs text-slate-500">{first && last ? `${msToDateInput(first)} ～ ${msToDateInput(last)}` : "讀取可用資料範圍中…"}</div> : (
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <label><span className="mb-2 block text-xs text-slate-400">開始日期</span><input className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100" type="date" value={msToDateInput(selection.start_time_ms ?? first)} onChange={(event) => updateMultiMarket(selection.instrument_id, { start_time_ms: dayStartMs(event.target.value) })} /></label>
+                        <label><span className="mb-2 block text-xs text-slate-400">結束日期</span><input className="h-10 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100" type="date" value={msToDateInput(selection.end_time_ms ?? last)} onChange={(event) => updateMultiMarket(selection.instrument_id, { end_time_ms: dayEndMs(event.target.value) })} /></label>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div> : null}
+            {multiMarketEnabled && multiMarketSelections.length < 2 ? <div className="mt-2 text-xs text-[#fecaca]">至少選擇兩個市場。</div> : null}
+            {invalidMultiMarketRanges ? <div className="mt-2 text-xs text-[#fecaca]">自訂資料範圍尚未載入完整起訖日期，或開始日晚於結束日。</div> : null}
+          </div>
+          {missingSavedInstrumentIDs.length > 0 ? <div className="rounded-lg border border-[#f59e0b]/25 bg-[#f59e0b]/10 p-3 text-sm text-[#fde68a] md:col-span-2">上次成功設定中的市場目前不存在：{missingSavedInstrumentIDs.join("、")}。設定仍保留，請先恢復行情或手動改選。</div> : null}
+          {!multiMarketEnabled ? <Select
             label="研究資料集"
             value={researchDatasetId}
             onChange={changeResearchDataset}
@@ -605,11 +860,11 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
               ["", "不使用資料集（既有單商品設定）"],
               ...researchDatasets.map((item) => [String(item.id), `#${item.id} · ${item.name}`])
             ]}
-          />
-          <SearchablePicker label="研究標的" value={instrumentId} onChange={changeInstrument} options={instruments.map((item) => ({ value: item.id, label: item.display_name, detail: `${item.symbol} · ${item.market ?? "研究標的"}` }))}/>
-          <Select label="資料週期" value={interval} onChange={setInterval} options={(selected?.supported_intervals ?? ["1d"]).map((item) => [item, intervalLabels[item] ?? item])} />
-          <label><span className="mb-2 block text-sm text-slate-300">開始日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
-          <label><span className="mb-2 block text-sm text-slate-300">結束日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label>
+          /> : <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm text-slate-500">多市場模式不使用研究資料集。</div>}
+          {!multiMarketEnabled ? <SearchablePicker label="研究標的" value={instrumentId} onChange={changeInstrument} options={instruments.map((item) => ({ value: item.id, label: item.display_name, detail: `${item.symbol} · ${item.market ?? "研究標的"}` }))}/> : <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-sm text-slate-500">單市場標的已忽略；請以上方勾選清單為準。</div>}
+          <Select label="資料週期" value={interval} onChange={changeInterval} options={availableIntervals.map((item) => [item, intervalLabels[item] ?? item])} />
+          {!multiMarketEnabled ? <><label><span className="mb-2 block text-sm text-slate-300">開始日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} /></label>
+          <label><span className="mb-2 block text-sm text-slate-300">結束日期</span><input className="h-11 w-full rounded-lg border border-slate-700 bg-slate-900/80 px-3 text-sm text-slate-100 outline-none focus:border-[#2dd4bf]" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} /></label></> : null}
           <Select label="執行假設" value={executionMode} onChange={setExecutionMode} options={executionModes.map(([value, label]) => [value, label])} />
           <Select label="起始方式" value={spawnMode} onChange={(value) => setSpawnMode(value as typeof spawnMode)} options={[["inherit", "繼承同標的冠軍"], ["random_once", "隨機探索"], ["manual", "手動設定"]]} />
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
@@ -671,11 +926,13 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <NumberInput label="N 月線長度" min={1} value={longTermFilterMonths} onChange={setLongTermFilterMonths} />
           {interval !== "1d" ? <div className="text-xs text-[#fde68a] md:col-span-2">長週期風險濾網以日 K 組成月收盤；非日 K 任務會自動關閉。</div> : null}
           <Select label="倉位結構" value={positionStructure} onChange={(value) => setPositionStructure(value as "dual_layer" | "floating_only")} options={[["floating_only", "純浮動模型"], ["dual_layer", "雙層模型"]]} />
+          {positionStructure === "floating_only" ? <div className="rounded-lg border border-[#2dd4bf]/20 bg-[#2dd4bf]/[0.06] p-3 text-xs leading-5 text-[#99f6e4]">純浮動模型會真正停用資金保留、調倉門檻、最小交易金額、楔形判斷、趨勢倍率、額外投入與釋放欄位；這些欄位不會參與候選身分。</div> : null}
+          {feeRate === 0 && spreadRate === 0 ? <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 text-xs leading-5 text-slate-500">手續費與價差皆為零，最小交易金額邏輯及其候選身分已停用。</div> : null}
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
             <div className="mb-2 text-sm font-semibold text-slate-300">門檻演化</div>
             <div className="grid gap-2 md:grid-cols-3">
               <label className="flex items-center gap-3 text-sm text-slate-300">
-                <input type="checkbox" checked={evolveRebalanceThreshold} onChange={(event) => setEvolveRebalanceThreshold(event.target.checked)} />
+                <input type="checkbox" checked={positionStructure !== "floating_only" && evolveRebalanceThreshold} disabled={positionStructure === "floating_only"} onChange={(event) => setEvolveRebalanceThreshold(event.target.checked)} />
                 演化調倉門檻
               </label>
               <label className="flex items-center gap-3 text-sm text-slate-300">
@@ -756,10 +1013,16 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             {!enableWMean && !enableWMomentum && !enableWBreakout ? <div className="mt-2 text-xs text-[#fecaca]">至少要啟用一個市場訊號。</div> : null}
           </div>
           <NumberInput label="每次交易懲罰" min={0} max={1} step={0.0001} value={tradePenalty} onChange={setTradePenalty} />
+          <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
+            <label className="flex items-start gap-3 text-sm text-slate-300">
+              <input className="mt-1" type="checkbox" checked={showGridCoverage} onChange={(event) => setShowGridCoverage(event.target.checked)} />
+              <span><span className="block font-semibold">記錄核心參數格點覆蓋</span><span className="mt-1 block text-xs text-slate-500">預設開啟，只寫入每軸計數彙總；與下方需要載入候選紀錄的參數分佈地圖完全獨立。</span></span>
+            </label>
+          </div>
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-sm font-semibold text-slate-300">參數分佈地圖</div><div className="mt-1 text-xs text-slate-500">預設關閉；打開後才查詢紀錄並計算圖表。</div></div><Button type="button" variant="secondary" onClick={() => setShowLandscape((value) => !value)}>{showLandscape ? "關閉地圖" : "顯示地圖"}</Button></div></div>
           {showLandscape ? <ParameterLandscape query={landscapeQuery} /> : null}
           <div className="md:col-span-2">
-            <Button type="submit" loading={createMutation.isPending} disabled={researchDatasetSearchBlocked || (!enableWMean && !enableWMomentum && !enableWBreakout)}>開始搜尋</Button>
+            <Button type="submit" loading={createMutation.isPending} disabled={researchDatasetSearchBlocked || missingSavedInstrumentIDs.length > 0 || (multiMarketEnabled && multiMarketSelections.length < 2) || invalidMultiMarketRanges || (!enableWMean && !enableWMomentum && !enableWBreakout)}>開始搜尋</Button>
             {createMutation.error ? <div className="mt-2 text-sm text-[#fecaca]">{String(createMutation.error.message)}</div> : null}
           </div>
         </form>
@@ -814,7 +1077,7 @@ function TaskQueueView({ instrumentNames }: { instrumentNames: Record<string, st
                 <div className="mt-1 text-xs text-slate-500">{relativeTime(task.created_at)} · {intervalLabels[task.interval ?? "1d"] ?? task.interval}</div>
               </div>
               <StatusBadge status={task.status} />
-              <div className="text-right font-mono text-sm text-slate-300">{(task.best_score ?? 0).toFixed(3)}</div>
+              <div className="text-right font-mono text-sm text-slate-300">{task.best_valid && task.best_score !== null && task.best_score !== undefined ? task.best_score.toFixed(3) : "尚無有效結果"}</div>
             </div>
             {task.error ? <div className="mt-2 text-xs text-[#fecaca]">{task.error}</div> : null}
           </div>
@@ -993,7 +1256,7 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
       <div className="grid gap-4 lg:grid-cols-2">
         {filteredGenomes.map((genome) => {
           const isChampion = genome.role === "champion";
-          const canPromote = genome.role === "candidate" || genome.role === "challenger" || genome.role === "retired" || genome.role === "archived";
+          const canPromote = genome.candidate_schema_version === "ga-core-grid-v1" && (genome.role === "candidate" || genome.role === "challenger" || genome.role === "retired" || genome.role === "archived");
           const searchConfig = genome.search_config ?? {};
           const isEditing = editingId === genome.id;
           return (
@@ -1027,6 +1290,7 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                   <Metric label="最大回撤" value={formatPercent(genome.max_drawdown)} danger />
                   <Metric label="資料週期" value={intervalLabels[genome.interval ?? "1d"] ?? genome.interval ?? "-"} />
                 </div>
+                {(genome.market_performance?.length ?? 0) > 0 ? <MarketPerformanceGrid markets={genome.market_performance ?? []} /> : null}
 
                 <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3">
                   <div className="mb-3 text-sm font-semibold text-slate-300">搜尋條件</div>

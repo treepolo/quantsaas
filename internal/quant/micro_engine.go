@@ -28,6 +28,7 @@ type MicroDecisionInput struct {
 	WedgeDeltaThreshold    float64
 	WedgeVolRatioThreshold float64
 	IsQuiet                bool
+	DisableDustFilter      bool
 	AISignal               AISignalVector
 	AIW1                   float64
 	AIW2                   float64
@@ -76,11 +77,6 @@ func ComputeMicroDecisionV4(input MicroDecisionInput) MicroDecisionOutput {
 		volatilityRatio = ComputeVolatilityRatio(input.Closes)
 	}
 
-	dust := input.DustUSD
-	if dust <= 0 {
-		dust = 10.1
-	}
-
 	marketBeta := input.MarketBetaMultiplier
 	if marketBeta <= 0 {
 		marketBeta = 1
@@ -99,7 +95,16 @@ func ComputeMicroDecisionV4(input MicroDecisionInput) MicroDecisionOutput {
 	theoreticalUSD := deltaWeight * input.TotalEquity
 
 	input.VolatilityRatio = volatilityRatio
-	orderUSD, forced := filterMicroOrder(theoreticalUSD, deltaWeight, input, dust)
+	orderUSD := theoreticalUSD
+	forced := false
+	dust := 0.0
+	if !input.DisableDustFilter {
+		dust = input.DustUSD
+		if dust <= 0 {
+			dust = 10.1
+		}
+		orderUSD, forced = filterMicroOrder(theoreticalUSD, deltaWeight, input, dust)
+	}
 	action := ""
 	if orderUSD > 0 {
 		action = ActionBuy
@@ -108,7 +113,7 @@ func ComputeMicroDecisionV4(input MicroDecisionInput) MicroDecisionOutput {
 		action = ActionSell
 	}
 
-	if math.Abs(orderUSD) < dust && !forced {
+	if !input.DisableDustFilter && math.Abs(orderUSD) < dust && !forced {
 		orderUSD = 0
 		action = ""
 	}

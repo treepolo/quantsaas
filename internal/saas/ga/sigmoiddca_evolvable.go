@@ -2,9 +2,8 @@ package ga
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
-	"hash/fnv"
+	"fmt"
 	"math"
 	"strings"
 
@@ -26,6 +25,7 @@ type BacktestPoint = backtestcore.NAVPoint
 type SigmoidDCAPathResult struct {
 	Metrics BacktestMetrics
 	NAV     []BacktestPoint
+	Err     error
 }
 
 func NewSigmoidDCAEvolvable() SigmoidDCAEvolvable {
@@ -77,139 +77,75 @@ func (SigmoidDCAEvolvable) StrategyID() string {
 }
 
 func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
-	forceEmptyThreshold := sampleRange(rng, "force_empty_threshold")
-	forceFullThreshold := forceEmptyThreshold + rng.Float64()*(1-forceEmptyThreshold)
-	c := quant.Chromosome{
-		MicroReservePct:        sampleRange(rng, "micro_reserve_pct"),
-		Beta:                   sampleRange(rng, "beta"),
-		Gamma:                  sampleRange(rng, "gamma"),
-		WMean:                  sampleRange(rng, "w_mean"),
-		WMomentum:              sampleRange(rng, "w_momentum"),
-		WBreakout:              sampleRange(rng, "w_breakout"),
-		DustUSD:                sampleRange(rng, "dust_usd"),
-		RebalanceThreshold:     sampleRange(rng, "rebalance_threshold"),
-		ForceFullThreshold:     forceFullThreshold,
-		ForceEmptyThreshold:    forceEmptyThreshold,
-		WedgeDeltaThreshold:    sampleRange(rng, "wedge_delta_threshold"),
-		WedgeVolRatioThreshold: sampleRange(rng, "wedge_vol_ratio_threshold"),
-		MacroBearMultiplier:    sampleRange(rng, "macro_bear_multiplier"),
-		MacroBullMultiplier:    sampleRange(rng, "macro_bull_multiplier"),
-		ExtraDeployPct:         sampleRange(rng, "extra_deploy_pct"),
-		SoftReleaseMonths:      int(sampleRange(rng, "soft_release_months")),
-		SoftReleasePct:         sampleRange(rng, "soft_release_pct"),
-		HardReleaseMaxPct:      sampleRange(rng, "hard_release_max_pct"),
-	}
-	return quant.ClampChromosome(c)
+	return sampleChromosome(rng, NormalizeGeneOptions(GeneOptions{
+		EvolveRebalanceThreshold:  true,
+		EvolveForceFullThreshold:  true,
+		EvolveForceEmptyThreshold: true,
+		EvolveGamma:               true,
+		EnableWMean:               true,
+		EnableWMomentum:           true,
+		EnableWBreakout:           true,
+		PositionStructure:         sigmoiddca.PositionStructureDualLayer,
+	}))
 }
 
 func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng RandomSource) Gene {
-	c := asChromosome(g)
-	c.MicroReservePct = mutateFloat(c.MicroReservePct, "micro_reserve_pct", prob, scale, rng)
-	c.Beta = mutateFloat(c.Beta, "beta", prob, scale, rng)
-	c.Gamma = mutateFloat(c.Gamma, "gamma", prob, scale, rng)
-	c.WMean = mutateFloat(c.WMean, "w_mean", prob, scale, rng)
-	c.WMomentum = mutateFloat(c.WMomentum, "w_momentum", prob, scale, rng)
-	c.WBreakout = mutateFloat(c.WBreakout, "w_breakout", prob, scale, rng)
-	c.DustUSD = mutateFloat(c.DustUSD, "dust_usd", prob, scale, rng)
-	c.RebalanceThreshold = mutateFloat(c.RebalanceThreshold, "rebalance_threshold", prob, scale, rng)
-	c.ForceFullThreshold = mutateFloat(c.ForceFullThreshold, "force_full_threshold", prob, scale, rng)
-	c.ForceEmptyThreshold = mutateFloat(c.ForceEmptyThreshold, "force_empty_threshold", prob, scale, rng)
-	c.WedgeDeltaThreshold = mutateFloat(c.WedgeDeltaThreshold, "wedge_delta_threshold", prob, scale, rng)
-	c.WedgeVolRatioThreshold = mutateFloat(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold", prob, scale, rng)
-	c.MacroBearMultiplier = mutateFloat(c.MacroBearMultiplier, "macro_bear_multiplier", prob, scale, rng)
-	c.MacroBullMultiplier = mutateFloat(c.MacroBullMultiplier, "macro_bull_multiplier", prob, scale, rng)
-	c.ExtraDeployPct = mutateFloat(c.ExtraDeployPct, "extra_deploy_pct", prob, scale, rng)
-	c.SoftReleaseMonths = int(math.Round(mutateFloat(float64(c.SoftReleaseMonths), "soft_release_months", prob, scale, rng)))
-	c.SoftReleasePct = mutateFloat(c.SoftReleasePct, "soft_release_pct", prob, scale, rng)
-	c.HardReleaseMaxPct = mutateFloat(c.HardReleaseMaxPct, "hard_release_max_pct", prob, scale, rng)
-	return quant.ClampChromosome(c)
+	return mutateChromosome(asChromosome(g), prob, scale, rng, NormalizeGeneOptions(GeneOptions{
+		EvolveRebalanceThreshold:  true,
+		EvolveForceFullThreshold:  true,
+		EvolveForceEmptyThreshold: true,
+		EvolveGamma:               true,
+		EnableWMean:               true,
+		EnableWMomentum:           true,
+		EnableWBreakout:           true,
+		PositionStructure:         sigmoiddca.PositionStructureDualLayer,
+	}))
 }
 
 func (SigmoidDCAEvolvable) Crossover(p1 Gene, p2 Gene, rng RandomSource) Gene {
-	a := asChromosome(p1)
-	b := asChromosome(p2)
-	c := quant.Chromosome{}
-	c.MicroReservePct = pick(rng, a.MicroReservePct, b.MicroReservePct)
-	c.Beta = pick(rng, a.Beta, b.Beta)
-	c.Gamma = pick(rng, a.Gamma, b.Gamma)
-	c.WMean = pick(rng, a.WMean, b.WMean)
-	c.WMomentum = pick(rng, a.WMomentum, b.WMomentum)
-	c.WBreakout = pick(rng, a.WBreakout, b.WBreakout)
-	c.DustUSD = pick(rng, a.DustUSD, b.DustUSD)
-	c.RebalanceThreshold = pick(rng, a.RebalanceThreshold, b.RebalanceThreshold)
-	c.ForceFullThreshold = pick(rng, a.ForceFullThreshold, b.ForceFullThreshold)
-	c.ForceEmptyThreshold = pick(rng, a.ForceEmptyThreshold, b.ForceEmptyThreshold)
-	c.WedgeDeltaThreshold = pick(rng, a.WedgeDeltaThreshold, b.WedgeDeltaThreshold)
-	c.WedgeVolRatioThreshold = pick(rng, a.WedgeVolRatioThreshold, b.WedgeVolRatioThreshold)
-	c.MacroBearMultiplier = pick(rng, a.MacroBearMultiplier, b.MacroBearMultiplier)
-	c.MacroBullMultiplier = pick(rng, a.MacroBullMultiplier, b.MacroBullMultiplier)
-	c.ExtraDeployPct = pick(rng, a.ExtraDeployPct, b.ExtraDeployPct)
-	c.SoftReleaseMonths = int(pick(rng, float64(a.SoftReleaseMonths), float64(b.SoftReleaseMonths)))
-	c.SoftReleasePct = pick(rng, a.SoftReleasePct, b.SoftReleasePct)
-	c.HardReleaseMaxPct = pick(rng, a.HardReleaseMaxPct, b.HardReleaseMaxPct)
-	return quant.ClampChromosome(c)
+	return crossoverChromosome(asChromosome(p1), asChromosome(p2), rng, NormalizeGeneOptions(GeneOptions{
+		EvolveRebalanceThreshold:  true,
+		EvolveForceFullThreshold:  true,
+		EvolveForceEmptyThreshold: true,
+		EvolveGamma:               true,
+		EnableWMean:               true,
+		EnableWMomentum:           true,
+		EnableWBreakout:           true,
+		PositionStructure:         sigmoiddca.PositionStructureDualLayer,
+	}))
 }
 
 func (SigmoidDCAEvolvable) Fingerprint(g Gene) uint64 {
-	c := asChromosome(g)
-	h := fnv.New64a()
-	writeQuantized(h, c.MicroReservePct)
-	writeQuantized(h, c.Beta)
-	writeQuantized(h, c.Gamma)
-	writeQuantized(h, c.WMean)
-	writeQuantized(h, c.WMomentum)
-	writeQuantized(h, c.WBreakout)
-	writeQuantized(h, c.DustUSD)
-	writeQuantized(h, c.RebalanceThreshold)
-	writeQuantized(h, c.ForceFullThreshold)
-	writeQuantized(h, c.ForceEmptyThreshold)
-	writeQuantized(h, c.WedgeDeltaThreshold)
-	writeQuantized(h, c.WedgeVolRatioThreshold)
-	writeQuantized(h, c.MacroBearMultiplier)
-	writeQuantized(h, c.MacroBullMultiplier)
-	writeQuantized(h, c.ExtraDeployPct)
-	writeQuantized(h, float64(c.SoftReleaseMonths))
-	writeQuantized(h, c.SoftReleasePct)
-	writeQuantized(h, c.HardReleaseMaxPct)
-	return h.Sum64()
+	return fingerprintChromosome(asChromosome(g), NormalizeGeneOptions(GeneOptions{
+		EvolveRebalanceThreshold:  true,
+		EvolveForceFullThreshold:  true,
+		EvolveForceEmptyThreshold: true,
+		EvolveGamma:               true,
+		EnableWMean:               true,
+		EnableWMomentum:           true,
+		EnableWBreakout:           true,
+		PositionStructure:         sigmoiddca.PositionStructureDualLayer,
+	}))
+}
+
+func (SigmoidDCAEvolvable) SampleWithOptions(rng RandomSource, options GeneOptions) Gene {
+	return sampleChromosome(rng, options)
+}
+
+func (SigmoidDCAEvolvable) MutateWithOptions(g Gene, prob float64, scale float64, rng RandomSource, options GeneOptions) Gene {
+	return mutateChromosome(asChromosome(g), prob, scale, rng, options)
+}
+
+func (SigmoidDCAEvolvable) CrossoverWithOptions(p1 Gene, p2 Gene, rng RandomSource, options GeneOptions) Gene {
+	return crossoverChromosome(asChromosome(p1), asChromosome(p2), rng, options)
+}
+
+func (SigmoidDCAEvolvable) FingerprintWithOptions(g Gene, options GeneOptions) uint64 {
+	return fingerprintChromosome(asChromosome(g), options)
 }
 
 func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
-	c := asChromosome(g)
-	options = NormalizeGeneOptions(options)
-	if !options.EvolveRebalanceThreshold {
-		c.RebalanceThreshold = 0
-	}
-	if !options.EvolveForceFullThreshold {
-		c.ForceFullThreshold = 1
-	}
-	if !options.EvolveForceEmptyThreshold {
-		c.ForceEmptyThreshold = 0
-	}
-	if !options.EvolveGamma {
-		c.Gamma = 0
-	}
-	if !options.EnableWMean {
-		c.WMean = 0
-	}
-	if !options.EnableWMomentum {
-		c.WMomentum = 0
-	}
-	if !options.EnableWBreakout {
-		c.WBreakout = 0
-	}
-	if options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
-		c.MacroBearMultiplier = 1
-		c.MacroBullMultiplier = 1
-		c.ExtraDeployPct = 0
-		c.SoftReleaseMonths = int(quant.HardBounds["soft_release_months"].Max)
-		c.SoftReleasePct = 0
-		c.HardReleaseMaxPct = 0
-	}
-	if options.FixedGene != nil && len(options.FixedParamKeys) > 0 {
-		c = applyFixedChromosomeFields(c, *options.FixedGene, options.FixedParamKeys)
-	}
-	return quant.ClampChromosome(c)
+	return normalizeChromosomeForOptions(asChromosome(g), options)
 }
 
 func applyFixedChromosomeFields(c quant.Chromosome, base quant.Chromosome, keys []string) quant.Chromosome {
@@ -268,6 +204,9 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 		})
 		return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
 	}
+	if len(plan.MultiMarkets) > 0 {
+		return e.evaluateMultiMarket(ctx, c, plan)
+	}
 	result := FitnessResult{}
 	for i, window := range plan.Windows {
 		if err := ctx.Err(); err != nil {
@@ -280,7 +219,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			"window":     window.Label,
 			"bars":       len(window.Bars),
 		})
-		metrics := runSigmoidDCAPathBacktestWithTraceAndMode(window.Bars, window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
+		path := runSigmoidDCAPathBacktestWithTraceAndMode(window.Bars, window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
 			Trace:         plan.Trace,
 			Mode:          plan.TraceMode,
 			TraceModeFunc: plan.TraceModeFunc,
@@ -289,7 +228,11 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			Individual:    plan.Individual,
 			Worker:        plan.Worker,
 			Window:        window.Label,
-		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair, plan.LongTermFilter).Metrics
+		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair, plan.LongTermFilter)
+		if path.Err != nil {
+			return FitnessResult{}, fmt.Errorf("window %s backtest failed: %w", window.Label, path.Err)
+		}
+		metrics := path.Metrics
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown) - plan.TradePenalty*float64(metrics.TradeCount)
@@ -345,6 +288,99 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 		})
 	}
 	return result, nil
+}
+
+func (e SigmoidDCAEvolvable) evaluateMultiMarket(ctx context.Context, chromosome quant.Chromosome, plan EvaluablePlan) (FitnessResult, error) {
+	result := FitnessResult{}
+	for _, market := range plan.MultiMarkets {
+		if err := ctx.Err(); err != nil {
+			return FitnessResult{}, err
+		}
+		path := runSigmoidDCAPathBacktestWithTraceAndMode(
+			market.Window.Bars,
+			market.Window.EvalStartMs,
+			market.Interval,
+			plan.ExecutionMode,
+			chromosome,
+			plan.Spawn,
+			PathTraceConfig{
+				Trace:         plan.Trace,
+				Mode:          plan.TraceMode,
+				TraceModeFunc: plan.TraceModeFunc,
+				ComputeStep:   plan.ComputeStep,
+				Generation:    plan.Generation,
+				Individual:    plan.Individual,
+				Worker:        plan.Worker,
+				Window:        market.InstrumentID,
+			},
+			plan.Costs,
+			NormalizeGeneOptions(plan.GeneOptions).PositionStructure,
+			market.Pair,
+			plan.LongTermFilter,
+		)
+		if path.Err != nil {
+			return FitnessResult{}, fmt.Errorf("market %s backtest failed: %w", market.InstrumentID, path.Err)
+		}
+		metrics := path.Metrics
+		performance := MarketPerformance{
+			InstrumentID: market.InstrumentID,
+			Pair:         market.Pair,
+			TotalReturn:  metrics.ROI,
+			MaxDrawdown:  metrics.MaxDrawdown,
+		}
+		if metrics.MaxDrawdown > result.MaxDrawdown {
+			result.MaxDrawdown = metrics.MaxDrawdown
+		}
+		if metrics.MaxDrawdown >= 0.88 {
+			performance.FailureReason = "最大回撤觸及 88% 淘汰門檻"
+			result.Markets = append(result.Markets, performance)
+			result.Fatal = true
+			result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
+			result.ScoreTotal = FatalFitnessScore
+			return result, nil
+		}
+		if len(market.Window.Bars) < 2 {
+			return FitnessResult{}, fmt.Errorf("行情 %s 的資料不足", market.InstrumentID)
+		}
+		durationMs := market.Window.Bars[len(market.Window.Bars)-1].OpenTime - market.Window.EvalStartMs
+		years := float64(durationMs) / (365.2425 * 24 * 60 * 60 * 1000)
+		if years <= 0 {
+			return FitnessResult{}, fmt.Errorf("行情 %s 的可評估期間無效", market.InstrumentID)
+		}
+		if 1+metrics.ROI <= 0 {
+			performance.FailureReason = "年化成長倍數無法定義"
+			result.Markets = append(result.Markets, performance)
+			result.Fatal = true
+			result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
+			result.ScoreTotal = FatalFitnessScore
+			return result, nil
+		}
+		scoreContribution, annualized, ok := multiMarketReturnScore(metrics.ROI, years)
+		if !ok {
+			performance.FailureReason = "年化報酬無法定義"
+			result.Markets = append(result.Markets, performance)
+			result.Fatal = true
+			result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
+			result.ScoreTotal = FatalFitnessScore
+			return result, nil
+		}
+		performance.AnnualizedReturn = &annualized
+		result.Markets = append(result.Markets, performance)
+		result.ScoreTotal += scoreContribution
+	}
+	return result, nil
+}
+
+func multiMarketReturnScore(totalReturn float64, years float64) (score float64, annualized float64, ok bool) {
+	if years <= 0 || 1+totalReturn <= 0 {
+		return 0, 0, false
+	}
+	score = math.Log1p(totalReturn)
+	annualized = math.Expm1(score / years)
+	if math.IsNaN(score) || math.IsInf(score, 0) || math.IsNaN(annualized) || math.IsInf(annualized, 0) {
+		return 0, 0, false
+	}
+	return score, annualized, true
 }
 
 func (SigmoidDCAEvolvable) DecodeElite(raw []byte) Gene {
@@ -437,8 +473,14 @@ func RunSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 
 func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int64, interval string, executionMode string, chromosome quant.Chromosome, spawn *quant.SpawnPoint, traceCfg PathTraceConfig, costs quant.ExecutionCostConfig, positionStructure string, symbol string, longTermFilter backtestcore.LongTermFilterConfig) SigmoidDCAPathResult {
 	executionMode = normalizeBacktestExecutionMode(executionMode)
-	if len(bars) == 0 || bars[0].Close <= 0 || executionMode == executionModePreclose10m {
-		return SigmoidDCAPathResult{}
+	if len(bars) == 0 {
+		return SigmoidDCAPathResult{Err: fmt.Errorf("回測 K 線不可為空")}
+	}
+	if bars[0].Close <= 0 {
+		return SigmoidDCAPathResult{Err: fmt.Errorf("回測價格必須大於 0")}
+	}
+	if executionMode == executionModePreclose10m {
+		return SigmoidDCAPathResult{Err: fmt.Errorf("收盤前模式缺少歷史快照")}
 	}
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome = quant.ClampChromosome(chromosome)
@@ -493,7 +535,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		Hooks:  hooks,
 	})
 	if err != nil {
-		return SigmoidDCAPathResult{}
+		return SigmoidDCAPathResult{Err: err}
 	}
 	nav := make([]float64, 0, len(result.Path))
 	for _, point := range result.Path {
@@ -593,35 +635,6 @@ func asChromosome(g Gene) quant.Chromosome {
 		return quant.ClampChromosome(c)
 	}
 	return quant.DefaultSeedChromosome
-}
-
-func sampleRange(rng RandomSource, name string) float64 {
-	bound := quant.HardBounds[name]
-	return bound.Min + rng.Float64()*(bound.Max-bound.Min)
-}
-
-func mutateFloat(v float64, name string, prob float64, scale float64, rng RandomSource) float64 {
-	if rng.Float64() >= prob {
-		return v
-	}
-	step := quant.GeneSteps[name]
-	if step == 0 {
-		step = 0.01
-	}
-	return v + rng.NormFloat64()*step*scale
-}
-
-func pick(rng RandomSource, a float64, b float64) float64 {
-	if rng.Float64() < 0.5 {
-		return a
-	}
-	return b
-}
-
-func writeQuantized(h interface{ Write([]byte) (int, error) }, v float64) {
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], uint64(math.Round(v*1e6)))
-	_, _ = h.Write(buf[:])
 }
 
 func firstEvalStart(bars []quant.Bar) int64 {

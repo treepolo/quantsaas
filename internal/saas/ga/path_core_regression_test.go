@@ -38,18 +38,21 @@ func TestSharedCoreMatchesLegacySigmoidDCAPath(t *testing.T) {
 		roi         float64
 		maxDrawdown float64
 		finalEquity float64
+		tradeCount  int
 	}{
 		{
 			mode:        executionModeCloseSameBar,
 			roi:         -0.12205202287406713,
 			maxDrawdown: 0.06973231707688078,
 			finalEquity: 1429.8440839422337,
+			tradeCount:  9,
 		},
 		{
 			mode:        executionModeCloseNextOpen,
 			roi:         -0.11084077288102258,
 			maxDrawdown: 0.0650770237423821,
 			finalEquity: 1447.2192507985428,
+			tradeCount:  8,
 		},
 	}
 
@@ -72,8 +75,8 @@ func TestSharedCoreMatchesLegacySigmoidDCAPath(t *testing.T) {
 			assertNear(t, "max drawdown", path.Metrics.MaxDrawdown, tt.maxDrawdown)
 			assertNear(t, "final equity", path.Metrics.FinalEquity, tt.finalEquity)
 			assertNear(t, "total injected", path.Metrics.TotalInjected, 1619)
-			if path.Metrics.TradeCount != 8 {
-				t.Fatalf("trade count = %d, want 8", path.Metrics.TradeCount)
+			if path.Metrics.TradeCount != tt.tradeCount {
+				t.Fatalf("trade count = %d, want %d", path.Metrics.TradeCount, tt.tradeCount)
 			}
 			first := path.NAV[0]
 			last := path.NAV[len(path.NAV)-1]

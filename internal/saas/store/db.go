@@ -61,6 +61,8 @@ func AutoMigrate(gdb *gorm.DB) error {
 		&GeneRecord{},
 		&GeneObservation{},
 		&EvolutionTask{},
+		&GeneCandidateEvaluation{},
+		&GeneParameterGridPoint{},
 		&BacktestSpec{},
 		&BacktestResult{},
 		&BacktestResultSummary{},

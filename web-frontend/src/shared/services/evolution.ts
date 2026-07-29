@@ -18,11 +18,30 @@ export type TraceSnapshot = {
   events: TraceEvent[];
 };
 
+export type MultiMarketSelection = {
+  instrument_id: string;
+  pair?: string;
+  data_source?: string;
+  interval?: string;
+  use_all_data: boolean;
+  start_time_ms?: number;
+  end_time_ms?: number;
+};
+
+export type MarketPerformance = {
+  instrument_id: string;
+  pair: string;
+  total_return: number;
+  annualized_return?: number | null;
+  max_drawdown: number;
+  failure_reason?: string;
+};
+
 export type EvolutionTask = {
   id: number;
   strategy_id?: string;
   research_dataset_id?: number;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
   progress: number;
   current_generation?: number;
   max_generations?: number;
@@ -70,14 +89,24 @@ export type EvolutionTask = {
   standard_champion_score?: number;
   seed_gene_id?: number;
   fixed_param_keys?: string[];
-  best_score?: number;
-  max_drawdown?: number;
+  multi_market_enabled?: boolean;
+  multi_market_selections?: MultiMarketSelection[];
+  grid_coverage_enabled?: boolean;
+  search_hash?: string;
+  best_valid?: boolean;
+  best_score?: number | null;
+  max_drawdown?: number | null;
+  market_performance?: MarketPerformance[];
   window_score?: Record<string, number>;
   best_param_pack?: Record<string, unknown> | null;
   gene_record_id?: number;
   mutation_probability?: number;
   mutation_scale?: number;
   evaluated_individuals?: number;
+  evaluated_count?: number;
+  valid_count?: number;
+  skipped_count?: number;
+  failed_count?: number;
   planned_evaluations?: number;
   monitor_updated_at?: string;
   error?: string;
@@ -145,6 +174,9 @@ export type GenomeRecord = {
   score_total: number;
   max_drawdown: number;
   window_score: Record<string, number>;
+  candidate_schema_version?: string;
+  search_hash?: string;
+  market_performance?: MarketPerformance[];
   param_pack?: Record<string, unknown> | null;
 };
 
@@ -186,12 +218,41 @@ export type CreateTaskInput = {
   standard_end_ms?: number;
   seed_gene_id?: number;
   fixed_param_keys?: string[];
+  multi_market_enabled?: boolean;
+  multi_market_selections?: MultiMarketSelection[];
+  grid_coverage_enabled?: boolean;
 };
 
 export type ComputeEstimate = {
   enabled: boolean;
   units_per_individual: number;
   planned_units: number;
+};
+
+export type ParameterGridPoint = {
+  value: number;
+  count: number;
+};
+
+export type ParameterGridAxis = {
+  key: string;
+  label: string;
+  kind: "float" | "int";
+  state: "evolving" | "fixed" | "disabled";
+  minimum: number;
+  maximum: number;
+  step: number;
+  grid_size: number;
+  total_count: number;
+  last_generation: number;
+  points: ParameterGridPoint[];
+};
+
+export type ParameterGridCoverage = {
+  task_id: number;
+  search_hash: string;
+  axes: ParameterGridAxis[];
+  generations: Array<{ generation: number; count: number }>;
 };
 
 export type GeneObservationAxis = {
@@ -295,5 +356,8 @@ export const evolutionApi = {
       method: "PATCH",
       body: JSON.stringify({ trace_mode: traceMode })
     });
+  },
+  gridCoverage(taskId: number) {
+    return apiFetch<ParameterGridCoverage>(`/evolution/tasks/${taskId}/grid-coverage`);
   }
 };

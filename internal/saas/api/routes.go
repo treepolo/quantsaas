@@ -138,6 +138,7 @@ func NewRouter(deps RouterDeps) *gin.Engine {
 	lab.POST("/evolution/tasks", ev.CreateTask)
 	lab.POST("/evolution/tasks/compute-estimate", ev.EstimateCompute)
 	lab.GET("/evolution/tasks/:taskID/trace", ev.GetTrace)
+	lab.GET("/evolution/tasks/:taskID/grid-coverage", ev.GetGridCoverage)
 	lab.PATCH("/evolution/tasks/:taskID/trace-mode", ev.SetTraceMode)
 	lab.POST("/evolution/tasks/:taskID/cancel", ev.CancelTask)
 	lab.POST("/evolution/tasks/:taskID/promote", ev.Promote)

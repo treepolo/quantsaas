@@ -41,6 +41,7 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 	}
 	params.PositionStructure = sigmoiddca.NormalizePositionStructure(spec.PositionStructure)
 	spec.PositionStructure = params.PositionStructure
+	params.DisableMinimumTrade = params.FloatingOnly() || (spec.Costs.FeeRate == 0 && spec.Costs.SpreadRate == 0)
 	params.Spawn.Policy.InitialUSDT = spec.InitialCapital
 	params.Spawn.Policy.MonthlyInjectUSDT = spec.MonthlyContribution
 	params.Spawn.Policy.ColdSealedBTC = spec.InitialAssetQuantity
@@ -216,9 +217,20 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 		rawModelTargetWeight := diagnosticValue(output.Diagnostics, "target_weight")
 		modelTargetWeight := totalTargetWeight(portfolio, bar.Close, portfolio.TotalEquity, rawModelTargetWeight)
 		practicalModelTargetWeight := modelTargetWeight
-		output, practicalModelTargetWeight = ApplyForceTargetThresholds(output, portfolio, bar.Close, effectiveParams.Chromosome, modelTargetWeight)
-		rebalanceAllowed := RebalanceThresholdAllows(output, portfolio, bar.Close, effectiveParams.Chromosome.RebalanceThreshold)
-		output = ApplyRebalanceThreshold(output, portfolio, bar.Close, effectiveParams.Chromosome.RebalanceThreshold)
+		output, practicalModelTargetWeight = applyForceTargetThresholds(
+			output,
+			portfolio,
+			bar.Close,
+			effectiveParams.Chromosome,
+			modelTargetWeight,
+			effectiveParams.DisableMinimumTrade,
+		)
+		rebalanceThreshold := effectiveParams.Chromosome.RebalanceThreshold
+		if effectiveParams.FloatingOnly() {
+			rebalanceThreshold = 0
+		}
+		rebalanceAllowed := RebalanceThresholdAllows(output, portfolio, bar.Close, rebalanceThreshold)
+		output = ApplyRebalanceThreshold(output, portfolio, bar.Close, rebalanceThreshold)
 		if !hasAdoptedPracticalTargetWeight {
 			adoptedPracticalTargetWeight = totalAssetWeight(portfolio, bar.Close, portfolio.TotalEquity)
 			hasAdoptedPracticalTargetWeight = true
@@ -479,6 +491,10 @@ func diagnosticValue(values map[string]float64, key string) float64 {
 }
 
 func ApplyForceTargetThresholds(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, chromosome quant.Chromosome, modelTargetWeight float64) (quant.StrategyOutput, float64) {
+	return applyForceTargetThresholds(output, portfolio, price, chromosome, modelTargetWeight, false)
+}
+
+func applyForceTargetThresholds(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, chromosome quant.Chromosome, modelTargetWeight float64, disableMinimumTrade bool) (quant.StrategyOutput, float64) {
 	forcedTarget := modelTargetWeight
 	switch {
 	case chromosome.ForceFullThreshold < 1 && modelTargetWeight >= chromosome.ForceFullThreshold:
@@ -488,10 +504,10 @@ func ApplyForceTargetThresholds(output quant.StrategyOutput, portfolio quant.Por
 	default:
 		return output, modelTargetWeight
 	}
-	return forceTotalTargetOutput(output, portfolio, price, forcedTarget, chromosome.DustUSD), forcedTarget
+	return forceTotalTargetOutput(output, portfolio, price, forcedTarget, chromosome.DustUSD, disableMinimumTrade), forcedTarget
 }
 
-func forceTotalTargetOutput(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, targetTotalWeight float64, dustUSD float64) quant.StrategyOutput {
+func forceTotalTargetOutput(output quant.StrategyOutput, portfolio quant.PortfolioSnapshot, price float64, targetTotalWeight float64, dustUSD float64, disableMinimumTrade bool) quant.StrategyOutput {
 	if price <= 0 {
 		return output
 	}
@@ -507,7 +523,9 @@ func forceTotalTargetOutput(output quant.StrategyOutput, portfolio quant.Portfol
 	targetAssetValue := totalEquity * targetTotalWeight
 	deltaValue := targetAssetValue - currentAssetValue
 	dust := dustUSD
-	if dust <= 0 {
+	if disableMinimumTrade {
+		dust = 0
+	} else if dust <= 0 {
 		dust = 10.1
 	}
 

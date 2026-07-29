@@ -2,10 +2,12 @@ package epoch
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,13 +26,25 @@ import (
 )
 
 const (
-	TaskStatusRunning   = "running"
-	TaskStatusDone      = "completed"
-	TaskStatusFailed    = "failed"
-	TaskStatusCancelled = "cancelled"
+	TaskStatusPending    = "pending"
+	TaskStatusRunning    = "running"
+	TaskStatusCancelling = "cancelling"
+	TaskStatusDone       = "completed"
+	TaskStatusFailed     = "failed"
+	TaskStatusCancelled  = "cancelled"
 
 	SearchInitialUSDT = 1000000
 )
+
+type MultiMarketSelection struct {
+	InstrumentID string `json:"instrument_id"`
+	Pair         string `json:"pair,omitempty"`
+	DataSource   string `json:"data_source,omitempty"`
+	Interval     string `json:"interval,omitempty"`
+	UseAllData   bool   `json:"use_all_data"`
+	StartTimeMs  int64  `json:"start_time_ms,omitempty"`
+	EndTimeMs    int64  `json:"end_time_ms,omitempty"`
+}
 
 type Service struct {
 	db          *gorm.DB
@@ -48,44 +62,47 @@ type Service struct {
 }
 
 type CreateTaskRequest struct {
-	StrategyID                string            `json:"strategy_id"`
-	ResearchDatasetID         uint              `json:"research_dataset_id"`
-	Pair                      string            `json:"pair"`
-	InstrumentID              string            `json:"instrument_id"`
-	DataSource                string            `json:"data_source"`
-	ExecutionMode             string            `json:"execution_mode"`
-	TrainStartMs              int64             `json:"train_start_ms"`
-	TrainEndMs                int64             `json:"train_end_ms"`
-	Interval                  string            `json:"interval"`
-	PopSize                   int               `json:"pop_size"`
-	MaxGenerations            int               `json:"max_generations"`
-	SpawnMode                 string            `json:"spawn_mode"`
-	SpawnPoint                *quant.SpawnPoint `json:"spawn_point"`
-	InitialCapital            float64           `json:"initial_capital"`
-	MonthlyDCA                *float64          `json:"monthly_dca"`
-	EvolveRebalanceThreshold  bool              `json:"evolve_rebalance_threshold"`
-	EvolveForceFullThreshold  bool              `json:"evolve_force_full_threshold"`
-	EvolveForceEmptyThreshold bool              `json:"evolve_force_empty_threshold"`
-	EvolveGamma               bool              `json:"evolve_gamma"`
-	EnableWMean               *bool             `json:"enable_w_mean"`
-	EnableWMomentum           *bool             `json:"enable_w_momentum"`
-	EnableWBreakout           *bool             `json:"enable_w_breakout"`
-	PositionStructure         string            `json:"position_structure"`
-	TradePenalty              float64           `json:"trade_penalty"`
-	FeeRate                   *float64          `json:"fee_rate"`
-	SpreadRate                *float64          `json:"spread_rate"`
-	LongTermFilterEnabled     *bool             `json:"long_term_filter_enabled"`
-	LongTermFilterMonths      int               `json:"long_term_filter_months"`
-	TestMode                  bool              `json:"test_mode"`
-	TraceMode                 ga.TraceMode      `json:"trace_mode"`
-	ComputeMonitorEnabled     bool              `json:"compute_monitor_enabled"`
-	ContinuousMode            string            `json:"continuous_mode"`
-	ContinuousIterations      int               `json:"continuous_iterations"`
-	ContinuousUnlimited       bool              `json:"continuous_unlimited"`
-	StandardStartMs           int64             `json:"standard_start_ms"`
-	StandardEndMs             int64             `json:"standard_end_ms"`
-	SeedGeneID                uint              `json:"seed_gene_id"`
-	FixedParamKeys            []string          `json:"fixed_param_keys"`
+	StrategyID                string                 `json:"strategy_id"`
+	ResearchDatasetID         uint                   `json:"research_dataset_id"`
+	Pair                      string                 `json:"pair"`
+	InstrumentID              string                 `json:"instrument_id"`
+	DataSource                string                 `json:"data_source"`
+	ExecutionMode             string                 `json:"execution_mode"`
+	TrainStartMs              int64                  `json:"train_start_ms"`
+	TrainEndMs                int64                  `json:"train_end_ms"`
+	Interval                  string                 `json:"interval"`
+	PopSize                   int                    `json:"pop_size"`
+	MaxGenerations            int                    `json:"max_generations"`
+	SpawnMode                 string                 `json:"spawn_mode"`
+	SpawnPoint                *quant.SpawnPoint      `json:"spawn_point"`
+	InitialCapital            float64                `json:"initial_capital"`
+	MonthlyDCA                *float64               `json:"monthly_dca"`
+	EvolveRebalanceThreshold  bool                   `json:"evolve_rebalance_threshold"`
+	EvolveForceFullThreshold  bool                   `json:"evolve_force_full_threshold"`
+	EvolveForceEmptyThreshold bool                   `json:"evolve_force_empty_threshold"`
+	EvolveGamma               bool                   `json:"evolve_gamma"`
+	EnableWMean               *bool                  `json:"enable_w_mean"`
+	EnableWMomentum           *bool                  `json:"enable_w_momentum"`
+	EnableWBreakout           *bool                  `json:"enable_w_breakout"`
+	PositionStructure         string                 `json:"position_structure"`
+	TradePenalty              float64                `json:"trade_penalty"`
+	FeeRate                   *float64               `json:"fee_rate"`
+	SpreadRate                *float64               `json:"spread_rate"`
+	LongTermFilterEnabled     *bool                  `json:"long_term_filter_enabled"`
+	LongTermFilterMonths      int                    `json:"long_term_filter_months"`
+	TestMode                  bool                   `json:"test_mode"`
+	TraceMode                 ga.TraceMode           `json:"trace_mode"`
+	ComputeMonitorEnabled     bool                   `json:"compute_monitor_enabled"`
+	ContinuousMode            string                 `json:"continuous_mode"`
+	ContinuousIterations      int                    `json:"continuous_iterations"`
+	ContinuousUnlimited       bool                   `json:"continuous_unlimited"`
+	StandardStartMs           int64                  `json:"standard_start_ms"`
+	StandardEndMs             int64                  `json:"standard_end_ms"`
+	SeedGeneID                uint                   `json:"seed_gene_id"`
+	FixedParamKeys            []string               `json:"fixed_param_keys"`
+	MultiMarketEnabled        bool                   `json:"multi_market_enabled"`
+	MultiMarketSelections     []MultiMarketSelection `json:"multi_market_selections,omitempty"`
+	GridCoverageEnabled       bool                   `json:"grid_coverage_enabled"`
 	seedParamPack             []byte
 	fixedGene                 *quant.Chromosome
 }
@@ -114,7 +131,7 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	return &Service{
+	service := &Service{
 		db:          db,
 		engine:      engine,
 		instruments: marketdata.NewInstrumentStore(db),
@@ -123,6 +140,97 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 		traces:      map[uint]*traceBuffer{},
 		traceModes:  map[uint]ga.TraceMode{},
 		computes:    map[uint]*computeMonitor{},
+	}
+	service.recoverInterruptedTasks(context.Background())
+	return service
+}
+
+func (s *Service) recoverInterruptedTasks(ctx context.Context) {
+	if s.db == nil {
+		return
+	}
+	var tasks []saasstore.EvolutionTask
+	if err := s.db.WithContext(ctx).
+		Where("status IN ?", []string{TaskStatusPending, TaskStatusRunning, TaskStatusCancelling}).
+		Find(&tasks).Error; err != nil {
+		s.logger.Warn("failed to inspect interrupted evolution tasks", zap.Error(err))
+		return
+	}
+	if len(tasks) == 0 {
+		return
+	}
+	finished := time.Now().UTC()
+	ids := make([]uint, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+	}
+	if err := s.db.WithContext(ctx).Model(&saasstore.EvolutionTask{}).
+		Where("id IN ?", ids).
+		Updates(map[string]any{
+			"status":        TaskStatusFailed,
+			"finished_at":   &finished,
+			"error_message": "服務重新啟動，原工作程序已中斷；候選點已標記為可重試",
+		}).Error; err != nil {
+		s.logger.Warn("failed to recover interrupted evolution tasks", zap.Error(err))
+	}
+	store := ga.NewGormGenomeStore(s.db)
+	for _, id := range ids {
+		if err := store.MarkInterruptedCandidates(ctx, []uint{id}, "service restarted"); err != nil {
+			s.logger.Warn("failed to mark interrupted candidates", zap.Uint("task_id", id), zap.Error(err))
+		}
+	}
+}
+
+func (s *Service) finishTaskFailure(taskID uint, taskErr error) {
+	if taskErr == nil {
+		taskErr = errors.New("unknown evolution task failure")
+	}
+	finished := time.Now().UTC()
+	if s.db != nil {
+		_ = s.db.Model(&saasstore.EvolutionTask{}).
+			Where("id = ?", taskID).
+			Updates(map[string]any{
+				"status":        TaskStatusFailed,
+				"finished_at":   &finished,
+				"error_message": taskErr.Error(),
+			}).Error
+		store := ga.NewGormGenomeStore(s.db)
+		_ = store.MarkInterruptedCandidates(context.Background(), []uint{taskID}, taskErr.Error())
+	}
+	s.clearActiveTask(taskID)
+}
+
+func (s *Service) clearActiveTask(taskID uint) {
+	s.mu.Lock()
+	if s.currentTask != nil && s.currentTask.ID == taskID {
+		s.currentTask = nil
+	}
+	delete(s.cancelFuncs, taskID)
+	s.mu.Unlock()
+	s.deleteComputeMonitor(taskID)
+}
+
+func (s *Service) searchPreparedUpdater(taskID uint) func(ga.SearchIdentity, string) {
+	if taskID == 0 {
+		return nil
+	}
+	return func(identity ga.SearchIdentity, searchHash string) {
+		raw, _ := json.Marshal(map[string]any{
+			"candidate_schema_version": ga.CoreCandidateSchemaVersion,
+			"search_hash":              searchHash,
+			"search_identity":          identity,
+			"best_valid":               false,
+			"updated_at":               time.Now().UTC().Format(time.RFC3339),
+		})
+		raw = s.mergeComputeSnapshotJSON(taskID, raw)
+		if err := s.db.Model(&saasstore.EvolutionTask{}).
+			Where("id = ?", taskID).
+			Updates(map[string]any{
+				"search_hash": searchHash,
+				"result":      saasstore.JSONB(raw),
+			}).Error; err != nil {
+			s.logger.Warn("failed to persist search identity", zap.Uint("task_id", taskID), zap.Error(err))
+		}
 	}
 }
 
@@ -134,11 +242,16 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 	}
 
 	req = s.normalizeRequest(ctx, req)
+	var err error
+	req, err = s.resolveMultiMarketSelections(ctx, req)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	if err := s.validateRequest(ctx, req); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
-	var err error
 	req, err = s.prepareSeedGene(ctx, req)
 	if err != nil {
 		s.mu.Unlock()
@@ -160,7 +273,6 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 		s.mu.Unlock()
 		return nil, err
 	}
-	now := time.Now().UTC()
 	task := &saasstore.EvolutionTask{
 		StrategyID:    req.StrategyID,
 		InstrumentID:  req.InstrumentID,
@@ -169,10 +281,9 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 		ExecutionMode: req.ExecutionMode,
 		TrainStartMs:  req.TrainStartMs,
 		TrainEndMs:    req.TrainEndMs,
-		Status:        TaskStatusRunning,
+		Status:        TaskStatusPending,
 		Progress:      0,
 		Config:        saasstore.JSONB(configRaw),
-		StartedAt:     &now,
 	}
 	if err := s.db.WithContext(ctx).Create(task).Error; err != nil {
 		s.mu.Unlock()
@@ -185,7 +296,7 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 	s.initComputeMonitor(task.ID, req.ComputeMonitorEnabled)
 	s.mu.Unlock()
 
-	go s.runEpoch(runCtx, task.ID, req, spawn)
+	go s.runTaskSafely(runCtx, task.ID, req, spawn)
 	return task, nil
 }
 
@@ -207,10 +318,14 @@ func (s *Service) CurrentTask() *saasstore.EvolutionTask {
 
 func (s *Service) EstimateCompute(ctx context.Context, req CreateTaskRequest) (ComputeEstimate, error) {
 	req = s.normalizeRequest(ctx, req)
+	var err error
+	req, err = s.resolveMultiMarketSelections(ctx, req)
+	if err != nil {
+		return ComputeEstimate{}, err
+	}
 	if err := s.validateRequest(ctx, req); err != nil {
 		return ComputeEstimate{}, err
 	}
-	var err error
 	req, err = s.prepareSeedGene(ctx, req)
 	if err != nil {
 		return ComputeEstimate{}, err
@@ -239,30 +354,41 @@ func (s *Service) CancelTask(ctx context.Context, taskID uint) error {
 	cancel := s.cancelFuncs[taskID]
 	s.mu.Unlock()
 	if cancel != nil {
+		if err := s.db.WithContext(ctx).Model(&saasstore.EvolutionTask{}).
+			Where("id = ? AND status IN ?", taskID, []string{TaskStatusPending, TaskStatusRunning}).
+			Update("status", TaskStatusCancelling).Error; err != nil {
+			return err
+		}
 		cancel()
 		return nil
 	}
-	now := time.Now().UTC()
-	updates := map[string]any{
-		"status":        TaskStatusCancelled,
-		"error_message": "使用者已中止任務",
-		"finished_at":   &now,
-	}
 	var task saasstore.EvolutionTask
-	if err := s.db.WithContext(ctx).First(&task, taskID).Error; err == nil {
-		var req CreateTaskRequest
-		if err := json.Unmarshal([]byte(task.Config), &req); err == nil {
-			if id, saveErr := s.saveCancelledBest(ctx, taskID, req); saveErr == nil && id > 0 {
-				updates["error_message"] = fmt.Sprintf("使用者已中止任務，已保存目前最佳參數 #%d", id)
-			} else if saveErr != nil {
-				s.logger.Warn("failed to save cancelled best", zap.Error(saveErr))
-			}
-		}
+	if err := s.db.WithContext(ctx).First(&task, taskID).Error; err != nil {
+		return err
 	}
-	return s.db.WithContext(ctx).
-		Model(&saasstore.EvolutionTask{}).
-		Where("id = ? AND status = ?", taskID, TaskStatusRunning).
-		Updates(updates).Error
+	switch task.Status {
+	case TaskStatusDone, TaskStatusFailed, TaskStatusCancelled:
+		return fmt.Errorf("任務 #%d 已結束，狀態為 %s", taskID, task.Status)
+	default:
+		return fmt.Errorf("任務 #%d 不在目前 worker 執行中，無法假裝取消完成", taskID)
+	}
+}
+
+func (s *Service) runTaskSafely(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			s.finishTaskFailure(taskID, fmt.Errorf("worker panic: %v", recovered))
+		}
+	}()
+	now := time.Now().UTC()
+	result := s.db.Model(&saasstore.EvolutionTask{}).
+		Where("id = ? AND status = ?", taskID, TaskStatusPending).
+		Updates(map[string]any{"status": TaskStatusRunning, "started_at": &now})
+	if result.Error != nil || result.RowsAffected != 1 {
+		s.finishTaskFailure(taskID, errors.New("任務無法從待執行轉為執行中"))
+		return
+	}
+	s.runEpoch(ctx, taskID, req, spawn)
 }
 
 func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
@@ -270,58 +396,37 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		s.runContinuousEpochs(ctx, taskID, req, spawn)
 		return
 	}
-	result, err := s.engine.RunEpoch(ctx, ga.EpochConfig{
-		TaskID:             taskID,
-		Pair:               req.Pair,
-		InstrumentID:       req.InstrumentID,
-		DataSource:         req.DataSource,
-		ExecutionMode:      req.ExecutionMode,
-		StartTimeMs:        req.TrainStartMs,
-		EndTimeMs:          req.TrainEndMs,
-		Interval:           req.Interval,
-		PopSize:            req.PopSize,
-		MaxGenerations:     req.MaxGenerations,
-		SpawnMode:          req.SpawnMode,
-		LotStepSize:        spawn.Risk.LotStep,
-		LotMinQty:          spawn.Risk.LotMin,
-		InitialCapital:     searchInitialCapital(req),
-		MonthlyDCA:         searchMonthlyDCA(req),
-		GeneOptions:        searchGeneOptions(req),
-		Costs:              searchCosts(req),
-		TradePenalty:       searchTradePenalty(req),
-		LongTermFilter:     searchLongTermFilter(req),
-		SpawnPointOverride: spawn,
-		TraceMode:          req.TraceMode,
-		TraceModeFunc:      s.traceModeGetter(taskID),
-		SeedGeneID:         req.SeedGeneID,
-		SeedParamPack:      req.seedParamPack,
-		OnTrace:            s.traceSink(taskID),
-		OnComputePlan:      s.computePlanSetter(taskID, req),
-		OnComputeStep:      s.computeStepCounter(taskID),
-		OnProgress: func(progress ga.EpochProgress) {
-			bestParamPack := json.RawMessage(progress.BestParamPack)
-			if !json.Valid(bestParamPack) {
-				bestParamPack = json.RawMessage(`null`)
-			}
-			raw, _ := json.Marshal(map[string]any{
-				"current_generation":   progress.Generation + 1,
-				"best_score":           progress.BestFitness,
-				"max_drawdown":         progress.BestMaxDrawdown,
-				"window_scores":        progress.BestWindows,
-				"best_param_pack":      bestParamPack,
-				"mutation_probability": progress.MutationProbability,
-				"mutation_scale":       progress.MutationScale,
-				"updated_at":           time.Now().UTC().Format(time.RFC3339),
-			})
-			raw = s.mergeComputeSnapshotJSON(taskID, raw)
-			_ = s.db.Model(&saasstore.EvolutionTask{}).
-				Where("id = ?", taskID).
-				Updates(map[string]any{
-					"progress": float64(progress.Generation+1) / float64(max(1, req.MaxGenerations)),
-					"result":   saasstore.JSONB(raw),
-				}).Error
-		},
-	})
+	cfg := s.epochConfig(req, spawn, taskID)
+	cfg.OnProgress = func(progress ga.EpochProgress) {
+		bestParamPack := json.RawMessage(progress.BestParamPack)
+		if !json.Valid(bestParamPack) {
+			bestParamPack = json.RawMessage(`null`)
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"current_generation":   progress.Generation + 1,
+			"best_valid":           true,
+			"best_score":           progress.BestFitness,
+			"max_drawdown":         progress.BestMaxDrawdown,
+			"window_scores":        progress.BestWindows,
+			"market_performance":   progress.BestMarkets,
+			"best_param_pack":      bestParamPack,
+			"mutation_probability": progress.MutationProbability,
+			"mutation_scale":       progress.MutationScale,
+			"evaluated_count":      progress.EvaluatedCount,
+			"valid_count":          progress.ValidCount,
+			"skipped_count":        progress.SkippedCount,
+			"failed_count":         progress.FailedCount,
+			"updated_at":           time.Now().UTC().Format(time.RFC3339),
+		})
+		raw = s.mergeComputeSnapshotJSON(taskID, raw)
+		_ = s.db.Model(&saasstore.EvolutionTask{}).
+			Where("id = ?", taskID).
+			Updates(map[string]any{
+				"progress": float64(progress.Generation+1) / float64(max(1, req.MaxGenerations)),
+				"result":   saasstore.JSONB(raw),
+			}).Error
+	}
+	result, err := s.engine.RunEpoch(ctx, cfg)
 
 	finished := time.Now().UTC()
 	updates := map[string]any{
@@ -348,13 +453,19 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		}
 		raw, _ := json.Marshal(map[string]any{
 			"current_generation":   req.MaxGenerations,
+			"best_valid":           true,
 			"best_score":           result.Fitness.ScoreTotal,
 			"max_drawdown":         result.Fitness.MaxDrawdown,
 			"window_scores":        result.Fitness.Windows,
+			"market_performance":   result.Fitness.Markets,
 			"best_param_pack":      paramPack,
 			"gene_record_id":       result.GeneRecordID,
 			"mutation_probability": s.engine.MutationProbability,
 			"mutation_scale":       s.engine.MutationScale,
+			"evaluated_count":      result.EvaluatedCount,
+			"valid_count":          result.ValidCount,
+			"skipped_count":        result.SkippedCount,
+			"failed_count":         result.FailedCount,
 			"updated_at":           finished.Format(time.RFC3339),
 			"Fitness":              result.Fitness,
 		})
@@ -365,11 +476,7 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 	}
 	_ = s.db.Model(&saasstore.EvolutionTask{}).Where("id = ?", taskID).Updates(updates).Error
 
-	s.mu.Lock()
-	s.currentTask = nil
-	delete(s.cancelFuncs, taskID)
-	s.mu.Unlock()
-	s.deleteComputeMonitor(taskID)
+	s.clearActiveTask(taskID)
 }
 
 func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req CreateTaskRequest, spawn *quant.SpawnPoint) {
@@ -437,42 +544,41 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 	}
 	_ = s.db.Model(&saasstore.EvolutionTask{}).Where("id = ?", taskID).Updates(updates).Error
 
-	s.mu.Lock()
-	s.currentTask = nil
-	delete(s.cancelFuncs, taskID)
-	s.mu.Unlock()
-	s.deleteComputeMonitor(taskID)
+	s.clearActiveTask(taskID)
 }
 
 func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, taskID uint) ga.EpochConfig {
 	return ga.EpochConfig{
-		TaskID:             taskID,
-		Pair:               req.Pair,
-		InstrumentID:       req.InstrumentID,
-		DataSource:         req.DataSource,
-		ExecutionMode:      req.ExecutionMode,
-		StartTimeMs:        req.TrainStartMs,
-		EndTimeMs:          req.TrainEndMs,
-		Interval:           req.Interval,
-		PopSize:            req.PopSize,
-		MaxGenerations:     req.MaxGenerations,
-		SpawnMode:          req.SpawnMode,
-		LotStepSize:        spawn.Risk.LotStep,
-		LotMinQty:          spawn.Risk.LotMin,
-		InitialCapital:     searchInitialCapital(req),
-		MonthlyDCA:         searchMonthlyDCA(req),
-		GeneOptions:        searchGeneOptions(req),
-		Costs:              searchCosts(req),
-		TradePenalty:       searchTradePenalty(req),
-		LongTermFilter:     searchLongTermFilter(req),
-		SpawnPointOverride: spawn,
-		TraceMode:          req.TraceMode,
-		TraceModeFunc:      s.traceModeGetter(taskID),
-		SeedGeneID:         req.SeedGeneID,
-		SeedParamPack:      req.seedParamPack,
-		OnTrace:            s.traceSink(taskID),
-		OnComputePlan:      s.computePlanSetter(taskID, req),
-		OnComputeStep:      s.computeStepCounter(taskID),
+		TaskID:              taskID,
+		Pair:                req.Pair,
+		InstrumentID:        req.InstrumentID,
+		DataSource:          req.DataSource,
+		ExecutionMode:       req.ExecutionMode,
+		StartTimeMs:         req.TrainStartMs,
+		EndTimeMs:           req.TrainEndMs,
+		Interval:            req.Interval,
+		PopSize:             req.PopSize,
+		MaxGenerations:      req.MaxGenerations,
+		SpawnMode:           req.SpawnMode,
+		LotStepSize:         spawn.Risk.LotStep,
+		LotMinQty:           spawn.Risk.LotMin,
+		InitialCapital:      searchInitialCapital(req),
+		MonthlyDCA:          searchMonthlyDCA(req),
+		GeneOptions:         searchGeneOptions(req),
+		Costs:               searchCosts(req),
+		TradePenalty:        searchTradePenalty(req),
+		LongTermFilter:      searchLongTermFilter(req),
+		SpawnPointOverride:  spawn,
+		TraceMode:           req.TraceMode,
+		TraceModeFunc:       s.traceModeGetter(taskID),
+		SeedGeneID:          req.SeedGeneID,
+		SeedParamPack:       req.seedParamPack,
+		MultiMarkets:        searchMarketScopes(req),
+		GridCoverageEnabled: req.GridCoverageEnabled,
+		OnTrace:             s.traceSink(taskID),
+		OnComputePlan:       s.computePlanSetter(taskID, req),
+		OnComputeStep:       s.computeStepCounter(taskID),
+		OnSearchPrepared:    s.searchPreparedUpdater(taskID),
 	}
 }
 
@@ -489,9 +595,11 @@ func (s *Service) epochProgressUpdater(taskID uint, req CreateTaskRequest, itera
 		}
 		raw, _ := json.Marshal(map[string]any{
 			"current_generation":    progress.Generation + 1,
+			"best_valid":            true,
 			"best_score":            progress.BestFitness,
 			"max_drawdown":          progress.BestMaxDrawdown,
 			"window_scores":         progress.BestWindows,
+			"market_performance":    progress.BestMarkets,
 			"best_param_pack":       bestParamPack,
 			"mutation_probability":  progress.MutationProbability,
 			"mutation_scale":        progress.MutationScale,
@@ -502,6 +610,10 @@ func (s *Service) epochProgressUpdater(taskID uint, req CreateTaskRequest, itera
 			"continuous_unlimited":  req.ContinuousUnlimited,
 			"standard_start_ms":     req.StandardStartMs,
 			"standard_end_ms":       req.StandardEndMs,
+			"evaluated_count":       progress.EvaluatedCount,
+			"valid_count":           progress.ValidCount,
+			"skipped_count":         progress.SkippedCount,
+			"failed_count":          progress.FailedCount,
 		})
 		raw = s.mergeComputeSnapshotJSON(taskID, raw)
 		_ = s.db.Model(&saasstore.EvolutionTask{}).
@@ -520,13 +632,19 @@ func (s *Service) writeContinuousSnapshot(taskID uint, req CreateTaskRequest, it
 	}
 	payload := map[string]any{
 		"current_generation":    req.MaxGenerations,
+		"best_valid":            true,
 		"best_score":            result.Fitness.ScoreTotal,
 		"max_drawdown":          result.Fitness.MaxDrawdown,
 		"window_scores":         result.Fitness.Windows,
+		"market_performance":    result.Fitness.Markets,
 		"best_param_pack":       paramPack,
 		"gene_record_id":        result.GeneRecordID,
 		"mutation_probability":  s.engine.MutationProbability,
 		"mutation_scale":        s.engine.MutationScale,
+		"evaluated_count":       result.EvaluatedCount,
+		"valid_count":           result.ValidCount,
+		"skipped_count":         result.SkippedCount,
+		"failed_count":          result.FailedCount,
 		"updated_at":            time.Now().UTC().Format(time.RFC3339),
 		"Fitness":               result.Fitness,
 		"continuous_mode":       req.ContinuousMode,
@@ -557,16 +675,18 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		return 0, err
 	}
 	var result struct {
+		BestValid     bool                   `json:"best_valid"`
 		BestScore     float64                `json:"best_score"`
 		MaxDrawdown   float64                `json:"max_drawdown"`
 		WindowScores  []quant.CrucibleResult `json:"window_scores"`
+		Markets       []ga.MarketPerformance `json:"market_performance"`
 		BestParamPack json.RawMessage        `json:"best_param_pack"`
 		GeneRecordID  uint                   `json:"gene_record_id"`
 	}
 	if err := json.Unmarshal([]byte(task.Result), &result); err != nil {
 		return 0, nil
 	}
-	if result.GeneRecordID > 0 || !json.Valid(result.BestParamPack) || string(result.BestParamPack) == "null" {
+	if !result.BestValid || result.GeneRecordID > 0 || !json.Valid(result.BestParamPack) || string(result.BestParamPack) == "null" {
 		return 0, nil
 	}
 	searchConfig := map[string]any{
@@ -609,19 +729,23 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 	}
 	configRaw, _ := json.Marshal(searchConfig)
 	windowScore, _ := json.Marshal(result.WindowScores)
+	marketPerformance, _ := json.Marshal(result.Markets)
 	record := saasstore.GeneRecord{
-		StrategyID:    req.StrategyID,
-		InstrumentID:  req.InstrumentID,
-		DataSource:    req.DataSource,
-		Interval:      req.Interval,
-		ExecutionMode: req.ExecutionMode,
-		Role:          saasstore.GeneRoleChallenger,
-		Tags:          saasstore.JSONB(`["中止保存"]`),
-		SearchConfig:  saasstore.JSONB(configRaw),
-		ParamPack:     saasstore.JSONB(result.BestParamPack),
-		ScoreTotal:    result.BestScore,
-		MaxDrawdown:   result.MaxDrawdown,
-		WindowScore:   saasstore.JSONB(windowScore),
+		CandidateSchemaVersion: ga.CoreCandidateSchemaVersion,
+		SearchHash:             task.SearchHash,
+		StrategyID:             req.StrategyID,
+		InstrumentID:           req.InstrumentID,
+		DataSource:             req.DataSource,
+		Interval:               req.Interval,
+		ExecutionMode:          req.ExecutionMode,
+		Role:                   saasstore.GeneRoleChallenger,
+		Tags:                   saasstore.JSONB(`["中止保存"]`),
+		SearchConfig:           saasstore.JSONB(configRaw),
+		ParamPack:              saasstore.JSONB(result.BestParamPack),
+		ScoreTotal:             result.BestScore,
+		MaxDrawdown:            result.MaxDrawdown,
+		WindowScore:            saasstore.JSONB(windowScore),
+		MarketPerformance:      saasstore.JSONB(marketPerformance),
 	}
 	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
 		return 0, err
@@ -631,7 +755,9 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"best_score":           result.BestScore,
 		"max_drawdown":         result.MaxDrawdown,
 		"window_scores":        result.WindowScores,
+		"market_performance":   result.Markets,
 		"best_param_pack":      result.BestParamPack,
+		"best_valid":           true,
 		"gene_record_id":       record.ID,
 		"updated_at":           time.Now().UTC().Format(time.RFC3339),
 		"cancelled_saved_best": true,
@@ -641,9 +767,14 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 }
 
 func (s *Service) refreshStandardizedChampion(ctx context.Context, req CreateTaskRequest, newGeneID uint, current *standardizedChampion) (*standardizedChampion, error) {
+	var newRecord saasstore.GeneRecord
+	if err := s.db.WithContext(ctx).First(&newRecord, newGeneID).Error; err != nil {
+		return current, err
+	}
 	if current == nil {
 		var records []saasstore.GeneRecord
 		if err := s.db.WithContext(ctx).
+			Where("candidate_schema_version = ? AND search_hash = ?", ga.CoreCandidateSchemaVersion, newRecord.SearchHash).
 			Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role IN ?",
 				req.StrategyID, req.InstrumentID, req.DataSource, req.Interval, req.ExecutionMode,
 				[]string{saasstore.GeneRoleChallenger, saasstore.GeneRoleChampion, saasstore.GeneRoleRetired}).
@@ -663,11 +794,7 @@ func (s *Service) refreshStandardizedChampion(ctx context.Context, req CreateTas
 		}
 		return best, nil
 	}
-	var record saasstore.GeneRecord
-	if err := s.db.WithContext(ctx).First(&record, newGeneID).Error; err != nil {
-		return current, err
-	}
-	candidate, err := s.evaluateStandardizedRecord(ctx, req, record)
+	candidate, err := s.evaluateStandardizedRecord(ctx, req, newRecord)
 	if err != nil {
 		return current, err
 	}
@@ -684,6 +811,7 @@ func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTask
 	if err := validateSpawnPoint(&spawn); err != nil {
 		return nil, err
 	}
+	multiMarkets := standardizedMarketScopes(req)
 	fitness, err := s.engine.EvaluateParamPack(ctx, ga.EpochConfig{
 		Pair:               req.Pair,
 		InstrumentID:       req.InstrumentID,
@@ -705,11 +833,21 @@ func (s *Service) evaluateStandardizedRecord(ctx context.Context, req CreateTask
 		LongTermFilter:     searchLongTermFilter(req),
 		SpawnPointOverride: &spawn,
 		TraceMode:          ga.TraceModeSummary,
+		MultiMarkets:       multiMarkets,
 	}, []byte(record.ParamPack))
 	if err != nil {
 		return nil, err
 	}
 	return &standardizedChampion{GeneRecordID: record.ID, Score: fitness.ScoreTotal, ParamPack: []byte(record.ParamPack)}, nil
+}
+
+func standardizedMarketScopes(req CreateTaskRequest) []ga.MarketScope {
+	scopes := searchMarketScopes(req)
+	for index := range scopes {
+		scopes[index].StartTimeMs = req.StandardStartMs
+		scopes[index].EndTimeMs = req.StandardEndMs
+	}
+	return scopes
 }
 
 func (s *Service) TraceSnapshot(taskID uint, afterID uint64, limit int) TraceSnapshot {
@@ -910,8 +1048,8 @@ func (s *Service) resolveSpawnPoint(ctx context.Context, req CreateTaskRequest) 
 func (s *Service) loadChampionSpawn(ctx context.Context, req CreateTaskRequest) (*quant.SpawnPoint, error) {
 	var record saasstore.GeneRecord
 	if err := s.db.WithContext(ctx).
-		Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
-			req.StrategyID, req.InstrumentID, req.DataSource, req.Interval, req.ExecutionMode, saasstore.GeneRoleChampion).
+		Where("candidate_schema_version = ? AND strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role = ?",
+			ga.CoreCandidateSchemaVersion, req.StrategyID, req.InstrumentID, req.DataSource, req.Interval, req.ExecutionMode, saasstore.GeneRoleChampion).
 		Order("activated_at DESC NULLS LAST, created_at DESC").
 		First(&record).Error; err != nil {
 		return nil, err
@@ -930,6 +1068,9 @@ func (s *Service) prepareSeedGene(ctx context.Context, req CreateTaskRequest) (C
 			return req, fmt.Errorf("seed_gene_id #%d not found", req.SeedGeneID)
 		}
 		return req, err
+	}
+	if record.CandidateSchemaVersion != ga.CoreCandidateSchemaVersion {
+		return req, fmt.Errorf("seed_gene_id #%d 使用不相容的候選點結構版本", req.SeedGeneID)
 	}
 	if record.StrategyID != req.StrategyID ||
 		record.InstrumentID != req.InstrumentID ||
@@ -950,8 +1091,122 @@ func (s *Service) prepareSeedGene(ctx context.Context, req CreateTaskRequest) (C
 	return req, nil
 }
 
-func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) CreateTaskRequest {
+func (s *Service) resolveMultiMarketSelections(ctx context.Context, req CreateTaskRequest) (CreateTaskRequest, error) {
+	if !req.MultiMarketEnabled {
+		req.MultiMarketSelections = nil
+		return req, nil
+	}
 	if req.ResearchDatasetID > 0 {
+		return req, errors.New("多市場搜尋不可同時使用研究資料集")
+	}
+	if len(req.MultiMarketSelections) < 2 {
+		return req, errors.New("多市場搜尋至少要明確選擇兩個市場")
+	}
+	type coverageRow struct {
+		First sql.NullInt64
+		Last  sql.NullInt64
+		Count int64
+	}
+	resolved := make([]MultiMarketSelection, 0, len(req.MultiMarketSelections))
+	seen := make(map[string]bool, len(req.MultiMarketSelections))
+	for _, selection := range req.MultiMarketSelections {
+		interval := strings.TrimSpace(selection.Interval)
+		if interval == "" {
+			interval = req.Interval
+		}
+		instrument, err := s.instruments.ResolveInstrument(ctx, selection.InstrumentID, selection.Pair, selection.DataSource)
+		if err != nil {
+			return req, fmt.Errorf("多市場選項 %q 無法解析：%w", selection.InstrumentID, err)
+		}
+		if !supportsInterval(instrument.SupportedIntervals, interval) {
+			return req, fmt.Errorf("市場 %s 不支援週期 %s", instrument.ID, interval)
+		}
+		key := strings.Join([]string{instrument.ID, instrument.DataSource, interval}, "|")
+		if seen[key] {
+			return req, fmt.Errorf("市場 %s（%s）重複選取", instrument.ID, interval)
+		}
+		seen[key] = true
+
+		var all coverageRow
+		if err := s.db.WithContext(ctx).Model(&saasstore.KLine{}).
+			Select("MIN(open_time) AS first, MAX(open_time) AS last, COUNT(*) AS count").
+			Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ?",
+				instrument.ID, instrument.DataSource, instrument.Symbol, interval).
+			Scan(&all).Error; err != nil {
+			return req, err
+		}
+		if !all.First.Valid || !all.Last.Valid || all.Count < int64(sigmoiddca.RequiredHistoryBars+1) {
+			return req, fmt.Errorf("市場 %s（%s）歷史資料不足，至少需要 %d 根", instrument.ID, interval, sigmoiddca.RequiredHistoryBars+1)
+		}
+
+		useAll := selection.UseAllData
+		startMs := selection.StartTimeMs
+		endMs := selection.EndTimeMs
+		if startMs == 0 && endMs == 0 {
+			useAll = true
+		}
+		if useAll {
+			startMs = all.First.Int64
+			endMs = all.Last.Int64
+		} else {
+			if startMs <= 0 || endMs <= 0 || startMs > endMs {
+				return req, fmt.Errorf("市場 %s 的自訂資料範圍無效", instrument.ID)
+			}
+			var selectedCount int64
+			if err := s.db.WithContext(ctx).Model(&saasstore.KLine{}).
+				Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ? AND open_time BETWEEN ? AND ?",
+					instrument.ID, instrument.DataSource, instrument.Symbol, interval, startMs, endMs).
+				Count(&selectedCount).Error; err != nil {
+				return req, err
+			}
+			if selectedCount < int64(sigmoiddca.RequiredHistoryBars+1) {
+				return req, fmt.Errorf("市場 %s 的選定範圍資料不足，至少需要 %d 根", instrument.ID, sigmoiddca.RequiredHistoryBars+1)
+			}
+		}
+		resolved = append(resolved, MultiMarketSelection{
+			InstrumentID: instrument.ID,
+			Pair:         instrument.Symbol,
+			DataSource:   instrument.DataSource,
+			Interval:     interval,
+			UseAllData:   useAll,
+			StartTimeMs:  startMs,
+			EndTimeMs:    endMs,
+		})
+	}
+	sort.Slice(resolved, func(i, j int) bool {
+		left := strings.Join([]string{resolved[i].InstrumentID, resolved[i].DataSource, resolved[i].Interval}, "|")
+		right := strings.Join([]string{resolved[j].InstrumentID, resolved[j].DataSource, resolved[j].Interval}, "|")
+		return left < right
+	})
+	req.MultiMarketSelections = resolved
+	req.InstrumentID = "multi-market"
+	req.Pair = ""
+	req.DataSource = "multiple"
+	req.TrainStartMs = 0
+	req.TrainEndMs = 0
+	return req, nil
+}
+
+func searchMarketScopes(req CreateTaskRequest) []ga.MarketScope {
+	if !req.MultiMarketEnabled {
+		return nil
+	}
+	out := make([]ga.MarketScope, 0, len(req.MultiMarketSelections))
+	for _, selection := range req.MultiMarketSelections {
+		out = append(out, ga.MarketScope{
+			InstrumentID: selection.InstrumentID,
+			DataSource:   selection.DataSource,
+			Pair:         selection.Pair,
+			Interval:     selection.Interval,
+			StartTimeMs:  selection.StartTimeMs,
+			EndTimeMs:    selection.EndTimeMs,
+		})
+	}
+	return out
+}
+
+func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) CreateTaskRequest {
+	if req.ResearchDatasetID > 0 && !req.MultiMarketEnabled {
 		if dataset, err := s.loadResearchDataset(ctx, req.ResearchDatasetID); err == nil {
 			req.InstrumentID = dataset.primary.InstrumentID
 			req.Pair = dataset.primary.Symbol
@@ -964,14 +1219,16 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 	if req.StrategyID == "" {
 		req.StrategyID = sigmoiddca.StrategyID
 	}
-	if req.Pair == "" {
+	if req.Pair == "" && !req.MultiMarketEnabled {
 		req.Pair = marketdata.DefaultSymbol
 	}
-	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Pair, req.DataSource)
-	if err == nil {
-		req.InstrumentID = instrument.ID
-		req.Pair = instrument.Symbol
-		req.DataSource = instrument.DataSource
+	if !req.MultiMarketEnabled {
+		instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Pair, req.DataSource)
+		if err == nil {
+			req.InstrumentID = instrument.ID
+			req.Pair = instrument.Symbol
+			req.DataSource = instrument.DataSource
+		}
 	}
 	if req.Interval == "" {
 		req.Interval = "1d"
@@ -1029,6 +1286,9 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 }
 
 func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) error {
+	if req.MultiMarketEnabled && req.ResearchDatasetID > 0 {
+		return errors.New("多市場搜尋不可同時使用研究資料集")
+	}
 	if req.ResearchDatasetID > 0 {
 		dataset, err := s.loadResearchDataset(ctx, req.ResearchDatasetID)
 		if err != nil {
@@ -1038,15 +1298,29 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 			return errors.New("此研究資料集含參考指標，但尚未指定已確認的指標演算法，因此不能開始參數搜尋")
 		}
 	}
-	instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Pair, req.DataSource)
-	if err != nil {
-		return err
-	}
-	if req.DataSource != instrument.DataSource {
-		return fmt.Errorf("unsupported data source: %s", req.DataSource)
-	}
-	if !supportsInterval(instrument.SupportedIntervals, req.Interval) {
-		return fmt.Errorf("unsupported interval for %s: %s", instrument.ID, req.Interval)
+	if req.MultiMarketEnabled {
+		if len(req.MultiMarketSelections) < 2 {
+			return errors.New("多市場搜尋至少需要兩個有效市場")
+		}
+		for _, selection := range req.MultiMarketSelections {
+			if selection.InstrumentID == "" || selection.Pair == "" || selection.DataSource == "" {
+				return errors.New("多市場搜尋包含未完整解析的市場")
+			}
+			if boolValue(req.LongTermFilterEnabled) && selection.Interval != "1d" {
+				return fmt.Errorf("長週期風險濾網只支援日 K；市場 %s 使用 %s", selection.InstrumentID, selection.Interval)
+			}
+		}
+	} else {
+		instrument, err := s.instruments.ResolveInstrument(ctx, req.InstrumentID, req.Pair, req.DataSource)
+		if err != nil {
+			return err
+		}
+		if req.DataSource != instrument.DataSource {
+			return fmt.Errorf("unsupported data source: %s", req.DataSource)
+		}
+		if !supportsInterval(instrument.SupportedIntervals, req.Interval) {
+			return fmt.Errorf("unsupported interval for %s: %s", instrument.ID, req.Interval)
+		}
 	}
 	if !marketdata.IsSupportedExecutionMode(req.ExecutionMode) {
 		return fmt.Errorf("unsupported execution mode: %s", req.ExecutionMode)
@@ -1055,7 +1329,7 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 		return errors.New("收盤前 10 分鐘模式需要歷史快照搜尋路徑，目前尚未開放，不能用日 K 假裝參數搜尋")
 	}
 	if boolValue(req.LongTermFilterEnabled) {
-		if req.Interval != "1d" {
+		if !req.MultiMarketEnabled && req.Interval != "1d" {
 			return errors.New("長週期風險濾網只支援日 K，請改用日 K 或關閉濾網")
 		}
 		if req.LongTermFilterMonths <= 0 {
@@ -1220,6 +1494,7 @@ func searchMonthlyDCA(req CreateTaskRequest) float64 {
 }
 
 func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
+	costs := searchCosts(req)
 	return ga.GeneOptions{
 		EvolveRebalanceThreshold:  req.EvolveRebalanceThreshold,
 		EvolveForceFullThreshold:  req.EvolveForceFullThreshold,
@@ -1229,8 +1504,10 @@ func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
 		EnableWMomentum:           boolValue(req.EnableWMomentum),
 		EnableWBreakout:           boolValue(req.EnableWBreakout),
 		PositionStructure:         normalizedPositionStructure(req.PositionStructure),
-		FixedParamKeys:            req.FixedParamKeys,
-		FixedGene:                 req.fixedGene,
+		DisableMinimumTrade: normalizedPositionStructure(req.PositionStructure) == sigmoiddca.PositionStructureFloatingOnly ||
+			(costs.FeeRate == 0 && costs.SpreadRate == 0),
+		FixedParamKeys: req.FixedParamKeys,
+		FixedGene:      req.fixedGene,
 	}
 }
 

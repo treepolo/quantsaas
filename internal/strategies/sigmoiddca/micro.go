@@ -28,6 +28,7 @@ func computeMicroIntent(input quant.StrategyInput, params Params, market quant.M
 		WedgeDeltaThreshold:    c.WedgeDeltaThreshold,
 		WedgeVolRatioThreshold: c.WedgeVolRatioThreshold,
 		IsQuiet:                market.IsQuiet,
+		DisableDustFilter:      params.DisableMinimumTrade || params.FloatingOnly(),
 		AISignal:               input.AISignal,
 	})
 

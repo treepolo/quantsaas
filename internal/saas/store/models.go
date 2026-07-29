@@ -29,6 +29,11 @@ const (
 	GeneRoleChampion   = "champion"
 	GeneRoleRetired    = "retired"
 
+	GeneCandidateStatusReserved    = "reserved"
+	GeneCandidateStatusCompleted   = "completed"
+	GeneCandidateStatusFailed      = "failed"
+	GeneCandidateStatusInterrupted = "interrupted"
+
 	BacktestStatusRunning   = "running"
 	BacktestStatusCompleted = "completed"
 	BacktestStatusFailed    = "failed"
@@ -182,25 +187,28 @@ type AuditLog struct {
 }
 
 type GeneRecord struct {
-	ID            uint `gorm:"primaryKey"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     gorm.DeletedAt `gorm:"index"`
-	StrategyID    string         `gorm:"size:80;not null;index"`
-	InstrumentID  string         `gorm:"size:32;not null;index;default:BTCUSDT"`
-	DataSource    string         `gorm:"size:32;not null;index;default:binance"`
-	Interval      string         `gorm:"size:16;not null;index;default:1d"`
-	ExecutionMode string         `gorm:"size:32;not null;index;default:close_same_bar"`
-	Role          string         `gorm:"size:24;not null;index"`
-	Name          string         `gorm:"size:160"`
-	Notes         string         `gorm:"type:text"`
-	Tags          JSONB          `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
-	SearchConfig  JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ParamPack     JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ScoreTotal    float64        `gorm:"type:numeric(30,10);not null;default:0"`
-	MaxDrawdown   float64        `gorm:"type:numeric(30,10);not null;default:0"`
-	WindowScore   JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ActivatedAt   *time.Time
+	ID                     uint `gorm:"primaryKey"`
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	DeletedAt              gorm.DeletedAt `gorm:"index"`
+	StrategyID             string         `gorm:"size:80;not null;index"`
+	InstrumentID           string         `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource             string         `gorm:"size:32;not null;index;default:binance"`
+	Interval               string         `gorm:"size:16;not null;index;default:1d"`
+	ExecutionMode          string         `gorm:"size:32;not null;index;default:close_same_bar"`
+	CandidateSchemaVersion string         `gorm:"size:40;not null;default:'';index"`
+	SearchHash             string         `gorm:"size:64;not null;default:'';index"`
+	Role                   string         `gorm:"size:24;not null;index"`
+	Name                   string         `gorm:"size:160"`
+	Notes                  string         `gorm:"type:text"`
+	Tags                   JSONB          `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	SearchConfig           JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ParamPack              JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ScoreTotal             float64        `gorm:"type:numeric(30,10);not null;default:0"`
+	MaxDrawdown            float64        `gorm:"type:numeric(30,10);not null;default:0"`
+	WindowScore            JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	MarketPerformance      JSONB          `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	ActivatedAt            *time.Time
 }
 
 type GeneObservation struct {
@@ -236,6 +244,7 @@ type EvolutionTask struct {
 	ExecutionMode string  `gorm:"size:32;not null;index;default:close_same_bar"`
 	TrainStartMs  int64   `gorm:"not null;default:0"`
 	TrainEndMs    int64   `gorm:"not null;default:0"`
+	SearchHash    string  `gorm:"size:64;not null;default:'';index"`
 	Status        string  `gorm:"size:32;not null;index"`
 	Progress      float64 `gorm:"type:numeric(10,6);not null;default:0"`
 	Config        JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
@@ -243,6 +252,52 @@ type EvolutionTask struct {
 	ErrorMessage  string  `gorm:"type:text"`
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
+}
+
+// GeneCandidateEvaluation is the durable identity and lifecycle of one
+// candidate under one fully resolved research setting. Its versioned table is
+// deliberately separate from legacy observation rows, so candidates produced
+// by withdrawn search schemas can never become GA seeds or de-duplication
+// sources by accident.
+type GeneCandidateEvaluation struct {
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	SchemaVersion     string   `gorm:"size:40;not null;uniqueIndex:idx_gene_candidate_identity"`
+	SearchHash        string   `gorm:"size:64;not null;index;uniqueIndex:idx_gene_candidate_identity"`
+	Fingerprint       string   `gorm:"size:64;not null;index;uniqueIndex:idx_gene_candidate_identity"`
+	Status            string   `gorm:"size:24;not null;index"`
+	TaskID            uint     `gorm:"not null;index"`
+	Generation        int      `gorm:"not null;default:0"`
+	Individual        int      `gorm:"not null;default:0"`
+	AttemptCount      int      `gorm:"not null;default:1"`
+	ParamPack         JSONB    `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ScoreTotal        *float64 `gorm:"type:double precision"`
+	MaxDrawdown       *float64 `gorm:"type:double precision"`
+	Fatal             bool     `gorm:"not null;default:false"`
+	FailureReason     string   `gorm:"type:text"`
+	WindowScore       JSONB    `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	MarketPerformance JSONB    `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	ReservedAt        *time.Time
+	CompletedAt       *time.Time
+}
+
+// GeneParameterGridPoint stores only compact per-axis counts. It never stores
+// paths or re-opens backtest results, and the search hash lets later equivalent
+// tasks reuse the same accumulated coverage.
+type GeneParameterGridPoint struct {
+	ID             uint `gorm:"primaryKey"`
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	SearchHash     string  `gorm:"size:64;not null;index;uniqueIndex:idx_gene_parameter_grid_identity"`
+	ParameterKey   string  `gorm:"size:64;not null;uniqueIndex:idx_gene_parameter_grid_identity"`
+	ParameterState string  `gorm:"size:16;not null;uniqueIndex:idx_gene_parameter_grid_identity"`
+	GridIndex      int64   `gorm:"not null;uniqueIndex:idx_gene_parameter_grid_identity"`
+	Generation     int     `gorm:"not null;default:0;uniqueIndex:idx_gene_parameter_grid_identity"`
+	GridValue      float64 `gorm:"type:double precision;not null"`
+	Count          int64   `gorm:"not null;default:0"`
+	LastTaskID     uint    `gorm:"not null;index"`
+	LastGeneration int     `gorm:"not null;default:0"`
 }
 
 // BacktestSpec is the immutable identity of one fully resolved backtest input.

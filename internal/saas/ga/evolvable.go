@@ -32,6 +32,8 @@ type EvaluablePlan struct {
 	LotMin         float64
 	Windows        []quant.CrucibleWindow
 	DCABaselines   []DCABaseline
+	Datasets       []DatasetIdentity
+	MultiMarkets   []MultiMarketPlan
 	AggregateCache map[string]any
 	Trace          func(TraceEvent)
 	TraceMode      TraceMode
@@ -42,11 +44,54 @@ type EvaluablePlan struct {
 	Worker         int
 }
 
+type MultiMarketPlan struct {
+	Pair         string
+	InstrumentID string
+	DataSource   string
+	Interval     string
+	Window       quant.CrucibleWindow
+	Dataset      DatasetIdentity
+}
+
 type FitnessResult struct {
-	ScoreTotal  float64
-	MaxDrawdown float64
-	Windows     []quant.CrucibleResult
-	Fatal       bool
+	ScoreTotal    float64
+	MaxDrawdown   float64
+	Windows       []quant.CrucibleResult
+	Markets       []MarketPerformance
+	Fatal         bool
+	FailureReason string
+}
+
+type MarketPerformance struct {
+	InstrumentID     string   `json:"instrument_id"`
+	Pair             string   `json:"pair"`
+	TotalReturn      float64  `json:"total_return"`
+	AnnualizedReturn *float64 `json:"annualized_return,omitempty"`
+	MaxDrawdown      float64  `json:"max_drawdown"`
+	FailureReason    string   `json:"failure_reason,omitempty"`
+}
+
+type CandidateReservation struct {
+	Fingerprint uint64
+	Identity    string
+	Individual  int
+	ParamPack   []byte
+}
+
+type CandidateReservationOutcome struct {
+	Fingerprint   uint64
+	Identity      string
+	ReservationID uint
+	Reserved      bool
+	Completed     bool
+	Fitness       FitnessResult
+}
+
+type CandidateEvaluation struct {
+	ReservationID uint
+	Fingerprint   uint64
+	Fitness       FitnessResult
+	Error         string
 }
 
 type BacktestMetrics struct {
@@ -71,12 +116,20 @@ type GeneOptions struct {
 	EnableWMomentum           bool
 	EnableWBreakout           bool
 	PositionStructure         string
+	DisableMinimumTrade       bool
 	FixedParamKeys            []string
 	FixedGene                 *quant.Chromosome `json:"-"`
 }
 
 type GeneNormalizer interface {
 	NormalizeGene(c Gene, options GeneOptions) Gene
+}
+
+type OptionAwareGeneSpace interface {
+	SampleWithOptions(rng RandomSource, options GeneOptions) Gene
+	MutateWithOptions(c Gene, prob float64, scale float64, rng RandomSource, options GeneOptions) Gene
+	CrossoverWithOptions(p1 Gene, p2 Gene, rng RandomSource, options GeneOptions) Gene
+	FingerprintWithOptions(c Gene, options GeneOptions) uint64
 }
 
 type EvolvableStrategy interface {

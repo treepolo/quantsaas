@@ -32,6 +32,9 @@ func Step(input quant.StrategyInput, params Params) quant.StrategyOutput {
 			(input.Portfolio.DeadBTC+input.Portfolio.FloatBTC+input.Portfolio.ColdSealedBTC)*price
 	}
 	reserveFloor := totalEquity * params.Chromosome.MicroReservePct
+	if params.FloatingOnly() {
+		reserveFloor = 0
+	}
 	spendableUSDT := math.Max(0, input.Portfolio.USDTBalance-reserveFloor)
 
 	market := quant.ComputeMarketState(input.Closes)

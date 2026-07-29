@@ -111,9 +111,6 @@ func ClampChromosome(c Chromosome) Chromosome {
 	c.SoftReleasePct = clampByName(c.SoftReleasePct, "soft_release_pct")
 	c.HardReleaseMaxPct = clampByName(c.HardReleaseMaxPct, "hard_release_max_pct")
 
-	if c.MacroBearMultiplier < c.MacroBullMultiplier {
-		c.MacroBearMultiplier = c.MacroBullMultiplier
-	}
 	return c
 }
 

@@ -70,21 +70,6 @@ func (h *EvolutionHandler) EstimateCompute(c *gin.Context) {
 }
 
 func (h *EvolutionHandler) ListTasks(c *gin.Context) {
-	if h.service != nil && h.service.CurrentTask() == nil {
-		now := time.Now().UTC()
-		if err := h.db.WithContext(c.Request.Context()).
-			Model(&saasstore.EvolutionTask{}).
-			Where("status = ?", epoch.TaskStatusRunning).
-			Updates(map[string]any{
-				"status":        epoch.TaskStatusFailed,
-				"error_message": "服務曾重啟或任務中斷，請重新建立任務",
-				"finished_at":   &now,
-			}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	}
-
 	var tasks []saasstore.EvolutionTask
 	if err := h.db.WithContext(c.Request.Context()).
 		Order("created_at DESC").
@@ -97,7 +82,7 @@ func (h *EvolutionHandler) ListTasks(c *gin.Context) {
 	var latestChallenger *saasstore.GeneRecord
 	var challenger saasstore.GeneRecord
 	if err := h.db.WithContext(c.Request.Context()).
-		Where("role = ?", saasstore.GeneRoleChallenger).
+		Where("candidate_schema_version = ? AND role = ?", ga.CoreCandidateSchemaVersion, saasstore.GeneRoleChallenger).
 		Order("created_at DESC").
 		First(&challenger).Error; err == nil {
 		latestChallenger = &challenger
@@ -193,7 +178,125 @@ func (h *EvolutionHandler) CancelTask(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"status": epoch.TaskStatusCancelled, "task_id": taskID})
+	c.JSON(http.StatusOK, gin.H{"status": epoch.TaskStatusCancelling, "task_id": taskID})
+}
+
+func (h *EvolutionHandler) GetGridCoverage(c *gin.Context) {
+	taskID, ok := parseUintParam(c, "taskID")
+	if !ok {
+		return
+	}
+	var task saasstore.EvolutionTask
+	if err := h.db.WithContext(c.Request.Context()).First(&task, uint(taskID)).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "找不到演化任務"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if task.SearchHash == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"task_id":     task.ID,
+			"search_hash": "",
+			"axes":        []any{},
+		})
+		return
+	}
+	var rows []saasstore.GeneParameterGridPoint
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&saasstore.GeneParameterGridPoint{}).
+		Select("parameter_key, parameter_state, grid_index, grid_value, SUM(count) AS count, MAX(last_generation) AS last_generation").
+		Where("search_hash = ?", task.SearchHash).
+		Group("parameter_key, parameter_state, grid_index, grid_value").
+		Order("parameter_key ASC, grid_value ASC").
+		Limit(10000).
+		Scan(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	metadata := ga.ParameterAxes(ga.GeneOptions{
+		EvolveRebalanceThreshold:  true,
+		EvolveForceFullThreshold:  true,
+		EvolveForceEmptyThreshold: true,
+		EvolveGamma:               true,
+		EnableWMean:               true,
+		EnableWMomentum:           true,
+		EnableWBreakout:           true,
+		PositionStructure:         sigmoiddca.PositionStructureDualLayer,
+	})
+	byKey := make(map[string]ga.ParameterAxis, len(metadata))
+	for _, axis := range metadata {
+		byKey[axis.Key] = axis
+	}
+	type point struct {
+		Value float64 `json:"value"`
+		Count int64   `json:"count"`
+	}
+	type axisResponse struct {
+		Key            string  `json:"key"`
+		Label          string  `json:"label"`
+		Kind           string  `json:"kind"`
+		State          string  `json:"state"`
+		Minimum        float64 `json:"minimum"`
+		Maximum        float64 `json:"maximum"`
+		Step           float64 `json:"step"`
+		GridSize       int     `json:"grid_size"`
+		TotalCount     int64   `json:"total_count"`
+		LastGeneration int     `json:"last_generation"`
+		Points         []point `json:"points"`
+	}
+	order := make([]string, 0)
+	axes := make(map[string]*axisResponse)
+	for _, row := range rows {
+		axis := axes[row.ParameterKey]
+		if axis == nil {
+			meta := byKey[row.ParameterKey]
+			axis = &axisResponse{
+				Key:      row.ParameterKey,
+				Label:    meta.Label,
+				Kind:     meta.Kind,
+				State:    row.ParameterState,
+				Minimum:  meta.Minimum,
+				Maximum:  meta.Maximum,
+				Step:     meta.Step,
+				GridSize: meta.GridSize,
+				Points:   []point{},
+			}
+			axes[row.ParameterKey] = axis
+			order = append(order, row.ParameterKey)
+		}
+		axis.Points = append(axis.Points, point{Value: row.GridValue, Count: row.Count})
+		axis.TotalCount += row.Count
+		if row.LastGeneration > axis.LastGeneration {
+			axis.LastGeneration = row.LastGeneration
+		}
+	}
+	result := make([]axisResponse, 0, len(order))
+	for _, key := range order {
+		result = append(result, *axes[key])
+	}
+	type generationCount struct {
+		Generation int   `json:"generation"`
+		Count      int64 `json:"count"`
+	}
+	var generations []generationCount
+	if err := h.db.WithContext(c.Request.Context()).
+		Model(&saasstore.GeneParameterGridPoint{}).
+		Select("generation, SUM(count) AS count").
+		Where("search_hash = ?", task.SearchHash).
+		Group("generation").
+		Order("generation ASC").
+		Scan(&generations).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"task_id":     task.ID,
+		"search_hash": task.SearchHash,
+		"axes":        result,
+		"generations": generations,
+	})
 }
 
 func (h *EvolutionHandler) Promote(c *gin.Context) {
@@ -209,7 +312,8 @@ func (h *EvolutionHandler) Promote(c *gin.Context) {
 
 	var promoted saasstore.GeneRecord
 	err = h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("id = ? AND role IN ?", id, []string{saasstore.GeneRoleChallenger, saasstore.GeneRoleRetired}).First(&promoted).Error; err != nil {
+		if err := tx.Where("id = ? AND candidate_schema_version = ? AND role IN ?",
+			id, ga.CoreCandidateSchemaVersion, []string{saasstore.GeneRoleChallenger, saasstore.GeneRoleRetired}).First(&promoted).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&saasstore.GeneRecord{}).
@@ -353,42 +457,45 @@ func championCacheKey(strategyID string) string {
 
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
-		Pair                      string   `json:"pair"`
-		ResearchDatasetID         uint     `json:"research_dataset_id"`
-		InstrumentID              string   `json:"instrument_id"`
-		DataSource                string   `json:"data_source"`
-		ExecutionMode             string   `json:"execution_mode"`
-		TrainStartMs              int64    `json:"train_start_ms"`
-		TrainEndMs                int64    `json:"train_end_ms"`
-		Interval                  string   `json:"interval"`
-		PopSize                   int      `json:"pop_size"`
-		MaxGenerations            int      `json:"max_generations"`
-		InitialCapital            float64  `json:"initial_capital"`
-		MonthlyDCA                float64  `json:"monthly_dca"`
-		EvolveRebalanceThreshold  bool     `json:"evolve_rebalance_threshold"`
-		EvolveForceFullThreshold  bool     `json:"evolve_force_full_threshold"`
-		EvolveForceEmptyThreshold bool     `json:"evolve_force_empty_threshold"`
-		EvolveGamma               bool     `json:"evolve_gamma"`
-		EnableWMean               bool     `json:"enable_w_mean"`
-		EnableWMomentum           bool     `json:"enable_w_momentum"`
-		EnableWBreakout           bool     `json:"enable_w_breakout"`
-		PositionStructure         string   `json:"position_structure"`
-		TradePenalty              float64  `json:"trade_penalty"`
-		FeeRate                   float64  `json:"fee_rate"`
-		SpreadRate                float64  `json:"spread_rate"`
-		LongTermFilterEnabled     bool     `json:"long_term_filter_enabled"`
-		LongTermFilterMonths      int      `json:"long_term_filter_months"`
-		SpawnMode                 string   `json:"spawn_mode"`
-		TestMode                  bool     `json:"test_mode"`
-		TraceMode                 string   `json:"trace_mode"`
-		ComputeMonitorEnabled     bool     `json:"compute_monitor_enabled"`
-		ContinuousMode            string   `json:"continuous_mode"`
-		ContinuousIterations      int      `json:"continuous_iterations"`
-		ContinuousUnlimited       bool     `json:"continuous_unlimited"`
-		StandardStartMs           int64    `json:"standard_start_ms"`
-		StandardEndMs             int64    `json:"standard_end_ms"`
-		SeedGeneID                uint     `json:"seed_gene_id"`
-		FixedParamKeys            []string `json:"fixed_param_keys"`
+		Pair                      string                       `json:"pair"`
+		ResearchDatasetID         uint                         `json:"research_dataset_id"`
+		InstrumentID              string                       `json:"instrument_id"`
+		DataSource                string                       `json:"data_source"`
+		ExecutionMode             string                       `json:"execution_mode"`
+		TrainStartMs              int64                        `json:"train_start_ms"`
+		TrainEndMs                int64                        `json:"train_end_ms"`
+		Interval                  string                       `json:"interval"`
+		PopSize                   int                          `json:"pop_size"`
+		MaxGenerations            int                          `json:"max_generations"`
+		InitialCapital            float64                      `json:"initial_capital"`
+		MonthlyDCA                float64                      `json:"monthly_dca"`
+		EvolveRebalanceThreshold  bool                         `json:"evolve_rebalance_threshold"`
+		EvolveForceFullThreshold  bool                         `json:"evolve_force_full_threshold"`
+		EvolveForceEmptyThreshold bool                         `json:"evolve_force_empty_threshold"`
+		EvolveGamma               bool                         `json:"evolve_gamma"`
+		EnableWMean               bool                         `json:"enable_w_mean"`
+		EnableWMomentum           bool                         `json:"enable_w_momentum"`
+		EnableWBreakout           bool                         `json:"enable_w_breakout"`
+		PositionStructure         string                       `json:"position_structure"`
+		TradePenalty              float64                      `json:"trade_penalty"`
+		FeeRate                   float64                      `json:"fee_rate"`
+		SpreadRate                float64                      `json:"spread_rate"`
+		LongTermFilterEnabled     bool                         `json:"long_term_filter_enabled"`
+		LongTermFilterMonths      int                          `json:"long_term_filter_months"`
+		SpawnMode                 string                       `json:"spawn_mode"`
+		TestMode                  bool                         `json:"test_mode"`
+		TraceMode                 string                       `json:"trace_mode"`
+		ComputeMonitorEnabled     bool                         `json:"compute_monitor_enabled"`
+		ContinuousMode            string                       `json:"continuous_mode"`
+		ContinuousIterations      int                          `json:"continuous_iterations"`
+		ContinuousUnlimited       bool                         `json:"continuous_unlimited"`
+		StandardStartMs           int64                        `json:"standard_start_ms"`
+		StandardEndMs             int64                        `json:"standard_end_ms"`
+		SeedGeneID                uint                         `json:"seed_gene_id"`
+		FixedParamKeys            []string                     `json:"fixed_param_keys"`
+		MultiMarketEnabled        bool                         `json:"multi_market_enabled"`
+		MultiMarketSelections     []epoch.MultiMarketSelection `json:"multi_market_selections"`
+		GridCoverageEnabled       bool                         `json:"grid_coverage_enabled"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -397,12 +504,14 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	}
 	var result struct {
 		CurrentGeneration      int                    `json:"current_generation"`
-		BestScore              float64                `json:"best_score"`
-		MaxDrawdown            float64                `json:"max_drawdown"`
+		BestValid              bool                   `json:"best_valid"`
+		BestScore              *float64               `json:"best_score"`
+		MaxDrawdown            *float64               `json:"max_drawdown"`
 		MutationProbability    float64                `json:"mutation_probability"`
 		MutationScale          float64                `json:"mutation_scale"`
 		UpdatedAt              string                 `json:"updated_at"`
 		WindowScores           []quant.CrucibleResult `json:"window_scores"`
+		MarketPerformance      []ga.MarketPerformance `json:"market_performance"`
 		BestParamPack          json.RawMessage        `json:"best_param_pack"`
 		GeneRecordID           uint                   `json:"gene_record_id"`
 		ContinuousMode         string                 `json:"continuous_mode"`
@@ -421,6 +530,10 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		ComputeRemainingSec    float64                `json:"compute_remaining_sec"`
 		ComputeStartedAt       string                 `json:"compute_started_at"`
 		ComputeUpdatedAt       string                 `json:"compute_updated_at"`
+		EvaluatedCount         int64                  `json:"evaluated_count"`
+		ValidCount             int64                  `json:"valid_count"`
+		SkippedCount           int64                  `json:"skipped_count"`
+		FailedCount            int64                  `json:"failed_count"`
 		Fitness                struct {
 			ScoreTotal  float64 `json:"ScoreTotal"`
 			MaxDrawdown float64 `json:"MaxDrawdown"`
@@ -430,23 +543,11 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	if result.CurrentGeneration > 0 {
 		currentGeneration = result.CurrentGeneration
 	}
-	bestScore := result.BestScore
-	if bestScore == 0 {
-		bestScore = result.Fitness.ScoreTotal
-	}
-	maxDrawdown := result.MaxDrawdown
-	if maxDrawdown == 0 {
-		maxDrawdown = result.Fitness.MaxDrawdown
-	}
 	continuousMode := firstNonEmpty(result.ContinuousMode, cfg.ContinuousMode)
 	continuousIterations := firstNonZeroInt(result.ContinuousIterations, cfg.ContinuousIterations)
 	continuousUnlimited := result.ContinuousUnlimited || cfg.ContinuousUnlimited
-	totalEvaluations := currentGeneration * cfg.PopSize
 	totalPlannedEvaluations := cfg.PopSize * cfg.MaxGenerations
 	if continuousMode != "" {
-		if result.CurrentIteration > 0 {
-			totalEvaluations = ((result.CurrentIteration-1)*cfg.MaxGenerations + currentGeneration) * cfg.PopSize
-		}
 		if continuousUnlimited {
 			totalPlannedEvaluations = 0
 		} else {
@@ -498,14 +599,24 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"standard_champion_score":      result.StandardChampionScore,
 		"seed_gene_id":                 cfg.SeedGeneID,
 		"fixed_param_keys":             cfg.FixedParamKeys,
-		"best_score":                   bestScore,
-		"max_drawdown":                 maxDrawdown,
+		"multi_market_enabled":         cfg.MultiMarketEnabled,
+		"multi_market_selections":      cfg.MultiMarketSelections,
+		"grid_coverage_enabled":        cfg.GridCoverageEnabled,
+		"search_hash":                  task.SearchHash,
+		"best_valid":                   result.BestValid,
+		"best_score":                   nullableMetric(result.BestValid, result.BestScore),
+		"max_drawdown":                 nullableMetric(result.BestValid, result.MaxDrawdown),
 		"window_score":                 crucibleScores(result.WindowScores),
+		"market_performance":           result.MarketPerformance,
 		"best_param_pack":              parseRawJSON(result.BestParamPack),
 		"gene_record_id":               result.GeneRecordID,
 		"mutation_probability":         result.MutationProbability,
 		"mutation_scale":               result.MutationScale,
-		"evaluated_individuals":        totalEvaluations,
+		"evaluated_individuals":        result.EvaluatedCount,
+		"evaluated_count":              result.EvaluatedCount,
+		"valid_count":                  result.ValidCount,
+		"skipped_count":                result.SkippedCount,
+		"failed_count":                 result.FailedCount,
 		"planned_evaluations":          totalPlannedEvaluations,
 		"computed_units":               result.ComputedUnits,
 		"planned_compute_units":        result.PlannedComputeUnits,
@@ -531,23 +642,26 @@ func genePtrResponse(record *saasstore.GeneRecord) any {
 
 func geneResponse(record saasstore.GeneRecord) gin.H {
 	return gin.H{
-		"id":             record.ID,
-		"role":           record.Role,
-		"strategy_id":    record.StrategyID,
-		"instrument_id":  record.InstrumentID,
-		"data_source":    record.DataSource,
-		"interval":       record.Interval,
-		"execution_mode": record.ExecutionMode,
-		"name":           record.Name,
-		"notes":          record.Notes,
-		"tags":           parseStringSlice(record.Tags),
-		"search_config":  parseRawJSON(json.RawMessage(record.SearchConfig)),
-		"created_at":     record.CreatedAt.Format(time.RFC3339),
-		"activated_at":   formatOptionalTime(record.ActivatedAt),
-		"score_total":    record.ScoreTotal,
-		"max_drawdown":   record.MaxDrawdown,
-		"window_score":   parseWindowScores(record.WindowScore),
-		"param_pack":     parseRawJSON(json.RawMessage(record.ParamPack)),
+		"id":                       record.ID,
+		"role":                     record.Role,
+		"strategy_id":              record.StrategyID,
+		"candidate_schema_version": record.CandidateSchemaVersion,
+		"search_hash":              record.SearchHash,
+		"instrument_id":            record.InstrumentID,
+		"data_source":              record.DataSource,
+		"interval":                 record.Interval,
+		"execution_mode":           record.ExecutionMode,
+		"name":                     record.Name,
+		"notes":                    record.Notes,
+		"tags":                     parseStringSlice(record.Tags),
+		"search_config":            parseRawJSON(json.RawMessage(record.SearchConfig)),
+		"created_at":               record.CreatedAt.Format(time.RFC3339),
+		"activated_at":             formatOptionalTime(record.ActivatedAt),
+		"score_total":              record.ScoreTotal,
+		"max_drawdown":             record.MaxDrawdown,
+		"window_score":             parseWindowScores(record.WindowScore),
+		"market_performance":       parseRawJSON(json.RawMessage(record.MarketPerformance)),
+		"param_pack":               parseRawJSON(json.RawMessage(record.ParamPack)),
 	}
 }
 
@@ -623,6 +737,13 @@ func firstNonZeroInt(values ...int) int {
 		}
 	}
 	return 0
+}
+
+func nullableMetric(valid bool, value *float64) any {
+	if !valid || value == nil {
+		return nil
+	}
+	return *value
 }
 
 func parseWindowScores(raw saasstore.JSONB) map[string]float64 {

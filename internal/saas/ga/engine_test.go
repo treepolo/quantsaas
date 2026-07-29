@@ -83,7 +83,7 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 			SpreadRate: 0.0005,
 		},
 		SeedGeneID: 42,
-	})
+	}, SearchIdentity{SchemaVersion: CoreCandidateSchemaVersion})
 
 	var cfg map[string]any
 	if err := json.Unmarshal(raw, &cfg); err != nil {
