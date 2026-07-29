@@ -351,11 +351,17 @@ function CandlestickCanvas({ bars, selectionStart, selectionEnd, onSelection }: 
     ctx.fillStyle = "#020617"; ctx.fillRect(0, 0, width, height);
     if (!bars.length) { ctx.fillStyle = "#64748b"; ctx.font = "16px sans-serif"; ctx.fillText("尚無 K 線", 24, 40); return; }
     const low = Math.min(...bars.map((bar) => bar.low)), high = Math.max(...bars.map((bar) => bar.high));
-    const range = Math.max(high - low, Number.EPSILON), step = width / bars.length;
+    const useLogScale = low > 0 && high > 0;
+    const scaleLow = useLogScale ? Math.log(low) : low;
+    const scaleHigh = useLogScale ? Math.log(high) : high;
+    const range = Math.max(scaleHigh - scaleLow, Number.EPSILON), step = width / bars.length;
     if (selectionStart >= 0 && selectionEnd >= selectionStart) { ctx.fillStyle = "rgba(45,212,191,.10)"; ctx.fillRect(selectionStart * step, 0, (selectionEnd - selectionStart + 1) * step, height); }
     bars.forEach((bar, index) => {
       const x = index * step + step / 2;
-      const y = (value: number) => 8 + (high - value) / range * (height - 16);
+      const y = (value: number) => {
+        const scaled = useLogScale ? Math.log(Math.max(value, Number.MIN_VALUE)) : value;
+        return 8 + (scaleHigh - scaled) / range * (height - 16);
+      };
       const rising = bar.close >= bar.open;
       ctx.strokeStyle = rising ? "#2dd4bf" : "#f87171"; ctx.fillStyle = ctx.strokeStyle;
       ctx.beginPath(); ctx.moveTo(x, y(bar.high)); ctx.lineTo(x, y(bar.low)); ctx.stroke();
