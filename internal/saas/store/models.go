@@ -291,13 +291,19 @@ type GeneParameterGridPoint struct {
 	UpdatedAt      time.Time
 	SearchHash     string  `gorm:"size:64;not null;index;uniqueIndex:idx_gene_parameter_grid_identity"`
 	ParameterKey   string  `gorm:"size:64;not null;uniqueIndex:idx_gene_parameter_grid_identity"`
-	ParameterState string  `gorm:"size:16;not null;uniqueIndex:idx_gene_parameter_grid_identity"`
-	GridIndex      int64   `gorm:"not null;uniqueIndex:idx_gene_parameter_grid_identity"`
-	Generation     int     `gorm:"not null;default:0;uniqueIndex:idx_gene_parameter_grid_identity"`
+	ParameterState string  `gorm:"size:16;uniqueIndex:idx_gene_parameter_grid_identity"`
+	GridIndex      int64   `gorm:"uniqueIndex:idx_gene_parameter_grid_identity"`
+	Generation     int     `gorm:"uniqueIndex:idx_gene_parameter_grid_identity"`
 	GridValue      float64 `gorm:"type:double precision;not null"`
 	Count          int64   `gorm:"not null;default:0"`
-	LastTaskID     uint    `gorm:"not null;index"`
-	LastGeneration int     `gorm:"not null;default:0"`
+	LastTaskID     uint    `gorm:"index"`
+	LastGeneration int
+	// TaskID and GridStep keep the withdrawn table's NOT NULL columns and
+	// unique index writable. They are compatibility storage only; current
+	// identity and queries use SearchHash, ParameterState, GridIndex and
+	// Generation.
+	TaskID   uint  `gorm:"not null;default:0;index;uniqueIndex:idx_gene_parameter_grid_unique"`
+	GridStep int64 `gorm:"not null;default:0;uniqueIndex:idx_gene_parameter_grid_unique"`
 }
 
 // BacktestSpec is the immutable identity of one fully resolved backtest input.

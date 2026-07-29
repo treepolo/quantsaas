@@ -49,3 +49,29 @@ func TestCandidateEvaluationModelHasAtomicIdentityConstraint(t *testing.T) {
 		}
 	}
 }
+
+func TestGridCoverageModelKeepsLegacyTableWritable(t *testing.T) {
+	parsed, err := schema.Parse(&saasstore.GeneParameterGridPoint{}, &sync.Map{}, schema.NamingStrategy{})
+	if err != nil {
+		t.Fatalf("parse grid model schema: %v", err)
+	}
+	for _, name := range []string{"ParameterState", "GridIndex", "Generation", "LastTaskID", "LastGeneration"} {
+		field := parsed.LookUpField(name)
+		if field == nil {
+			t.Fatalf("missing current grid field %s", name)
+		}
+		if field.NotNull {
+			t.Fatalf("%s must remain nullable while legacy rows exist", name)
+		}
+	}
+	for _, name := range []string{"TaskID", "GridStep"} {
+		field := parsed.LookUpField(name)
+		if field == nil || !field.NotNull {
+			t.Fatalf("legacy compatibility field %s must remain writable and NOT NULL", name)
+		}
+	}
+	index, ok := parsed.ParseIndexes()["idx_gene_parameter_grid_unique"]
+	if !ok || index.Class != "UNIQUE" {
+		t.Fatal("legacy grid uniqueness index is no longer represented by the model")
+	}
+}

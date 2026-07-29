@@ -252,6 +252,8 @@ func (s *GormGenomeStore) RecordGridCoverage(ctx context.Context, scope GeneScop
 			Count:          count,
 			LastTaskID:     taskID,
 			LastGeneration: generation,
+			TaskID:         taskID,
+			GridStep:       legacyGridStep(generation, key.index),
 		})
 	}
 	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
@@ -270,6 +272,10 @@ func (s *GormGenomeStore) RecordGridCoverage(ctx context.Context, scope GeneScop
 			"updated_at":      time.Now().UTC(),
 		}),
 	}).CreateInBatches(&rows, 500).Error
+}
+
+func legacyGridStep(generation int, gridIndex int64) int64 {
+	return gridIndex + int64(generation)*1_000_000
 }
 
 func candidateFitness(row saasstore.GeneCandidateEvaluation) FitnessResult {
