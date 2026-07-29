@@ -82,6 +82,12 @@ func TestMultiMarketIdentityIsOrderIndependentAndDatasetComplete(t *testing.T) {
 		},
 	}
 	first := BuildSearchIdentity("sigmoid-dca-btc", plan)
+	if first.ScoringVersion != MultiMarketScoringVersion {
+		t.Fatalf("scoring version = %q, want configured multi-market version", first.ScoringVersion)
+	}
+	if first.ScoringVersion != "multi-market-log-annualized-v2" {
+		t.Fatalf("scoring version = %q, want corrected annualized formula v2", first.ScoringVersion)
+	}
 	reordered := plan
 	reordered.Datasets = []DatasetIdentity{plan.Datasets[1], plan.Datasets[0]}
 	if first.Hash() != BuildSearchIdentity("sigmoid-dca-btc", reordered).Hash() {

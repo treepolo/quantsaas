@@ -14,7 +14,7 @@ import (
 
 const (
 	SingleMarketScoringVersion = "ga-crucible-fitness-v1"
-	MultiMarketScoringVersion  = "multi-market-log-annualized-v1"
+	MultiMarketScoringVersion  = "multi-market-log-annualized-v2"
 )
 
 type DatasetIdentity struct {

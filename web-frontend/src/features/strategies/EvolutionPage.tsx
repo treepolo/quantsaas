@@ -443,7 +443,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
   const [spawnMode, setSpawnMode] = useState<"inherit" | "random_once" | "manual">(() => savedInput?.spawn_mode ?? "inherit");
   const [traceMode, setTraceMode] = useState<TraceMode>(() => savedInput?.trace_mode ?? "off");
   const [computeMonitorEnabled, setComputeMonitorEnabled] = useState(() => savedInput?.compute_monitor_enabled ?? false);
-  const [continuousMode, setContinuousMode] = useState<"" | "standardized_best" | "random">(() => savedInput?.continuous_mode ?? "");
+  const [continuousMode, setContinuousMode] = useState<"" | "same_settings_best" | "standardized_best" | "random">(() => savedInput?.continuous_mode ?? "");
   const [continuousIterations, setContinuousIterations] = useState(() => savedInput?.continuous_iterations ?? 3);
   const [continuousUnlimited, setContinuousUnlimited] = useState(() => savedInput?.continuous_unlimited ?? false);
   const [standardStartDate, setStandardStartDate] = useState(() => msToDateInput(savedInput?.standard_start_ms) || msToDateInput(savedInput?.train_start_ms) || dateInputValue(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)));
@@ -809,7 +809,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
           <div className="rounded-lg border border-white/[0.04] bg-white/[0.02] p-3 md:col-span-2">
             <label className="flex items-start gap-3 text-sm text-slate-300">
               <input className="mt-1" type="checkbox" checked={multiMarketEnabled} onChange={(event) => toggleMultiMarket(event.target.checked)} />
-              <span><span className="block font-semibold">多市場共同評分</span><span className="mt-1 block text-xs text-slate-500">明確啟用後至少選兩個市場；所有市場共用同一候選參數，分數為各市場總報酬對數之和。上方單市場選擇不參與評分。</span></span>
+              <span><span className="block font-semibold">多市場共同評分</span><span className="mt-1 block text-xs text-slate-500">明確啟用後至少選兩個市場；所有市場共用同一候選參數，分數為各行情年化報酬率的 ln(1+r) 加總。上方單市場選擇不參與評分。</span></span>
             </label>
             {multiMarketEnabled ? <div className="mt-3 grid gap-2 md:grid-cols-3">
               {instruments.filter((item) => item.supported_intervals.includes(interval)).map((item) => (
@@ -955,7 +955,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
               </span>
             </label>
           </div>
-          <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
+          <Select label="連續搜尋" value={continuousMode} onChange={(value) => setContinuousMode(value as typeof continuousMode)} options={[["", "單次搜尋"], ["same_settings_best", "接續同設定最佳"], ["standardized_best", "接續標準化最佳"], ["random", "連續隨機搜尋"]]} />
           {!continuousUnlimited ? <NumberInput label="連續輪數" min={1} max={100} value={continuousIterations} onChange={setContinuousIterations} /> : <div />}
           <label className="flex items-center gap-3 rounded-lg border border-white/[0.04] bg-white/[0.02] px-3 py-3 text-sm text-slate-300">
             <input type="checkbox" checked={continuousUnlimited} onChange={(event) => setContinuousUnlimited(event.target.checked)} />
@@ -968,6 +968,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
               <div className="md:col-span-2 text-xs text-slate-500">每輪結束後會用這段區間比較該標的參數庫，下一輪接續標準化綜合評分最高的參數。</div>
             </>
           ) : null}
+          {continuousMode === "same_settings_best" ? <div className="md:col-span-2 text-xs text-slate-500">第一輪沿用目前起始設定；後續每輪以相同搜尋身分下實際綜合評分最高的歷史參數為主要種子，並跳過已完成評估的候選。</div> : null}
           <div className="md:col-span-2">
             <div className="mb-2 text-sm text-slate-300">原始追蹤模式</div>
             <div className="grid gap-2 md:grid-cols-4">

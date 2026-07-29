@@ -79,7 +79,7 @@ export type EvolutionTask = {
   compute_remaining_sec?: number;
   compute_started_at?: string;
   compute_updated_at?: string;
-  continuous_mode?: "" | "standardized_best" | "random";
+  continuous_mode?: "" | "same_settings_best" | "standardized_best" | "random";
   current_iteration?: number;
   continuous_iterations?: number;
   continuous_unlimited?: boolean;
@@ -211,7 +211,7 @@ export type CreateTaskInput = {
   test_mode?: boolean;
   trace_mode?: TraceMode;
   compute_monitor_enabled?: boolean;
-  continuous_mode?: "" | "standardized_best" | "random";
+  continuous_mode?: "" | "same_settings_best" | "standardized_best" | "random";
   continuous_iterations?: number;
   continuous_unlimited?: boolean;
   standard_start_ms?: number;

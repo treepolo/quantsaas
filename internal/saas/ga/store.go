@@ -36,7 +36,7 @@ func (s *GormGenomeStore) LoadEliteGenes(ctx context.Context, scope GeneScope, l
 			scope.StrategyID, scope.InstrumentID, scope.DataSource, scope.Interval, scope.ExecutionMode,
 			[]string{saasstore.GeneRoleChampion, saasstore.GeneRoleChallenger}).
 		Where("candidate_schema_version = ? AND search_hash = ?", CoreCandidateSchemaVersion, scope.SearchHash).
-		Order("CASE role WHEN 'champion' THEN 0 WHEN 'challenger' THEN 1 ELSE 2 END, score_total DESC, created_at DESC").
+		Order("score_total DESC, CASE role WHEN 'champion' THEN 0 WHEN 'challenger' THEN 1 ELSE 2 END, created_at DESC").
 		Limit(limit).
 		Find(&records).Error; err != nil {
 		return nil, err

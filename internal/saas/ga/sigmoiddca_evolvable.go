@@ -328,16 +328,14 @@ func (e SigmoidDCAEvolvable) evaluateMultiMarket(ctx context.Context, chromosome
 			TotalReturn:  metrics.ROI,
 			MaxDrawdown:  metrics.MaxDrawdown,
 		}
-		if metrics.MaxDrawdown > result.MaxDrawdown {
-			result.MaxDrawdown = metrics.MaxDrawdown
-		}
-		if metrics.MaxDrawdown >= 0.88 {
+		var fatalDrawdown bool
+		result.MaxDrawdown, fatalDrawdown = aggregateMultiMarketDrawdown(result.MaxDrawdown, metrics.MaxDrawdown)
+		if fatalDrawdown {
 			performance.FailureReason = "最大回撤觸及 88% 淘汰門檻"
-			result.Markets = append(result.Markets, performance)
 			result.Fatal = true
-			result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
-			result.ScoreTotal = FatalFitnessScore
-			return result, nil
+			if result.FailureReason == "" {
+				result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
+			}
 		}
 		if len(market.Window.Bars) < 2 {
 			return FitnessResult{}, fmt.Errorf("行情 %s 的資料不足", market.InstrumentID)
@@ -348,25 +346,34 @@ func (e SigmoidDCAEvolvable) evaluateMultiMarket(ctx context.Context, chromosome
 			return FitnessResult{}, fmt.Errorf("行情 %s 的可評估期間無效", market.InstrumentID)
 		}
 		if 1+metrics.ROI <= 0 {
-			performance.FailureReason = "年化成長倍數無法定義"
+			if performance.FailureReason == "" {
+				performance.FailureReason = "年化成長倍數無法定義"
+			}
 			result.Markets = append(result.Markets, performance)
 			result.Fatal = true
-			result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
-			result.ScoreTotal = FatalFitnessScore
-			return result, nil
+			if result.FailureReason == "" {
+				result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
+			}
+			continue
 		}
 		scoreContribution, annualized, ok := multiMarketReturnScore(metrics.ROI, years)
 		if !ok {
-			performance.FailureReason = "年化報酬無法定義"
+			if performance.FailureReason == "" {
+				performance.FailureReason = "年化報酬無法定義"
+			}
 			result.Markets = append(result.Markets, performance)
 			result.Fatal = true
-			result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
-			result.ScoreTotal = FatalFitnessScore
-			return result, nil
+			if result.FailureReason == "" {
+				result.FailureReason = fmt.Sprintf("%s：%s", market.InstrumentID, performance.FailureReason)
+			}
+			continue
 		}
 		performance.AnnualizedReturn = &annualized
 		result.Markets = append(result.Markets, performance)
 		result.ScoreTotal += scoreContribution
+	}
+	if result.Fatal {
+		result.ScoreTotal = FatalFitnessScore
 	}
 	return result, nil
 }
@@ -375,12 +382,17 @@ func multiMarketReturnScore(totalReturn float64, years float64) (score float64, 
 	if years <= 0 || 1+totalReturn <= 0 {
 		return 0, 0, false
 	}
-	score = math.Log1p(totalReturn)
-	annualized = math.Expm1(score / years)
+	score = math.Log1p(totalReturn) / years
+	annualized = math.Expm1(score)
 	if math.IsNaN(score) || math.IsInf(score, 0) || math.IsNaN(annualized) || math.IsInf(annualized, 0) {
 		return 0, 0, false
 	}
 	return score, annualized, true
+}
+
+func aggregateMultiMarketDrawdown(currentMax float64, marketDrawdown float64) (maxDrawdown float64, fatal bool) {
+	maxDrawdown = math.Max(currentMax, marketDrawdown)
+	return maxDrawdown, maxDrawdown >= 0.88
 }
 
 func (SigmoidDCAEvolvable) DecodeElite(raw []byte) Gene {

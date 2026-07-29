@@ -33,6 +33,10 @@ const (
 	TaskStatusFailed     = "failed"
 	TaskStatusCancelled  = "cancelled"
 
+	ContinuousModeSameSettingsBest = "same_settings_best"
+	ContinuousModeStandardizedBest = "standardized_best"
+	ContinuousModeRandom           = "random"
+
 	SearchInitialUSDT = 1000000
 )
 
@@ -495,10 +499,7 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 		}
 		iteration++
 		cfg := s.epochConfig(req, spawn, taskID)
-		cfg.RandomPopulation = req.ContinuousMode == "random"
-		if req.ContinuousMode == "standardized_best" && champion != nil {
-			cfg.SeedParamPack = champion.ParamPack
-		}
+		applyContinuousIteration(&cfg, req, iteration, champion)
 		cfg.OnProgress = s.epochProgressUpdater(taskID, req, iteration)
 
 		result, err := s.engine.RunEpoch(ctx, cfg)
@@ -508,7 +509,7 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 		}
 		lastResult = result
 
-		if req.ContinuousMode == "standardized_best" {
+		if req.ContinuousMode == ContinuousModeStandardizedBest {
 			nextChampion, err := s.refreshStandardizedChampion(ctx, req, result.GeneRecordID, champion)
 			if err != nil {
 				lastErr = err
@@ -545,6 +546,20 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 	_ = s.db.Model(&saasstore.EvolutionTask{}).Where("id = ?", taskID).Updates(updates).Error
 
 	s.clearActiveTask(taskID)
+}
+
+func applyContinuousIteration(cfg *ga.EpochConfig, req CreateTaskRequest, iteration int, champion *standardizedChampion) {
+	cfg.RandomPopulation = req.ContinuousMode == ContinuousModeRandom
+	switch req.ContinuousMode {
+	case ContinuousModeStandardizedBest:
+		if champion != nil {
+			cfg.SeedParamPack = champion.ParamPack
+		}
+	case ContinuousModeSameSettingsBest:
+		if iteration > 1 {
+			cfg.SeedParamPack = nil
+		}
+	}
 }
 
 func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, taskID uint) ga.EpochConfig {
@@ -1364,7 +1379,7 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 		return errors.New("seed_gene_id is required when fixed_param_keys is not empty")
 	}
 	switch req.ContinuousMode {
-	case "", "standardized_best", "random":
+	case "", ContinuousModeSameSettingsBest, ContinuousModeStandardizedBest, ContinuousModeRandom:
 	default:
 		return fmt.Errorf("unsupported continuous_mode: %s", req.ContinuousMode)
 	}
@@ -1372,7 +1387,7 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 		if !req.ContinuousUnlimited && (req.ContinuousIterations < 1 || req.ContinuousIterations > 100) {
 			return errors.New("continuous_iterations must be between 1 and 100")
 		}
-		if req.ContinuousMode == "standardized_best" {
+		if req.ContinuousMode == ContinuousModeStandardizedBest {
 			if req.StandardStartMs == 0 || req.StandardEndMs == 0 {
 				return errors.New("standard_start_ms and standard_end_ms are required")
 			}
