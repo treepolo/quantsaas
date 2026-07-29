@@ -89,6 +89,11 @@ func ParameterAxes(options GeneOptions) []ParameterAxis {
 		if field.kind == "int" {
 			step = 1
 		}
+		state := parameterState(field.key, options)
+		gridSize := legalGridSize(field.key, field.kind)
+		if state != ParameterStateEvolving {
+			gridSize = 1
+		}
 		axes = append(axes, ParameterAxis{
 			Key:      field.key,
 			Label:    field.label,
@@ -96,9 +101,9 @@ func ParameterAxes(options GeneOptions) []ParameterAxis {
 			Minimum:  bound.Min,
 			Maximum:  bound.Max,
 			Step:     step,
-			State:    parameterState(field.key, options),
+			State:    state,
 			Value:    chromosomeValue(base, field.key),
-			GridSize: legalGridSize(field.key, field.kind),
+			GridSize: gridSize,
 		})
 	}
 	return axes

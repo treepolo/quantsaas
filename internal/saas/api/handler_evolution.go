@@ -215,15 +215,32 @@ func (h *EvolutionHandler) GetGridCoverage(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	var gridConfig struct {
+		EvolveRebalanceThreshold  bool     `json:"evolve_rebalance_threshold"`
+		EvolveForceFullThreshold  bool     `json:"evolve_force_full_threshold"`
+		EvolveForceEmptyThreshold bool     `json:"evolve_force_empty_threshold"`
+		EvolveGamma               bool     `json:"evolve_gamma"`
+		EnableWMean               bool     `json:"enable_w_mean"`
+		EnableWMomentum           bool     `json:"enable_w_momentum"`
+		EnableWBreakout           bool     `json:"enable_w_breakout"`
+		PositionStructure         string   `json:"position_structure"`
+		FixedParamKeys            []string `json:"fixed_param_keys"`
+		FeeRate                   float64  `json:"fee_rate"`
+		SpreadRate                float64  `json:"spread_rate"`
+	}
+	_ = json.Unmarshal([]byte(task.Config), &gridConfig)
+	positionStructure := sigmoiddca.NormalizePositionStructure(gridConfig.PositionStructure)
 	metadata := ga.ParameterAxes(ga.GeneOptions{
-		EvolveRebalanceThreshold:  true,
-		EvolveForceFullThreshold:  true,
-		EvolveForceEmptyThreshold: true,
-		EvolveGamma:               true,
-		EnableWMean:               true,
-		EnableWMomentum:           true,
-		EnableWBreakout:           true,
-		PositionStructure:         sigmoiddca.PositionStructureDualLayer,
+		EvolveRebalanceThreshold:  gridConfig.EvolveRebalanceThreshold,
+		EvolveForceFullThreshold:  gridConfig.EvolveForceFullThreshold,
+		EvolveForceEmptyThreshold: gridConfig.EvolveForceEmptyThreshold,
+		EvolveGamma:               gridConfig.EvolveGamma,
+		EnableWMean:               gridConfig.EnableWMean,
+		EnableWMomentum:           gridConfig.EnableWMomentum,
+		EnableWBreakout:           gridConfig.EnableWBreakout,
+		PositionStructure:         positionStructure,
+		DisableMinimumTrade:       positionStructure == sigmoiddca.PositionStructureFloatingOnly || (gridConfig.FeeRate == 0 && gridConfig.SpreadRate == 0),
+		FixedParamKeys:            gridConfig.FixedParamKeys,
 	})
 	byKey := make(map[string]ga.ParameterAxis, len(metadata))
 	for _, axis := range metadata {

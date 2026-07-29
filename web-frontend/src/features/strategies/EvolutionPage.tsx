@@ -574,7 +574,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
     train_start_ms: multiMarketEnabled ? undefined : dayStartMs(startDate),
     train_end_ms: multiMarketEnabled ? undefined : dayEndMs(endDate),
     monthly_dca: monthlyDCA,
-    evolve_rebalance_threshold: evolveRebalanceThreshold,
+    evolve_rebalance_threshold: positionStructure !== "floating_only" && evolveRebalanceThreshold,
     evolve_force_full_threshold: evolveForceFullThreshold,
     evolve_force_empty_threshold: evolveForceEmptyThreshold,
     evolve_gamma: evolveGamma,
@@ -749,7 +749,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
                 {running.compute_monitor_enabled ? <Metric label="預估剩餘" value={formatDurationSeconds(running.compute_remaining_sec)} /> : null}
                 <Metric label="初始本金" value={formatMoney(running.initial_capital ?? SEARCH_INITIAL_CAPITAL)} />
                 <Metric label="每月投入" value={formatMoney(running.monthly_dca ?? 0)} />
-                <Metric label="調倉門檻" value={running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
+                <Metric label="調倉門檻" value={running.position_structure === "floating_only" ? "停用" : running.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                 <Metric label="倉位回饋 Gamma" value={running.evolve_gamma ? "參與演化" : "固定為 0"} />
                 <Metric label="長週期風險濾網" value={running.long_term_filter_enabled ? `${running.long_term_filter_months ?? 10} 月線` : "關閉"} />
                 <Metric label="手續費率" value={running.fee_rate !== undefined ? formatPercent(running.fee_rate) : "0.00%"} />
@@ -933,7 +933,7 @@ function EvolutionPanel({ instrumentNames }: { instrumentNames: Record<string, s
             <div className="grid gap-2 md:grid-cols-3">
               <label className="flex items-center gap-3 text-sm text-slate-300">
                 <input type="checkbox" checked={positionStructure !== "floating_only" && evolveRebalanceThreshold} disabled={positionStructure === "floating_only"} onChange={(event) => setEvolveRebalanceThreshold(event.target.checked)} />
-                演化調倉門檻
+                {positionStructure === "floating_only" ? "調倉門檻（純浮動模型停用）" : "演化調倉門檻"}
               </label>
               <label className="flex items-center gap-3 text-sm text-slate-300">
                 <input type="checkbox" checked={evolveForceFullThreshold} onChange={(event) => setEvolveForceFullThreshold(event.target.checked)} />
@@ -1301,7 +1301,7 @@ function GenomeLibrary({ genomes, instrumentNames }: { genomes: GenomeRecord[]; 
                     <InfoRow label="結束日期" value={formatSearchDate(searchConfig.train_end_ms)} />
                     <InfoRow label="初始本金" value={searchConfig.initial_capital !== undefined ? formatMoney(searchConfig.initial_capital) : "未記錄"} />
                     <InfoRow label="每月投入" value={searchConfig.monthly_dca !== undefined ? formatMoney(searchConfig.monthly_dca) : "未記錄"} />
-                    <InfoRow label="調倉門檻" value={searchConfig.evolve_rebalance_threshold || searchConfig.gene_options?.EvolveRebalanceThreshold || searchConfig.gene_options?.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
+                    <InfoRow label="調倉門檻" value={(searchConfig.position_structure ?? searchConfig.gene_options?.PositionStructure) === "floating_only" ? "停用" : searchConfig.evolve_rebalance_threshold || searchConfig.gene_options?.EvolveRebalanceThreshold || searchConfig.gene_options?.evolve_rebalance_threshold ? "參與演化" : "固定為 0"} />
                     <InfoRow label="強制滿倉門檻" value={searchConfig.evolve_force_full_threshold || searchConfig.gene_options?.EvolveForceFullThreshold ? "參與演化" : "固定為 100%"} />
                     <InfoRow label="強制空倉門檻" value={searchConfig.evolve_force_empty_threshold || searchConfig.gene_options?.EvolveForceEmptyThreshold ? "參與演化" : "固定為 0%"} />
                     <InfoRow label="倉位回饋 Gamma" value={searchConfig.evolve_gamma || searchConfig.gene_options?.EvolveGamma ? "參與演化" : "固定為 0"} />

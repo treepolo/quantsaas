@@ -72,6 +72,12 @@ func TestFloatingOnlyDisablesNonEffectiveFieldsAndFingerprint(t *testing.T) {
 		if floatingOnlyDisabledFields[axis.Key] && axis.State != ParameterStateDisabled {
 			t.Fatalf("axis %s state = %s, want disabled", axis.Key, axis.State)
 		}
+		if floatingOnlyDisabledFields[axis.Key] && axis.GridSize != 1 {
+			t.Fatalf("disabled axis %s grid size = %d, want 1", axis.Key, axis.GridSize)
+		}
+		if axis.Key == "rebalance_threshold" && axis.Value != 0 {
+			t.Fatalf("disabled rebalance threshold value = %v, want 0", axis.Value)
+		}
 	}
 }
 
