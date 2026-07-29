@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -77,6 +79,7 @@ type parameterGridPointResponse struct {
 type parameterGridAxisResponse struct {
 	Key    string                       `json:"key"`
 	Label  string                       `json:"label"`
+	Status string                       `json:"status"`
 	Min    float64                      `json:"min"`
 	Max    float64                      `json:"max"`
 	Points []parameterGridPointResponse `json:"points"`
@@ -100,9 +103,24 @@ func (h *EvolutionHandler) GetParameterGrid(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	var observation saasstore.GeneObservation
+	_ = h.db.WithContext(c.Request.Context()).Where("task_id = ?", task.ID).Order("id DESC").First(&observation).Error
+	var resultIdentity struct {
+		SearchHash string `json:"search_hash"`
+	}
+	_ = json.Unmarshal([]byte(task.Result), &resultIdentity)
+	query := h.db.WithContext(c.Request.Context()).Model(&saasstore.GeneParameterGridPoint{})
+	if observation.SearchHash != "" {
+		query = query.Where("search_hash = ?", observation.SearchHash)
+	} else if resultIdentity.SearchHash != "" {
+		query = query.Where("search_hash = ?", resultIdentity.SearchHash)
+	} else {
+		query = query.Where("task_id = ?", task.ID)
+	}
 	var rows []saasstore.GeneParameterGridPoint
-	if err := h.db.WithContext(c.Request.Context()).
-		Where("task_id = ?", task.ID).
+	if err := query.
+		Select("MIN(id) AS id, MIN(task_id) AS task_id, search_hash, parameter_key, grid_step, MAX(grid_value) AS grid_value, SUM(count) AS count").
+		Group("search_hash, parameter_key, grid_step").
 		Order("parameter_key ASC, grid_step ASC").
 		Find(&rows).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -110,32 +128,187 @@ func (h *EvolutionHandler) GetParameterGrid(c *gin.Context) {
 	}
 	pointsByKey := map[string][]parameterGridPointResponse{}
 	for _, row := range rows {
+		value := row.GridValue
+		if value == 0 && !ga.IsMarketThresholdGridKey(row.ParameterKey) {
+			value = ga.GridStoredValue(row.ParameterKey, row.GridStep)
+		}
 		pointsByKey[row.ParameterKey] = append(pointsByKey[row.ParameterKey], parameterGridPointResponse{
-			Value: float64(row.GridStep) * 0.05,
+			Value: value,
 			Count: row.Count,
 		})
 	}
-	type axisDefinition struct{ key, label string }
+	var gridConfig struct {
+		PositionStructure         string  `json:"position_structure"`
+		MarketRegionEnabled       bool    `json:"market_region_enabled"`
+		MarketRegionMaxThresholds int     `json:"market_region_max_thresholds"`
+		EvolveRebalanceThreshold  bool    `json:"evolve_rebalance_threshold"`
+		EvolveForceFullThreshold  bool    `json:"evolve_force_full_threshold"`
+		EvolveForceEmptyThreshold bool    `json:"evolve_force_empty_threshold"`
+		EvolveGamma               bool    `json:"evolve_gamma"`
+		EnableWMean               *bool   `json:"enable_w_mean"`
+		EnableWMomentum           *bool   `json:"enable_w_momentum"`
+		EnableWBreakout           *bool   `json:"enable_w_breakout"`
+		FeeRate                   float64 `json:"fee_rate"`
+		SpreadRate                float64 `json:"spread_rate"`
+	}
+	_ = json.Unmarshal([]byte(task.Config), &gridConfig)
+	type axisDefinition struct{ key, label, status string }
+	statusFor := func(key string) string {
+		if gridConfig.MarketRegionEnabled {
+			switch key {
+			case "micro_reserve_pct", "beta", "rebalance_threshold":
+				return "停用"
+			}
+		}
+		if key == "dust_usd" && gridConfig.FeeRate == 0 && gridConfig.SpreadRate == 0 {
+			return "停用"
+		}
+		if gridConfig.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
+			switch key {
+			case "micro_reserve_pct", "rebalance_threshold", "macro_bear_multiplier", "macro_bull_multiplier", "extra_deploy_pct", "soft_release_months", "soft_release_pct", "hard_release_max_pct", "wedge_delta_threshold", "wedge_vol_ratio_threshold":
+				return "停用"
+			}
+		}
+		switch key {
+		case "rebalance_threshold":
+			if !gridConfig.EvolveRebalanceThreshold {
+				return "固定中性化"
+			}
+		case "gamma":
+			if !gridConfig.MarketRegionEnabled && !gridConfig.EvolveGamma {
+				return "固定中性化"
+			}
+		case "force_full_threshold":
+			if !gridConfig.MarketRegionEnabled && !gridConfig.EvolveForceFullThreshold {
+				return "固定中性化"
+			}
+		case "force_empty_threshold":
+			if !gridConfig.MarketRegionEnabled && !gridConfig.EvolveForceEmptyThreshold {
+				return "固定中性化"
+			}
+		case "w_mean":
+			if !gridConfig.MarketRegionEnabled && gridConfig.EnableWMean != nil && !*gridConfig.EnableWMean {
+				return "固定中性化"
+			}
+		case "w_momentum":
+			if !gridConfig.MarketRegionEnabled && gridConfig.EnableWMomentum != nil && !*gridConfig.EnableWMomentum {
+				return "固定中性化"
+			}
+		case "w_breakout":
+			if !gridConfig.MarketRegionEnabled && gridConfig.EnableWBreakout != nil && !*gridConfig.EnableWBreakout {
+				return "固定中性化"
+			}
+		}
+		return "演化中"
+	}
 	definitions := []axisDefinition{
-		{"micro_reserve_pct", "微觀保留比例"}, {"beta", "Beta"}, {"gamma", "Gamma"},
-		{"w_mean", "均值權重"}, {"w_momentum", "動能權重"}, {"w_breakout", "突破權重"},
-		{"dust_usd", "最小交易金額"}, {"rebalance_threshold", "再平衡門檻"},
-		{"force_full_threshold", "強制滿倉門檻"}, {"force_empty_threshold", "強制空倉門檻"},
-		{"wedge_delta_threshold", "幾何變化門檻"}, {"wedge_vol_ratio_threshold", "幾何活動門檻"},
-		{"macro_bear_multiplier", "偏空倍率"}, {"macro_bull_multiplier", "偏多倍率"},
-		{"extra_deploy_pct", "額外投入比例"}, {"soft_release_months", "緩釋月數"},
-		{"soft_release_pct", "緩釋比例"}, {"hard_release_max_pct", "硬釋放上限"},
+		{"micro_reserve_pct", "微觀保留比例", ""}, {"beta", "Beta", ""}, {"gamma", "Gamma", ""},
+		{"w_mean", "均值權重", ""}, {"w_momentum", "動能權重", ""}, {"w_breakout", "突破權重", ""},
+		{"dust_usd", "最小交易金額", ""}, {"rebalance_threshold", "再平衡門檻", ""},
+		{"force_full_threshold", "強制滿倉門檻", ""}, {"force_empty_threshold", "強制空倉門檻", ""},
+		{"wedge_delta_threshold", "舊微觀最小單權重觸發", ""}, {"wedge_vol_ratio_threshold", "舊微觀最小單波動觸發", ""},
+		{"macro_bear_multiplier", "偏空倍率", ""}, {"macro_bull_multiplier", "偏多倍率", ""},
+		{"extra_deploy_pct", "額外投入比例", ""}, {"soft_release_months", "緩釋月數", ""},
+		{"soft_release_pct", "緩釋比例", ""}, {"hard_release_max_pct", "硬釋放上限", ""},
+	}
+	if gridConfig.MarketRegionEnabled {
+		for _, id := range ga.MarketRegionFeatureIDs {
+			definitions = append(definitions, axisDefinition{"market_region." + id + ".window", id + " 窗口", "演化中"})
+			for index := 1; index <= gridConfig.MarketRegionMaxThresholds; index++ {
+				definitions = append(definitions, axisDefinition{fmt.Sprintf("market_region.%s.threshold_%d", id, index), fmt.Sprintf("%s 判定值 %d", id, index), "演化中"})
+			}
+		}
+	}
+	defined := make(map[string]bool, len(definitions))
+	for _, definition := range definitions {
+		defined[definition.key] = true
+	}
+	for key := range pointsByKey {
+		if defined[key] {
+			continue
+		}
+		label := key
+		if strings.HasPrefix(key, "market_region.state_") {
+			label = strings.ReplaceAll(strings.TrimPrefix(key, "market_region."), ".", " · ")
+		}
+		definitions = append(definitions, axisDefinition{key, label, "演化中"})
+	}
+	sort.Slice(definitions, func(i, j int) bool { return definitions[i].key < definitions[j].key })
+	axisEvolves := func(key string) bool {
+		if strings.HasPrefix(key, "market_region.") {
+			return true
+		}
+		if gridConfig.MarketRegionEnabled {
+			switch key {
+			case "gamma", "w_mean", "w_momentum", "w_breakout", "force_full_threshold", "force_empty_threshold":
+				return true
+			default:
+				return false
+			}
+		}
+		if key == "dust_usd" && gridConfig.FeeRate == 0 && gridConfig.SpreadRate == 0 {
+			return false
+		}
+		if gridConfig.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
+			switch key {
+			case "micro_reserve_pct", "rebalance_threshold", "macro_bear_multiplier", "macro_bull_multiplier", "extra_deploy_pct", "soft_release_months", "soft_release_pct", "hard_release_max_pct", "wedge_delta_threshold", "wedge_vol_ratio_threshold":
+				return false
+			}
+		}
+		switch key {
+		case "rebalance_threshold":
+			return gridConfig.EvolveRebalanceThreshold
+		case "gamma":
+			return gridConfig.EvolveGamma
+		case "force_full_threshold":
+			return gridConfig.EvolveForceFullThreshold
+		case "force_empty_threshold":
+			return gridConfig.EvolveForceEmptyThreshold
+		case "w_mean":
+			return gridConfig.EnableWMean == nil || *gridConfig.EnableWMean
+		case "w_momentum":
+			return gridConfig.EnableWMomentum == nil || *gridConfig.EnableWMomentum
+		case "w_breakout":
+			return gridConfig.EnableWBreakout == nil || *gridConfig.EnableWBreakout
+		}
+		return true
 	}
 	axes := make([]parameterGridAxisResponse, 0, len(definitions))
 	for _, definition := range definitions {
-		bound := quant.HardBounds[definition.key]
-		axes = append(axes, parameterGridAxisResponse{Key: definition.key, Label: definition.label, Min: bound.Min, Max: bound.Max, Points: pointsByKey[definition.key]})
+		boundKey := definition.key
+		if strings.HasPrefix(boundKey, "market_region.state_") {
+			if separator := strings.LastIndex(boundKey, "."); separator >= 0 {
+				boundKey = boundKey[separator+1:]
+			}
+		}
+		bound := quant.HardBounds[boundKey]
+		points := pointsByKey[definition.key]
+		if points == nil {
+			points = []parameterGridPointResponse{}
+		}
+		minimum, maximum := bound.Min, bound.Max
+		if strings.HasPrefix(definition.key, "market_region.") {
+			if len(points) > 0 {
+				minimum, maximum = points[0].Value, points[len(points)-1].Value
+			}
+			if strings.HasSuffix(definition.key, ".window") {
+				minimum, maximum = 2, math.Max(2, maximum)
+			}
+		}
+		status := definition.status
+		if status == "" {
+			status = statusFor(definition.key)
+		}
+		if !axisEvolves(definition.key) {
+			status = "停用"
+		}
+		axes = append(axes, parameterGridAxisResponse{Key: definition.key, Label: definition.label, Status: status, Min: minimum, Max: maximum, Points: points})
 	}
 	c.JSON(http.StatusOK, gin.H{"task_id": task.ID, "axes": axes, "grid_point_count": len(rows)})
 }
 
 func (h *EvolutionHandler) ListTasks(c *gin.Context) {
-	if h.service != nil && h.service.CurrentTask() == nil {
+	if false && h.service != nil && h.service.CurrentTask() == nil {
 		now := time.Now().UTC()
 		if err := h.db.WithContext(c.Request.Context()).
 			Model(&saasstore.EvolutionTask{}).
@@ -418,44 +591,49 @@ func championCacheKey(strategyID string) string {
 
 func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	var cfg struct {
-		Pair                      string   `json:"pair"`
-		ResearchDatasetID         uint     `json:"research_dataset_id"`
-		InstrumentID              string   `json:"instrument_id"`
-		DataSource                string   `json:"data_source"`
-		ExecutionMode             string   `json:"execution_mode"`
-		TrainStartMs              int64    `json:"train_start_ms"`
-		TrainEndMs                int64    `json:"train_end_ms"`
-		Interval                  string   `json:"interval"`
-		PopSize                   int      `json:"pop_size"`
-		MaxGenerations            int      `json:"max_generations"`
-		InitialCapital            float64  `json:"initial_capital"`
-		MonthlyDCA                float64  `json:"monthly_dca"`
-		EvolveRebalanceThreshold  bool     `json:"evolve_rebalance_threshold"`
-		EvolveForceFullThreshold  bool     `json:"evolve_force_full_threshold"`
-		EvolveForceEmptyThreshold bool     `json:"evolve_force_empty_threshold"`
-		EvolveGamma               bool     `json:"evolve_gamma"`
-		EnableWMean               bool     `json:"enable_w_mean"`
-		EnableWMomentum           bool     `json:"enable_w_momentum"`
-		EnableWBreakout           bool     `json:"enable_w_breakout"`
-		PositionStructure         string   `json:"position_structure"`
-		TradePenalty              float64  `json:"trade_penalty"`
-		FeeRate                   float64  `json:"fee_rate"`
-		SpreadRate                float64  `json:"spread_rate"`
-		LongTermFilterEnabled     bool     `json:"long_term_filter_enabled"`
-		LongTermFilterMonths      int      `json:"long_term_filter_months"`
-		SpawnMode                 string   `json:"spawn_mode"`
-		TestMode                  bool     `json:"test_mode"`
-		TraceMode                 string   `json:"trace_mode"`
-		ComputeMonitorEnabled     bool     `json:"compute_monitor_enabled"`
-		ContinuousMode            string   `json:"continuous_mode"`
-		ContinuousIterations      int      `json:"continuous_iterations"`
-		ContinuousUnlimited       bool     `json:"continuous_unlimited"`
-		StandardStartMs           int64    `json:"standard_start_ms"`
-		StandardEndMs             int64    `json:"standard_end_ms"`
-		SeedGeneID                uint     `json:"seed_gene_id"`
-		FixedParamKeys            []string `json:"fixed_param_keys"`
-		MarketRegionEnabled       bool     `json:"market_region_enabled"`
-		MarketRegionMaxThresholds int      `json:"market_region_max_thresholds"`
+		Pair                      string                       `json:"pair"`
+		ResearchDatasetID         uint                         `json:"research_dataset_id"`
+		InstrumentID              string                       `json:"instrument_id"`
+		DataSource                string                       `json:"data_source"`
+		ExecutionMode             string                       `json:"execution_mode"`
+		TrainStartMs              int64                        `json:"train_start_ms"`
+		TrainEndMs                int64                        `json:"train_end_ms"`
+		Interval                  string                       `json:"interval"`
+		PopSize                   int                          `json:"pop_size"`
+		MaxGenerations            int                          `json:"max_generations"`
+		SearchAlgorithm           string                       `json:"search_algorithm"`
+		LayeredLocalPercent       int                          `json:"layered_local_percent"`
+		InitialCapital            float64                      `json:"initial_capital"`
+		MonthlyDCA                float64                      `json:"monthly_dca"`
+		EvolveRebalanceThreshold  bool                         `json:"evolve_rebalance_threshold"`
+		EvolveForceFullThreshold  bool                         `json:"evolve_force_full_threshold"`
+		EvolveForceEmptyThreshold bool                         `json:"evolve_force_empty_threshold"`
+		EvolveGamma               bool                         `json:"evolve_gamma"`
+		EnableWMean               bool                         `json:"enable_w_mean"`
+		EnableWMomentum           bool                         `json:"enable_w_momentum"`
+		EnableWBreakout           bool                         `json:"enable_w_breakout"`
+		PositionStructure         string                       `json:"position_structure"`
+		TradePenalty              float64                      `json:"trade_penalty"`
+		FeeRate                   float64                      `json:"fee_rate"`
+		SpreadRate                float64                      `json:"spread_rate"`
+		LongTermFilterEnabled     bool                         `json:"long_term_filter_enabled"`
+		LongTermFilterMonths      int                          `json:"long_term_filter_months"`
+		SpawnMode                 string                       `json:"spawn_mode"`
+		TestMode                  bool                         `json:"test_mode"`
+		TraceMode                 string                       `json:"trace_mode"`
+		ComputeMonitorEnabled     bool                         `json:"compute_monitor_enabled"`
+		ContinuousMode            string                       `json:"continuous_mode"`
+		ContinuousIterations      int                          `json:"continuous_iterations"`
+		ContinuousUnlimited       bool                         `json:"continuous_unlimited"`
+		StandardStartMs           int64                        `json:"standard_start_ms"`
+		StandardEndMs             int64                        `json:"standard_end_ms"`
+		SeedGeneID                uint                         `json:"seed_gene_id"`
+		FixedParamKeys            []string                     `json:"fixed_param_keys"`
+		MarketRegionEnabled       bool                         `json:"market_region_enabled"`
+		MarketRegionMaxThresholds int                          `json:"market_region_max_thresholds"`
+		MultiMarketEnabled        bool                         `json:"multi_market_enabled"`
+		MultiMarketInstrumentIDs  []string                     `json:"multi_market_instrument_ids"`
+		MultiMarketSelections     []epoch.MultiMarketSelection `json:"multi_market_selections"`
 	}
 	_ = json.Unmarshal([]byte(task.Config), &cfg)
 	currentGeneration := 0
@@ -463,31 +641,34 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		currentGeneration = int(math.Round(task.Progress * float64(cfg.MaxGenerations)))
 	}
 	var result struct {
-		CurrentGeneration      int                    `json:"current_generation"`
-		BestScore              float64                `json:"best_score"`
-		MaxDrawdown            float64                `json:"max_drawdown"`
-		MutationProbability    float64                `json:"mutation_probability"`
-		MutationScale          float64                `json:"mutation_scale"`
-		UpdatedAt              string                 `json:"updated_at"`
-		WindowScores           []quant.CrucibleResult `json:"window_scores"`
-		BestParamPack          json.RawMessage        `json:"best_param_pack"`
-		GeneRecordID           uint                   `json:"gene_record_id"`
-		ContinuousMode         string                 `json:"continuous_mode"`
-		CurrentIteration       int                    `json:"current_iteration"`
-		ContinuousIterations   int                    `json:"continuous_iterations"`
-		ContinuousUnlimited    bool                   `json:"continuous_unlimited"`
-		StandardStartMs        int64                  `json:"standard_start_ms"`
-		StandardEndMs          int64                  `json:"standard_end_ms"`
-		StandardChampionGeneID uint                   `json:"standard_champion_gene_id"`
-		StandardChampionScore  float64                `json:"standard_champion_score"`
-		ComputeMonitorEnabled  bool                   `json:"compute_monitor_enabled"`
-		ComputedUnits          int64                  `json:"computed_units"`
-		PlannedComputeUnits    int64                  `json:"planned_compute_units"`
-		UnitsPerIndividual     int64                  `json:"units_per_individual"`
-		ComputeUnitsPerSec     float64                `json:"compute_units_per_sec"`
-		ComputeRemainingSec    float64                `json:"compute_remaining_sec"`
-		ComputeStartedAt       string                 `json:"compute_started_at"`
-		ComputeUpdatedAt       string                 `json:"compute_updated_at"`
+		CurrentGeneration      int                     `json:"current_generation"`
+		BestScore              float64                 `json:"best_score"`
+		MaxDrawdown            float64                 `json:"max_drawdown"`
+		MutationProbability    float64                 `json:"mutation_probability"`
+		MutationScale          float64                 `json:"mutation_scale"`
+		UpdatedAt              string                  `json:"updated_at"`
+		WindowScores           []quant.CrucibleResult  `json:"window_scores"`
+		MarketPerformance      []ga.MarketPerformance  `json:"market_performance"`
+		BestParamPack          json.RawMessage         `json:"best_param_pack"`
+		GeneRecordID           uint                    `json:"gene_record_id"`
+		ContinuousMode         string                  `json:"continuous_mode"`
+		CurrentIteration       int                     `json:"current_iteration"`
+		ContinuousIterations   int                     `json:"continuous_iterations"`
+		ContinuousUnlimited    bool                    `json:"continuous_unlimited"`
+		StandardStartMs        int64                   `json:"standard_start_ms"`
+		StandardEndMs          int64                   `json:"standard_end_ms"`
+		StandardChampionGeneID uint                    `json:"standard_champion_gene_id"`
+		StandardChampionScore  float64                 `json:"standard_champion_score"`
+		ComputeMonitorEnabled  bool                    `json:"compute_monitor_enabled"`
+		ComputedUnits          int64                   `json:"computed_units"`
+		PlannedComputeUnits    int64                   `json:"planned_compute_units"`
+		UnitsPerIndividual     int64                   `json:"units_per_individual"`
+		ComputeUnitsPerSec     float64                 `json:"compute_units_per_sec"`
+		ComputeRemainingSec    float64                 `json:"compute_remaining_sec"`
+		ComputeStartedAt       string                  `json:"compute_started_at"`
+		ComputeUpdatedAt       string                  `json:"compute_updated_at"`
+		SearchAxes             []ga.LayeredAxisStatus  `json:"search_axes"`
+		SearchStatus           *ga.LayeredSearchStatus `json:"search_status"`
 		Fitness                struct {
 			ScoreTotal  float64 `json:"ScoreTotal"`
 			MaxDrawdown float64 `json:"MaxDrawdown"`
@@ -501,6 +682,10 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	if bestScore == 0 {
 		bestScore = result.Fitness.ScoreTotal
 	}
+	var bestScoreResponse any
+	if result.CurrentGeneration > 0 || result.GeneRecordID > 0 || (len(result.BestParamPack) > 0 && string(result.BestParamPack) != "null") {
+		bestScoreResponse = bestScore
+	}
 	maxDrawdown := result.MaxDrawdown
 	if maxDrawdown == 0 {
 		maxDrawdown = result.Fitness.MaxDrawdown
@@ -508,16 +693,23 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 	continuousMode := firstNonEmpty(result.ContinuousMode, cfg.ContinuousMode)
 	continuousIterations := firstNonZeroInt(result.ContinuousIterations, cfg.ContinuousIterations)
 	continuousUnlimited := result.ContinuousUnlimited || cfg.ContinuousUnlimited
+	batchesPerIteration := cfg.MaxGenerations + 1
 	totalEvaluations := currentGeneration * cfg.PopSize
-	totalPlannedEvaluations := cfg.PopSize * cfg.MaxGenerations
+	totalPlannedEvaluations := cfg.PopSize * batchesPerIteration
+	if task.Status == epoch.TaskStatusDone {
+		totalEvaluations = totalPlannedEvaluations
+	}
 	if continuousMode != "" {
 		if result.CurrentIteration > 0 {
-			totalEvaluations = ((result.CurrentIteration-1)*cfg.MaxGenerations + currentGeneration) * cfg.PopSize
+			totalEvaluations = ((result.CurrentIteration-1)*batchesPerIteration + currentGeneration) * cfg.PopSize
 		}
 		if continuousUnlimited {
 			totalPlannedEvaluations = 0
 		} else {
-			totalPlannedEvaluations = cfg.PopSize * cfg.MaxGenerations * continuousIterations
+			totalPlannedEvaluations = cfg.PopSize * batchesPerIteration * continuousIterations
+			if task.Status == epoch.TaskStatusDone {
+				totalEvaluations = totalPlannedEvaluations
+			}
 		}
 	}
 	return gin.H{
@@ -529,6 +721,8 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"current_generation":           currentGeneration,
 		"max_generations":              cfg.MaxGenerations,
 		"pop_size":                     cfg.PopSize,
+		"search_algorithm":             cfg.SearchAlgorithm,
+		"layered_local_percent":        cfg.LayeredLocalPercent,
 		"pair":                         cfg.Pair,
 		"instrument_id":                firstNonEmpty(task.InstrumentID, cfg.InstrumentID),
 		"data_source":                  firstNonEmpty(task.DataSource, cfg.DataSource),
@@ -567,9 +761,15 @@ func evolutionTaskResponse(task saasstore.EvolutionTask) gin.H {
 		"fixed_param_keys":             cfg.FixedParamKeys,
 		"market_region_enabled":        cfg.MarketRegionEnabled,
 		"market_region_max_thresholds": cfg.MarketRegionMaxThresholds,
-		"best_score":                   bestScore,
+		"multi_market_enabled":         cfg.MultiMarketEnabled,
+		"multi_market_instrument_ids":  cfg.MultiMarketInstrumentIDs,
+		"multi_market_selections":      cfg.MultiMarketSelections,
+		"best_score":                   bestScoreResponse,
 		"max_drawdown":                 maxDrawdown,
 		"window_score":                 crucibleScores(result.WindowScores),
+		"market_performance":           result.MarketPerformance,
+		"search_axes":                  result.SearchAxes,
+		"search_status":                result.SearchStatus,
 		"best_param_pack":              parseRawJSON(result.BestParamPack),
 		"gene_record_id":               result.GeneRecordID,
 		"mutation_probability":         result.MutationProbability,
@@ -600,23 +800,24 @@ func genePtrResponse(record *saasstore.GeneRecord) any {
 
 func geneResponse(record saasstore.GeneRecord) gin.H {
 	return gin.H{
-		"id":             record.ID,
-		"role":           record.Role,
-		"strategy_id":    record.StrategyID,
-		"instrument_id":  record.InstrumentID,
-		"data_source":    record.DataSource,
-		"interval":       record.Interval,
-		"execution_mode": record.ExecutionMode,
-		"name":           record.Name,
-		"notes":          record.Notes,
-		"tags":           parseStringSlice(record.Tags),
-		"search_config":  parseRawJSON(json.RawMessage(record.SearchConfig)),
-		"created_at":     record.CreatedAt.Format(time.RFC3339),
-		"activated_at":   formatOptionalTime(record.ActivatedAt),
-		"score_total":    record.ScoreTotal,
-		"max_drawdown":   record.MaxDrawdown,
-		"window_score":   parseWindowScores(record.WindowScore),
-		"param_pack":     parseRawJSON(json.RawMessage(record.ParamPack)),
+		"id":                 record.ID,
+		"role":               record.Role,
+		"strategy_id":        record.StrategyID,
+		"instrument_id":      record.InstrumentID,
+		"data_source":        record.DataSource,
+		"interval":           record.Interval,
+		"execution_mode":     record.ExecutionMode,
+		"name":               record.Name,
+		"notes":              record.Notes,
+		"tags":               parseStringSlice(record.Tags),
+		"search_config":      parseRawJSON(json.RawMessage(record.SearchConfig)),
+		"created_at":         record.CreatedAt.Format(time.RFC3339),
+		"activated_at":       formatOptionalTime(record.ActivatedAt),
+		"score_total":        record.ScoreTotal,
+		"max_drawdown":       record.MaxDrawdown,
+		"window_score":       parseWindowScores(record.WindowScore),
+		"market_performance": parseMarketPerformance(record.MarketPerformance),
+		"param_pack":         parseRawJSON(json.RawMessage(record.ParamPack)),
 	}
 }
 
@@ -704,6 +905,14 @@ func parseWindowScores(raw saasstore.JSONB) map[string]float64 {
 		out[window.Window] = window.Score
 	}
 	return out
+}
+
+func parseMarketPerformance(raw saasstore.JSONB) []ga.MarketPerformance {
+	var markets []ga.MarketPerformance
+	if err := json.Unmarshal([]byte(raw), &markets); err != nil {
+		return []ga.MarketPerformance{}
+	}
+	return markets
 }
 
 func activeWindowSummary(challenger *saasstore.GeneRecord, champion *saasstore.GeneRecord) map[string]float64 {

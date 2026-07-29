@@ -258,6 +258,22 @@ func TestNormalizeGeneKeepsGammaWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestMarketRegionModeDisablesGlobalReserveAndRebalance(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Chromosome.MicroReservePct = 0.35
+	params.Chromosome.RebalanceThreshold = 0.70
+
+	normalized := NewSigmoidDCAEvolvable().NormalizeGene(params.Chromosome, GeneOptions{
+		MarketRegionEnabled:       true,
+		EvolveRebalanceThreshold:  true,
+		MarketRegionMaxThresholds: 1,
+		MarketRegionMaxWindow:     2,
+	}).(quant.Chromosome)
+	if normalized.MicroReservePct != 0 || normalized.RebalanceThreshold != 0 {
+		t.Fatalf("market region must disable global reserve/rebalance, got reserve=%.2f rebalance=%.2f", normalized.MicroReservePct, normalized.RebalanceThreshold)
+	}
+}
+
 func TestNormalizeGeneAppliesFixedFields(t *testing.T) {
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome.Beta = 7.5

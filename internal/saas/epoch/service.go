@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -48,48 +49,64 @@ type Service struct {
 }
 
 type CreateTaskRequest struct {
-	StrategyID                string            `json:"strategy_id"`
-	ResearchDatasetID         uint              `json:"research_dataset_id"`
-	Pair                      string            `json:"pair"`
-	InstrumentID              string            `json:"instrument_id"`
-	DataSource                string            `json:"data_source"`
-	ExecutionMode             string            `json:"execution_mode"`
-	TrainStartMs              int64             `json:"train_start_ms"`
-	TrainEndMs                int64             `json:"train_end_ms"`
-	Interval                  string            `json:"interval"`
-	PopSize                   int               `json:"pop_size"`
-	MaxGenerations            int               `json:"max_generations"`
-	SpawnMode                 string            `json:"spawn_mode"`
-	SpawnPoint                *quant.SpawnPoint `json:"spawn_point"`
-	InitialCapital            float64           `json:"initial_capital"`
-	MonthlyDCA                *float64          `json:"monthly_dca"`
-	EvolveRebalanceThreshold  bool              `json:"evolve_rebalance_threshold"`
-	EvolveForceFullThreshold  bool              `json:"evolve_force_full_threshold"`
-	EvolveForceEmptyThreshold bool              `json:"evolve_force_empty_threshold"`
-	EvolveGamma               bool              `json:"evolve_gamma"`
-	EnableWMean               *bool             `json:"enable_w_mean"`
-	EnableWMomentum           *bool             `json:"enable_w_momentum"`
-	EnableWBreakout           *bool             `json:"enable_w_breakout"`
-	PositionStructure         string            `json:"position_structure"`
-	TradePenalty              float64           `json:"trade_penalty"`
-	FeeRate                   *float64          `json:"fee_rate"`
-	SpreadRate                *float64          `json:"spread_rate"`
-	LongTermFilterEnabled     *bool             `json:"long_term_filter_enabled"`
-	LongTermFilterMonths      int               `json:"long_term_filter_months"`
-	TestMode                  bool              `json:"test_mode"`
-	TraceMode                 ga.TraceMode      `json:"trace_mode"`
-	ComputeMonitorEnabled     bool              `json:"compute_monitor_enabled"`
-	ContinuousMode            string            `json:"continuous_mode"`
-	ContinuousIterations      int               `json:"continuous_iterations"`
-	ContinuousUnlimited       bool              `json:"continuous_unlimited"`
-	StandardStartMs           int64             `json:"standard_start_ms"`
-	StandardEndMs             int64             `json:"standard_end_ms"`
-	SeedGeneID                uint              `json:"seed_gene_id"`
-	FixedParamKeys            []string          `json:"fixed_param_keys"`
-	MarketRegionEnabled       bool              `json:"market_region_enabled"`
-	MarketRegionMaxThresholds int               `json:"market_region_max_thresholds"`
+	StrategyID                string                 `json:"strategy_id"`
+	ResearchDatasetID         uint                   `json:"research_dataset_id"`
+	Pair                      string                 `json:"pair"`
+	InstrumentID              string                 `json:"instrument_id"`
+	DataSource                string                 `json:"data_source"`
+	ExecutionMode             string                 `json:"execution_mode"`
+	TrainStartMs              int64                  `json:"train_start_ms"`
+	TrainEndMs                int64                  `json:"train_end_ms"`
+	Interval                  string                 `json:"interval"`
+	PopSize                   int                    `json:"pop_size"`
+	MaxGenerations            int                    `json:"max_generations"`
+	SearchAlgorithm           string                 `json:"search_algorithm"`
+	LayeredLocalPercent       int                    `json:"layered_local_percent"`
+	SpawnMode                 string                 `json:"spawn_mode"`
+	SpawnPoint                *quant.SpawnPoint      `json:"spawn_point"`
+	InitialCapital            float64                `json:"initial_capital"`
+	MonthlyDCA                *float64               `json:"monthly_dca"`
+	EvolveRebalanceThreshold  bool                   `json:"evolve_rebalance_threshold"`
+	EvolveForceFullThreshold  bool                   `json:"evolve_force_full_threshold"`
+	EvolveForceEmptyThreshold bool                   `json:"evolve_force_empty_threshold"`
+	EvolveGamma               bool                   `json:"evolve_gamma"`
+	EnableWMean               *bool                  `json:"enable_w_mean"`
+	EnableWMomentum           *bool                  `json:"enable_w_momentum"`
+	EnableWBreakout           *bool                  `json:"enable_w_breakout"`
+	PositionStructure         string                 `json:"position_structure"`
+	TradePenalty              float64                `json:"trade_penalty"`
+	FeeRate                   *float64               `json:"fee_rate"`
+	SpreadRate                *float64               `json:"spread_rate"`
+	LongTermFilterEnabled     *bool                  `json:"long_term_filter_enabled"`
+	LongTermFilterMonths      int                    `json:"long_term_filter_months"`
+	TestMode                  bool                   `json:"test_mode"`
+	TraceMode                 ga.TraceMode           `json:"trace_mode"`
+	ComputeMonitorEnabled     bool                   `json:"compute_monitor_enabled"`
+	ContinuousMode            string                 `json:"continuous_mode"`
+	ContinuousIterations      int                    `json:"continuous_iterations"`
+	ContinuousUnlimited       bool                   `json:"continuous_unlimited"`
+	StandardStartMs           int64                  `json:"standard_start_ms"`
+	StandardEndMs             int64                  `json:"standard_end_ms"`
+	SeedGeneID                uint                   `json:"seed_gene_id"`
+	FixedParamKeys            []string               `json:"fixed_param_keys"`
+	MarketRegionEnabled       bool                   `json:"market_region_enabled"`
+	MarketRegionMaxThresholds int                    `json:"market_region_max_thresholds"`
+	MultiMarketEnabled        bool                   `json:"multi_market_enabled"`
+	MultiMarketInstrumentIDs  []string               `json:"multi_market_instrument_ids"`
+	MultiMarketSelections     []MultiMarketSelection `json:"multi_market_selections"`
 	seedParamPack             []byte
 	fixedGene                 *quant.Chromosome
+	multiMarkets              []ga.MarketScope
+	searchCheckpoint          []byte
+	resumeIteration           int
+	autoSeedGene              bool
+}
+
+type MultiMarketSelection struct {
+	InstrumentID string `json:"instrument_id"`
+	UseAllData   bool   `json:"use_all_data"`
+	StartTimeMs  int64  `json:"start_time_ms"`
+	EndTimeMs    int64  `json:"end_time_ms"`
 }
 
 type ComputeEstimate struct {
@@ -126,7 +143,7 @@ func NewService(db *gorm.DB, engine *ga.EvolutionEngine, logger *zap.Logger) *Se
 		traceModes:  map[uint]ga.TraceMode{},
 		computes:    map[uint]*computeMonitor{},
 	}
-	if err := service.recoverInterruptedTasks(); err != nil {
+	if err := service.resumeInterruptedTasks(); err != nil {
 		logger.Warn("failed to recover interrupted evolution tasks", zap.Error(err))
 	}
 	return service
@@ -146,6 +163,71 @@ func (s *Service) recoverInterruptedTasks() error {
 		}).Error
 }
 
+// resumeInterruptedTasks reconstructs the in-memory runner after a service
+// restart. Reservations are durable, so a restarted layered run skips every
+// already evaluated fingerprint before it evaluates another candidate.
+func (s *Service) resumeInterruptedTasks() error {
+	var task saasstore.EvolutionTask
+	err := s.db.Where("status = ?", TaskStatusRunning).Order("id ASC").First(&task).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var req CreateTaskRequest
+	if err := json.Unmarshal([]byte(task.Config), &req); err != nil {
+		return s.failInterruptedTask(task.ID, err)
+	}
+	var snapshot struct {
+		SearchCheckpoint json.RawMessage `json:"search_checkpoint"`
+		CurrentIteration int             `json:"current_iteration"`
+	}
+	_ = json.Unmarshal([]byte(task.Result), &snapshot)
+	if req.SearchAlgorithm != ga.SearchAlgorithmGenetic {
+		if len(snapshot.SearchCheckpoint) == 0 || string(snapshot.SearchCheckpoint) == "null" {
+			return s.failInterruptedTask(task.ID, errors.New("舊版逐層搜尋任務沒有相容的搜尋檢查點，已安全終止以避免新舊演算法混算"))
+		}
+		req.searchCheckpoint = append([]byte(nil), snapshot.SearchCheckpoint...)
+		req.resumeIteration = max(1, snapshot.CurrentIteration)
+	}
+	ctx := context.Background()
+	req = s.normalizeRequest(ctx, req)
+	if err := s.resolveMultiMarkets(ctx, &req); err != nil {
+		return s.failInterruptedTask(task.ID, err)
+	}
+	var prepareErr error
+	req, prepareErr = s.prepareSeedGene(ctx, req)
+	if prepareErr != nil {
+		return s.failInterruptedTask(task.ID, prepareErr)
+	}
+	spawn, prepareErr := s.resolveSpawnPoint(ctx, req)
+	if prepareErr != nil {
+		return s.failInterruptedTask(task.ID, prepareErr)
+	}
+	applySearchCapital(req, spawn)
+	if prepareErr = validateSpawnPoint(spawn); prepareErr != nil {
+		return s.failInterruptedTask(task.ID, prepareErr)
+	}
+	s.currentTask = &task
+	runCtx, cancel := context.WithCancel(context.Background())
+	s.cancelFuncs[task.ID] = cancel
+	s.initTrace(task.ID, req.TraceMode)
+	s.initComputeMonitor(task.ID, req.ComputeMonitorEnabled)
+	go s.runEpoch(runCtx, task.ID, req, spawn)
+	return nil
+}
+
+func (s *Service) failInterruptedTask(taskID uint, cause error) error {
+	now := time.Now().UTC()
+	if err := s.db.Model(&saasstore.EvolutionTask{}).Where("id = ?", taskID).Updates(map[string]any{
+		"status": TaskStatusFailed, "error_message": cause.Error(), "finished_at": &now,
+	}).Error; err != nil {
+		return err
+	}
+	return cause
+}
+
 func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (*saasstore.EvolutionTask, error) {
 	s.mu.Lock()
 	if s.currentTask != nil {
@@ -154,11 +236,15 @@ func (s *Service) CreateAndRunTask(ctx context.Context, req CreateTaskRequest) (
 	}
 
 	req = s.normalizeRequest(ctx, req)
+	var err error
+	if err = s.resolveMultiMarkets(ctx, &req); err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
 	if err := s.validateRequest(ctx, req); err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
-	var err error
 	req, err = s.prepareSeedGene(ctx, req)
 	if err != nil {
 		s.mu.Unlock()
@@ -227,10 +313,13 @@ func (s *Service) CurrentTask() *saasstore.EvolutionTask {
 
 func (s *Service) EstimateCompute(ctx context.Context, req CreateTaskRequest) (ComputeEstimate, error) {
 	req = s.normalizeRequest(ctx, req)
+	var err error
+	if err = s.resolveMultiMarkets(ctx, &req); err != nil {
+		return ComputeEstimate{}, err
+	}
 	if err := s.validateRequest(ctx, req); err != nil {
 		return ComputeEstimate{}, err
 	}
-	var err error
 	req, err = s.prepareSeedGene(ctx, req)
 	if err != nil {
 		return ComputeEstimate{}, err
@@ -291,33 +380,41 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 		return
 	}
 	result, err := s.engine.RunEpoch(ctx, ga.EpochConfig{
-		TaskID:             taskID,
-		Pair:               req.Pair,
-		InstrumentID:       req.InstrumentID,
-		DataSource:         req.DataSource,
-		ExecutionMode:      req.ExecutionMode,
-		StartTimeMs:        req.TrainStartMs,
-		EndTimeMs:          req.TrainEndMs,
-		Interval:           req.Interval,
-		PopSize:            req.PopSize,
-		MaxGenerations:     req.MaxGenerations,
-		SpawnMode:          req.SpawnMode,
-		LotStepSize:        spawn.Risk.LotStep,
-		LotMinQty:          spawn.Risk.LotMin,
-		InitialCapital:     searchInitialCapital(req),
-		MonthlyDCA:         searchMonthlyDCA(req),
-		GeneOptions:        searchGeneOptions(req),
-		Costs:              searchCosts(req),
-		TradePenalty:       searchTradePenalty(req),
-		LongTermFilter:     searchLongTermFilter(req),
-		SpawnPointOverride: spawn,
-		TraceMode:          req.TraceMode,
-		TraceModeFunc:      s.traceModeGetter(taskID),
-		SeedGeneID:         req.SeedGeneID,
-		SeedParamPack:      req.seedParamPack,
-		OnTrace:            s.traceSink(taskID),
-		OnComputePlan:      s.computePlanSetter(taskID, req),
-		OnComputeStep:      s.computeStepCounter(taskID),
+		TaskID:              taskID,
+		Pair:                req.Pair,
+		InstrumentID:        req.InstrumentID,
+		DataSource:          req.DataSource,
+		ExecutionMode:       req.ExecutionMode,
+		StartTimeMs:         req.TrainStartMs,
+		EndTimeMs:           req.TrainEndMs,
+		Interval:            req.Interval,
+		PopSize:             req.PopSize,
+		MaxGenerations:      req.MaxGenerations,
+		SearchAlgorithm:     req.SearchAlgorithm,
+		LayeredLocalPercent: req.LayeredLocalPercent,
+		SpawnMode:           req.SpawnMode,
+		LotStepSize:         spawn.Risk.LotStep,
+		LotMinQty:           spawn.Risk.LotMin,
+		InitialCapital:      searchInitialCapital(req),
+		MonthlyDCA:          searchMonthlyDCA(req),
+		GeneOptions:         searchGeneOptions(req),
+		Costs:               searchCosts(req),
+		TradePenalty:        searchTradePenalty(req),
+		LongTermFilter:      searchLongTermFilter(req),
+		SpawnPointOverride:  spawn,
+		TraceMode:           req.TraceMode,
+		TraceModeFunc:       s.traceModeGetter(taskID),
+		SeedGeneID:          req.SeedGeneID,
+		SeedParamPack:       req.seedParamPack,
+		SeedIsAutomatic:     req.autoSeedGene,
+		OnTrace:             s.traceSink(taskID),
+		OnComputePlan:       s.computePlanSetter(taskID, req),
+		OnComputeStep:       s.computeStepCounter(taskID),
+		SearchCheckpoint:    req.searchCheckpoint,
+		OnSearchCheckpoint:  s.searchCheckpointWriter(taskID),
+		OnSearchIdentity:    s.searchIdentityWriter(taskID),
+		MultiMarketEnabled:  req.MultiMarketEnabled,
+		MultiMarkets:        req.multiMarkets,
 		OnProgress: func(progress ga.EpochProgress) {
 			bestParamPack := json.RawMessage(progress.BestParamPack)
 			if !json.Valid(bestParamPack) {
@@ -328,11 +425,15 @@ func (s *Service) runEpoch(ctx context.Context, taskID uint, req CreateTaskReque
 				"best_score":           progress.BestFitness,
 				"max_drawdown":         progress.BestMaxDrawdown,
 				"window_scores":        progress.BestWindows,
+				"market_performance":   progress.BestMarkets,
 				"best_param_pack":      bestParamPack,
 				"mutation_probability": progress.MutationProbability,
 				"mutation_scale":       progress.MutationScale,
+				"search_axes":          progress.SearchAxes,
+				"search_status":        progress.SearchStatus,
 				"updated_at":           time.Now().UTC().Format(time.RFC3339),
 			})
+			raw = s.mergeExistingTaskResult(taskID, raw)
 			raw = s.mergeComputeSnapshotJSON(taskID, raw)
 			_ = s.db.Model(&saasstore.EvolutionTask{}).
 				Where("id = ?", taskID).
@@ -397,6 +498,9 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 	var lastResult ga.EpochResult
 	var lastErr error
 	iteration := 0
+	if req.resumeIteration > 0 {
+		iteration = req.resumeIteration - 1
+	}
 	reservedFingerprints := make(map[uint64]bool)
 
 	for {
@@ -409,10 +513,15 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 		}
 		iteration++
 		cfg := s.epochConfig(req, spawn, taskID)
+		if req.resumeIteration > 0 && iteration == req.resumeIteration {
+			cfg.SearchCheckpoint = req.searchCheckpoint
+		}
 		cfg.ReservedFingerprints = reservedFingerprints
 		cfg.RandomPopulation = req.ContinuousMode == "random"
+		cfg.UseInitialSeedOnly = req.ContinuousMode == "initial_seed"
 		if req.ContinuousMode == "standardized_best" && champion != nil {
 			cfg.SeedParamPack = champion.ParamPack
+			cfg.SeedIsAutomatic = false
 		}
 		cfg.OnProgress = s.epochProgressUpdater(taskID, req, iteration)
 
@@ -422,6 +531,8 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 			break
 		}
 		lastResult = result
+		req.searchCheckpoint = nil
+		req.resumeIteration = 0
 
 		if req.ContinuousMode == "standardized_best" {
 			nextChampion, err := s.refreshStandardizedChampion(ctx, req, result.GeneRecordID, champion)
@@ -468,33 +579,41 @@ func (s *Service) runContinuousEpochs(ctx context.Context, taskID uint, req Crea
 
 func (s *Service) epochConfig(req CreateTaskRequest, spawn *quant.SpawnPoint, taskID uint) ga.EpochConfig {
 	return ga.EpochConfig{
-		TaskID:             taskID,
-		Pair:               req.Pair,
-		InstrumentID:       req.InstrumentID,
-		DataSource:         req.DataSource,
-		ExecutionMode:      req.ExecutionMode,
-		StartTimeMs:        req.TrainStartMs,
-		EndTimeMs:          req.TrainEndMs,
-		Interval:           req.Interval,
-		PopSize:            req.PopSize,
-		MaxGenerations:     req.MaxGenerations,
-		SpawnMode:          req.SpawnMode,
-		LotStepSize:        spawn.Risk.LotStep,
-		LotMinQty:          spawn.Risk.LotMin,
-		InitialCapital:     searchInitialCapital(req),
-		MonthlyDCA:         searchMonthlyDCA(req),
-		GeneOptions:        searchGeneOptions(req),
-		Costs:              searchCosts(req),
-		TradePenalty:       searchTradePenalty(req),
-		LongTermFilter:     searchLongTermFilter(req),
-		SpawnPointOverride: spawn,
-		TraceMode:          req.TraceMode,
-		TraceModeFunc:      s.traceModeGetter(taskID),
-		SeedGeneID:         req.SeedGeneID,
-		SeedParamPack:      req.seedParamPack,
-		OnTrace:            s.traceSink(taskID),
-		OnComputePlan:      s.computePlanSetter(taskID, req),
-		OnComputeStep:      s.computeStepCounter(taskID),
+		TaskID:              taskID,
+		Pair:                req.Pair,
+		InstrumentID:        req.InstrumentID,
+		DataSource:          req.DataSource,
+		ExecutionMode:       req.ExecutionMode,
+		StartTimeMs:         req.TrainStartMs,
+		EndTimeMs:           req.TrainEndMs,
+		Interval:            req.Interval,
+		PopSize:             req.PopSize,
+		MaxGenerations:      req.MaxGenerations,
+		SearchAlgorithm:     req.SearchAlgorithm,
+		LayeredLocalPercent: req.LayeredLocalPercent,
+		SpawnMode:           req.SpawnMode,
+		LotStepSize:         spawn.Risk.LotStep,
+		LotMinQty:           spawn.Risk.LotMin,
+		InitialCapital:      searchInitialCapital(req),
+		MonthlyDCA:          searchMonthlyDCA(req),
+		GeneOptions:         searchGeneOptions(req),
+		Costs:               searchCosts(req),
+		TradePenalty:        searchTradePenalty(req),
+		LongTermFilter:      searchLongTermFilter(req),
+		SpawnPointOverride:  spawn,
+		TraceMode:           req.TraceMode,
+		TraceModeFunc:       s.traceModeGetter(taskID),
+		SeedGeneID:          req.SeedGeneID,
+		SeedParamPack:       req.seedParamPack,
+		SeedIsAutomatic:     req.autoSeedGene,
+		OnTrace:             s.traceSink(taskID),
+		OnComputePlan:       s.computePlanSetter(taskID, req),
+		OnComputeStep:       s.computeStepCounter(taskID),
+		SearchCheckpoint:    req.searchCheckpoint,
+		OnSearchCheckpoint:  s.searchCheckpointWriter(taskID),
+		OnSearchIdentity:    s.searchIdentityWriter(taskID),
+		MultiMarketEnabled:  req.MultiMarketEnabled,
+		MultiMarkets:        req.multiMarkets,
 	}
 }
 
@@ -514,9 +633,12 @@ func (s *Service) epochProgressUpdater(taskID uint, req CreateTaskRequest, itera
 			"best_score":            progress.BestFitness,
 			"max_drawdown":          progress.BestMaxDrawdown,
 			"window_scores":         progress.BestWindows,
+			"market_performance":    progress.BestMarkets,
 			"best_param_pack":       bestParamPack,
 			"mutation_probability":  progress.MutationProbability,
 			"mutation_scale":        progress.MutationScale,
+			"search_axes":           progress.SearchAxes,
+			"search_status":         progress.SearchStatus,
 			"updated_at":            time.Now().UTC().Format(time.RFC3339),
 			"continuous_mode":       req.ContinuousMode,
 			"current_iteration":     iteration,
@@ -525,6 +647,7 @@ func (s *Service) epochProgressUpdater(taskID uint, req CreateTaskRequest, itera
 			"standard_start_ms":     req.StandardStartMs,
 			"standard_end_ms":       req.StandardEndMs,
 		})
+		raw = s.mergeExistingTaskResult(taskID, raw)
 		raw = s.mergeComputeSnapshotJSON(taskID, raw)
 		_ = s.db.Model(&saasstore.EvolutionTask{}).
 			Where("id = ?", taskID).
@@ -545,6 +668,7 @@ func (s *Service) writeContinuousSnapshot(taskID uint, req CreateTaskRequest, it
 		"best_score":            result.Fitness.ScoreTotal,
 		"max_drawdown":          result.Fitness.MaxDrawdown,
 		"window_scores":         result.Fitness.Windows,
+		"market_performance":    result.Fitness.Markets,
 		"best_param_pack":       paramPack,
 		"gene_record_id":        result.GeneRecordID,
 		"mutation_probability":  s.engine.MutationProbability,
@@ -579,11 +703,12 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		return 0, err
 	}
 	var result struct {
-		BestScore     float64                `json:"best_score"`
-		MaxDrawdown   float64                `json:"max_drawdown"`
-		WindowScores  []quant.CrucibleResult `json:"window_scores"`
-		BestParamPack json.RawMessage        `json:"best_param_pack"`
-		GeneRecordID  uint                   `json:"gene_record_id"`
+		BestScore         float64                `json:"best_score"`
+		MaxDrawdown       float64                `json:"max_drawdown"`
+		WindowScores      []quant.CrucibleResult `json:"window_scores"`
+		MarketPerformance []ga.MarketPerformance `json:"market_performance"`
+		BestParamPack     json.RawMessage        `json:"best_param_pack"`
+		GeneRecordID      uint                   `json:"gene_record_id"`
 	}
 	if err := json.Unmarshal([]byte(task.Result), &result); err != nil {
 		return 0, nil
@@ -628,22 +753,27 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"continuous_unlimited":         req.ContinuousUnlimited,
 		"seed_gene_id":                 req.SeedGeneID,
 		"fixed_param_keys":             req.FixedParamKeys,
+		"multi_market_enabled":         req.MultiMarketEnabled,
+		"multi_market_instrument_ids":  req.MultiMarketInstrumentIDs,
+		"multi_markets":                req.multiMarkets,
 	}
 	configRaw, _ := json.Marshal(searchConfig)
 	windowScore, _ := json.Marshal(result.WindowScores)
+	marketPerformance, _ := json.Marshal(result.MarketPerformance)
 	record := saasstore.GeneRecord{
-		StrategyID:    req.StrategyID,
-		InstrumentID:  req.InstrumentID,
-		DataSource:    req.DataSource,
-		Interval:      req.Interval,
-		ExecutionMode: req.ExecutionMode,
-		Role:          saasstore.GeneRoleChallenger,
-		Tags:          saasstore.JSONB(`["中止保存"]`),
-		SearchConfig:  saasstore.JSONB(configRaw),
-		ParamPack:     saasstore.JSONB(result.BestParamPack),
-		ScoreTotal:    result.BestScore,
-		MaxDrawdown:   result.MaxDrawdown,
-		WindowScore:   saasstore.JSONB(windowScore),
+		StrategyID:        req.StrategyID,
+		InstrumentID:      req.InstrumentID,
+		DataSource:        req.DataSource,
+		Interval:          req.Interval,
+		ExecutionMode:     req.ExecutionMode,
+		Role:              saasstore.GeneRoleChallenger,
+		Tags:              saasstore.JSONB(`["中止保存"]`),
+		SearchConfig:      saasstore.JSONB(configRaw),
+		ParamPack:         saasstore.JSONB(result.BestParamPack),
+		ScoreTotal:        result.BestScore,
+		MaxDrawdown:       result.MaxDrawdown,
+		WindowScore:       saasstore.JSONB(windowScore),
+		MarketPerformance: saasstore.JSONB(marketPerformance),
 	}
 	if err := s.db.WithContext(ctx).Create(&record).Error; err != nil {
 		return 0, err
@@ -653,6 +783,7 @@ func (s *Service) saveCancelledBest(ctx context.Context, taskID uint, req Create
 		"best_score":           result.BestScore,
 		"max_drawdown":         result.MaxDrawdown,
 		"window_scores":        result.WindowScores,
+		"market_performance":   result.MarketPerformance,
 		"best_param_pack":      result.BestParamPack,
 		"gene_record_id":       record.ID,
 		"updated_at":           time.Now().UTC().Format(time.RFC3339),
@@ -831,6 +962,58 @@ func (s *Service) overlayComputeSnapshot(task *saasstore.EvolutionTask) {
 	task.Result = saasstore.JSONB(s.mergeComputeSnapshotJSON(task.ID, []byte(task.Result)))
 }
 
+func (s *Service) mergeExistingTaskResult(taskID uint, raw []byte) []byte {
+	existing := map[string]any{}
+	var task saasstore.EvolutionTask
+	if err := s.db.Select("result").First(&task, taskID).Error; err == nil && len(task.Result) > 0 {
+		_ = json.Unmarshal([]byte(task.Result), &existing)
+	}
+	incoming := map[string]any{}
+	if err := json.Unmarshal(raw, &incoming); err != nil {
+		return raw
+	}
+	for key, value := range incoming {
+		existing[key] = value
+	}
+	merged, err := json.Marshal(existing)
+	if err != nil {
+		return raw
+	}
+	return merged
+}
+
+func (s *Service) searchCheckpointWriter(taskID uint) func([]byte) {
+	return func(checkpoint []byte) {
+		if !json.Valid(checkpoint) {
+			return
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"search_checkpoint": json.RawMessage(checkpoint),
+			"updated_at":        time.Now().UTC().Format(time.RFC3339),
+		})
+		raw = s.mergeExistingTaskResult(taskID, raw)
+		_ = s.db.Model(&saasstore.EvolutionTask{}).
+			Where("id = ? AND status = ?", taskID, TaskStatusRunning).
+			Update("result", saasstore.JSONB(raw)).Error
+	}
+}
+
+func (s *Service) searchIdentityWriter(taskID uint) func(string) {
+	return func(searchHash string) {
+		if strings.TrimSpace(searchHash) == "" {
+			return
+		}
+		raw, _ := json.Marshal(map[string]any{
+			"search_hash": searchHash,
+			"updated_at":  time.Now().UTC().Format(time.RFC3339),
+		})
+		raw = s.mergeExistingTaskResult(taskID, raw)
+		_ = s.db.Model(&saasstore.EvolutionTask{}).
+			Where("id = ? AND status = ?", taskID, TaskStatusRunning).
+			Update("result", saasstore.JSONB(raw)).Error
+	}
+}
+
 func (s *Service) mergeComputeSnapshotJSON(taskID uint, raw []byte) []byte {
 	fields := s.computeSnapshotFields(taskID)
 	if len(fields) == 0 {
@@ -944,6 +1127,35 @@ func (s *Service) loadChampionSpawn(ctx context.Context, req CreateTaskRequest) 
 
 func (s *Service) prepareSeedGene(ctx context.Context, req CreateTaskRequest) (CreateTaskRequest, error) {
 	if req.SeedGeneID == 0 {
+		// The deterministic layered search must have a meaningful centre even
+		// when the form did not manually select a saved gene.  Reuse the best
+		// compatible completed candidate; continuous runs then replace this
+		// centre with their own newly found best result on the next iteration.
+		if req.SearchAlgorithm == "" || req.SearchAlgorithm == ga.SearchAlgorithmLayeredGrid {
+			var records []saasstore.GeneRecord
+			if err := s.db.WithContext(ctx).
+				Where("strategy_id = ? AND instrument_id = ? AND data_source = ? AND interval = ? AND execution_mode = ? AND role IN ?",
+					req.StrategyID, req.InstrumentID, req.DataSource, req.Interval, req.ExecutionMode,
+					[]string{saasstore.GeneRoleChampion, saasstore.GeneRoleChallenger, saasstore.GeneRoleRetired}).
+				Order("score_total DESC, created_at DESC").Limit(500).Find(&records).Error; err == nil {
+				var record *saasstore.GeneRecord
+				for index := range records {
+					if geneRecordMatchesMarketScope(records[index], req) {
+						record = &records[index]
+						break
+					}
+				}
+				if record == nil {
+					return req, nil
+				}
+				req.SeedGeneID = record.ID
+				req.seedParamPack = []byte(record.ParamPack)
+				req.autoSeedGene = true
+				params := sigmoiddca.ParseParamsFromParamPack(req.seedParamPack)
+				fixed := params.Chromosome
+				req.fixedGene = &fixed
+			}
+		}
 		return req, nil
 	}
 	var record saasstore.GeneRecord
@@ -960,6 +1172,9 @@ func (s *Service) prepareSeedGene(ctx context.Context, req CreateTaskRequest) (C
 		record.ExecutionMode != req.ExecutionMode {
 		return req, fmt.Errorf("seed_gene_id #%d scope does not match this search", req.SeedGeneID)
 	}
+	if !geneRecordMatchesMarketScope(record, req) {
+		return req, fmt.Errorf("seed_gene_id #%d multi-market scope does not match this search", req.SeedGeneID)
+	}
 	switch record.Role {
 	case saasstore.GeneRoleChallenger, saasstore.GeneRoleChampion, saasstore.GeneRoleRetired:
 	default:
@@ -972,7 +1187,39 @@ func (s *Service) prepareSeedGene(ctx context.Context, req CreateTaskRequest) (C
 	return req, nil
 }
 
+func geneRecordMatchesMarketScope(record saasstore.GeneRecord, req CreateTaskRequest) bool {
+	if !req.MultiMarketEnabled {
+		return true
+	}
+	var config struct {
+		MultiMarkets []ga.MarketScope `json:"multi_markets"`
+	}
+	if err := json.Unmarshal([]byte(record.SearchConfig), &config); err != nil {
+		return false
+	}
+	if len(config.MultiMarkets) != len(req.multiMarkets) {
+		return false
+	}
+	for index := range config.MultiMarkets {
+		saved := config.MultiMarkets[index]
+		current := req.multiMarkets[index]
+		if saved.InstrumentID != current.InstrumentID ||
+			saved.Pair != current.Pair ||
+			saved.DataSource != current.DataSource ||
+			saved.StartTimeMs != current.StartTimeMs ||
+			saved.EndTimeMs != current.EndTimeMs {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) CreateTaskRequest {
+	if req.MultiMarketEnabled {
+		// The single-market research dataset belongs only to single-market mode.
+		// Multi-market evaluation is defined exclusively by its selections.
+		req.ResearchDatasetID = 0
+	}
 	if req.ResearchDatasetID > 0 {
 		if dataset, err := s.loadResearchDataset(ctx, req.ResearchDatasetID); err == nil {
 			req.InstrumentID = dataset.primary.InstrumentID
@@ -1006,6 +1253,18 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 	if req.SpawnMode == "" {
 		req.SpawnMode = "inherit"
 	}
+	if req.SearchAlgorithm != ga.SearchAlgorithmGenetic {
+		req.SearchAlgorithm = ga.SearchAlgorithmLayeredGrid
+	}
+	if req.LayeredLocalPercent == 0 {
+		req.LayeredLocalPercent = 70
+	}
+	if req.LayeredLocalPercent < 0 {
+		req.LayeredLocalPercent = 0
+	}
+	if req.LayeredLocalPercent > 100 {
+		req.LayeredLocalPercent = 100
+	}
 	req.InitialCapital = SearchInitialUSDT
 	if req.MonthlyDCA == nil {
 		zero := 0.0
@@ -1031,6 +1290,20 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 		req.EnableWBreakout = &value
 	}
 	req.PositionStructure = normalizedPositionStructure(req.PositionStructure)
+	// Persist the effective candidate space, not merely the unchecked form
+	// values.  Market-region search owns the state-controlled parameters and
+	// explicitly removes global Beta, reserve and rebalancing from execution.
+	if req.MarketRegionEnabled {
+		req.EvolveRebalanceThreshold = false
+		req.EvolveGamma = false
+		req.EvolveForceFullThreshold = false
+		req.EvolveForceEmptyThreshold = false
+		// Every market-region parameter pack owns all three signal weights.
+		// Keep the effective flags enabled so request validation, persisted
+		// configuration and compute estimation describe that actual search space.
+		mean, momentum, breakout := true, true, true
+		req.EnableWMean, req.EnableWMomentum, req.EnableWBreakout = &mean, &momentum, &breakout
+	}
 	req.ContinuousMode = strings.ToLower(strings.TrimSpace(req.ContinuousMode))
 	if req.ContinuousMode != "" && req.ContinuousIterations == 0 && !req.ContinuousUnlimited {
 		req.ContinuousIterations = 2
@@ -1102,7 +1375,7 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 	if req.MonthlyDCA != nil && *req.MonthlyDCA < 0 {
 		return errors.New("monthly_dca must be zero or positive")
 	}
-	if !boolValue(req.EnableWMean) && !boolValue(req.EnableWMomentum) && !boolValue(req.EnableWBreakout) {
+	if !req.MarketRegionEnabled && !boolValue(req.EnableWMean) && !boolValue(req.EnableWMomentum) && !boolValue(req.EnableWBreakout) {
 		return errors.New("at least one signal must be enabled")
 	}
 	if req.TradePenalty < 0 {
@@ -1115,7 +1388,7 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 		return errors.New("seed_gene_id is required when fixed_param_keys is not empty")
 	}
 	switch req.ContinuousMode {
-	case "", "standardized_best", "random":
+	case "", "standardized_best", "random", "initial_seed":
 	default:
 		return fmt.Errorf("unsupported continuous_mode: %s", req.ContinuousMode)
 	}
@@ -1153,6 +1426,121 @@ func (s *Service) validateRequest(ctx context.Context, req CreateTaskRequest) er
 		return errors.New("max_generations 必須介於 5 到 50")
 	}
 	return nil
+}
+
+// resolveMultiMarkets makes the selected collection canonical before the task
+// is persisted.  The first canonical item is used only for legacy task fields;
+// the complete collection is the actual evaluation and reservation identity.
+func (s *Service) resolveMultiMarkets(ctx context.Context, req *CreateTaskRequest) error {
+	if !req.MultiMarketEnabled {
+		req.multiMarkets = nil
+		return nil
+	}
+	selections := append([]MultiMarketSelection(nil), req.MultiMarketSelections...)
+	if len(selections) == 0 {
+		// Backward compatibility for tasks created before per-market dates were
+		// added: an id-only selection means that market's complete data range.
+		for _, id := range req.MultiMarketInstrumentIDs {
+			selections = append(selections, MultiMarketSelection{InstrumentID: id, UseAllData: true})
+		}
+	}
+	seen := make(map[string]bool, len(selections))
+	unique := make([]MultiMarketSelection, 0, len(selections))
+	for _, selection := range selections {
+		selection.InstrumentID = strings.TrimSpace(selection.InstrumentID)
+		if selection.InstrumentID != "" && !seen[selection.InstrumentID] {
+			seen[selection.InstrumentID] = true
+			unique = append(unique, selection)
+		}
+	}
+	if len(unique) < 2 {
+		return errors.New("採用多行情時至少要選擇兩張行情")
+	}
+	sort.Slice(unique, func(i, j int) bool { return unique[i].InstrumentID < unique[j].InstrumentID })
+	markets := make([]ga.MarketScope, 0, len(unique))
+	missing := make([]string, 0)
+	for index, selection := range unique {
+		instrument, err := s.instruments.ResolveInstrument(ctx, selection.InstrumentID, "", "")
+		if err != nil {
+			return err
+		}
+		if !supportsInterval(instrument.SupportedIntervals, req.Interval) {
+			return fmt.Errorf("行情 %s 不支援週期 %s", instrument.DisplayName, req.Interval)
+		}
+		baseQuery := s.db.WithContext(ctx).Model(&saasstore.KLine{}).
+			Where("instrument_id = ? AND source = ? AND symbol = ? AND interval = ?", instrument.ID, instrument.DataSource, instrument.Symbol, req.Interval)
+		var available struct {
+			StartTimeMs int64
+			EndTimeMs   int64
+		}
+		var availableCount int64
+		if err := baseQuery.Select("MIN(open_time) AS start_time_ms, MAX(open_time) AS end_time_ms").Scan(&available).Error; err != nil {
+			return err
+		}
+		if err := baseQuery.Count(&availableCount).Error; err != nil {
+			return err
+		}
+		query := baseQuery
+		if !selection.UseAllData && (selection.StartTimeMs == 0 || selection.EndTimeMs == 0) {
+			return fmt.Errorf("行情 %s 未使用全部資料時必須設定開始與結束日期", instrument.DisplayName)
+		}
+		if !selection.UseAllData && selection.StartTimeMs > 0 && selection.EndTimeMs > 0 && selection.StartTimeMs > selection.EndTimeMs {
+			return fmt.Errorf("行情 %s 的開始日期不可晚於結束日期", instrument.DisplayName)
+		}
+		if !selection.UseAllData && selection.StartTimeMs > 0 {
+			query = query.Where("open_time >= ?", selection.StartTimeMs)
+		}
+		if !selection.UseAllData && selection.EndTimeMs > 0 {
+			query = query.Where("open_time <= ?", selection.EndTimeMs)
+		}
+		var bounds struct {
+			StartTimeMs int64
+			EndTimeMs   int64
+		}
+		if err := query.Select("MIN(open_time) AS start_time_ms, MAX(open_time) AS end_time_ms").Scan(&bounds).Error; err != nil {
+			return err
+		}
+		var count int64
+		if err := query.Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 || availableCount == 0 {
+			missing = append(missing, instrument.DisplayName)
+		}
+		if !selection.UseAllData && availableCount > 0 {
+			if utcDay(selection.StartTimeMs) < utcDay(available.StartTimeMs) || utcDay(selection.EndTimeMs) > utcDay(available.EndTimeMs) {
+				return fmt.Errorf("行情 %s 的設定日期超出可用資料範圍 %s ～ %s",
+					instrument.DisplayName,
+					time.UnixMilli(available.StartTimeMs).UTC().Format("2006-01-02"),
+					time.UnixMilli(available.EndTimeMs).UTC().Format("2006-01-02"))
+			}
+		}
+		if selection.UseAllData {
+			selection.StartTimeMs, selection.EndTimeMs = available.StartTimeMs, available.EndTimeMs
+		}
+		unique[index] = selection
+		markets = append(markets, ga.MarketScope{InstrumentID: instrument.ID, Pair: instrument.Symbol, DataSource: instrument.DataSource, StartTimeMs: selection.StartTimeMs, EndTimeMs: selection.EndTimeMs})
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("下列行情在指定訓練期與週期缺少資料：%s", strings.Join(missing, "、"))
+	}
+	req.MultiMarketSelections = unique
+	req.MultiMarketInstrumentIDs = make([]string, 0, len(unique))
+	for _, selection := range unique {
+		req.MultiMarketInstrumentIDs = append(req.MultiMarketInstrumentIDs, selection.InstrumentID)
+	}
+	req.multiMarkets = markets
+	// Make old task fields deterministic and prevent the primary picker from
+	// splitting durable reservations for the identical market collection.
+	req.InstrumentID, req.Pair, req.DataSource = markets[0].InstrumentID, markets[0].Pair, markets[0].DataSource
+	return nil
+}
+
+func utcDay(value int64) int64 {
+	if value <= 0 {
+		return 0
+	}
+	return time.UnixMilli(value).UTC().Truncate(24 * time.Hour).Unix()
 }
 
 type taskResearchDataset struct {
@@ -1245,6 +1633,7 @@ func searchMonthlyDCA(req CreateTaskRequest) float64 {
 }
 
 func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
+	costs := searchCosts(req)
 	return ga.GeneOptions{
 		EvolveRebalanceThreshold:  req.EvolveRebalanceThreshold,
 		EvolveForceFullThreshold:  req.EvolveForceFullThreshold,
@@ -1257,6 +1646,9 @@ func searchGeneOptions(req CreateTaskRequest) ga.GeneOptions {
 		FixedParamKeys:            req.FixedParamKeys,
 		MarketRegionEnabled:       req.MarketRegionEnabled,
 		MarketRegionMaxThresholds: req.MarketRegionMaxThresholds,
+		DisableBeta:               req.MarketRegionEnabled,
+		DisableDustFilter:         costs.FeeRate == 0 && costs.SpreadRate == 0,
+		DisableWedgeMinimum:       normalizedPositionStructure(req.PositionStructure) == sigmoiddca.PositionStructureFloatingOnly,
 		FixedGene:                 req.fixedGene,
 	}
 }

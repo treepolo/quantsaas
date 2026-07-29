@@ -42,13 +42,36 @@ type EvaluablePlan struct {
 	Generation          int
 	Individual          int
 	Worker              int
+	// MultiMarkets is populated only for the multi-market search mode.  It is
+	// deliberately separate from Windows: multi-market evaluation uses one
+	// complete training period per market and never applies crucible weights.
+	MultiMarkets []MultiMarketPlan
+}
+
+type MultiMarketPlan struct {
+	Pair              string
+	InstrumentID      string
+	Window            quant.CrucibleWindow
+	MarketRegionCache *MarketRegionFeatureCache
 }
 
 type FitnessResult struct {
 	ScoreTotal  float64
 	MaxDrawdown float64
 	Windows     []quant.CrucibleResult
+	Markets     []MarketPerformance
 	Fatal       bool
+}
+
+// MarketPerformance is a complete-period result for one selected market in a
+// multi-market search. It is retained only for the currently best candidate
+// and saved challenger; it never changes the direct summed score formula.
+type MarketPerformance struct {
+	InstrumentID     string  `json:"instrument_id"`
+	Pair             string  `json:"pair"`
+	TotalReturn      float64 `json:"total_return"`
+	AnnualizedReturn float64 `json:"annualized_return"`
+	MaxDrawdown      float64 `json:"max_drawdown"`
 }
 
 type BacktestMetrics struct {
@@ -79,6 +102,15 @@ type GeneOptions struct {
 	MarketRegionMaxThresholds int                   `json:"market_region_max_thresholds"`
 	MarketRegionMaxWindow     int                   `json:"market_region_max_window"`
 	MarketRegionFeatureRanges map[string][2]float64 `json:"market_region_feature_ranges,omitempty"`
+	// MarketRegionFeatureValues is an internal, sorted pool of the exact raw
+	// calculated market values. It is intentionally not persisted in task
+	// settings: it is rebuilt from the task's selected training data.
+	MarketRegionFeatureValues map[string][]float64 `json:"-"`
+	// These switches remove a legacy mechanism from both the candidate space and
+	// the strategy calculation for the current search mode.
+	DisableBeta         bool `json:"disable_beta"`
+	DisableDustFilter   bool `json:"disable_dust_filter"`
+	DisableWedgeMinimum bool `json:"disable_wedge_minimum"`
 }
 
 type GeneOptionSampler interface {
@@ -87,6 +119,16 @@ type GeneOptionSampler interface {
 
 type GeneNormalizer interface {
 	NormalizeGene(c Gene, options GeneOptions) Gene
+}
+
+// Optional strategy-side operations let a candidate space exclude inactive
+// dimensions before crossover or mutation happens.
+type GeneOptionMutator interface {
+	MutateWithOptions(c Gene, prob float64, scale float64, rng RandomSource, options GeneOptions) Gene
+}
+
+type GeneOptionCrossover interface {
+	CrossoverWithOptions(p1 Gene, p2 Gene, rng RandomSource, options GeneOptions) Gene
 }
 
 type EvolvableStrategy interface {

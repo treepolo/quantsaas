@@ -26,6 +26,8 @@ export type EvolutionTask = {
   progress: number;
   current_generation?: number;
   max_generations?: number;
+	search_algorithm?: "layered_grid" | "genetic";
+	layered_local_percent?: number;
   pop_size?: number;
   pair?: string;
   instrument_id?: string;
@@ -60,7 +62,7 @@ export type EvolutionTask = {
   compute_remaining_sec?: number;
   compute_started_at?: string;
   compute_updated_at?: string;
-  continuous_mode?: "" | "standardized_best" | "random";
+  continuous_mode?: "" | "standardized_best" | "random" | "initial_seed";
   current_iteration?: number;
   continuous_iterations?: number;
   continuous_unlimited?: boolean;
@@ -72,20 +74,55 @@ export type EvolutionTask = {
   fixed_param_keys?: string[];
 	market_region_enabled?: boolean;
 	market_region_max_thresholds?: number;
-  best_score?: number;
+	multi_market_enabled?: boolean;
+	multi_market_instrument_ids?: string[];
+	multi_market_selections?: MultiMarketSelection[];
+  best_score?: number | null;
   max_drawdown?: number;
   window_score?: Record<string, number>;
+	market_performance?: MarketPerformance[];
   best_param_pack?: Record<string, unknown> | null;
   gene_record_id?: number;
   mutation_probability?: number;
   mutation_scale?: number;
   evaluated_individuals?: number;
   planned_evaluations?: number;
+  search_axes?: LayeredAxisStatus[];
+  search_status?: LayeredSearchStatus;
   monitor_updated_at?: string;
   error?: string;
   created_at: string;
   started_at?: string | null;
   finished_at?: string | null;
+};
+
+export type LayeredAxisStatus = {
+  key: string;
+  centre: number;
+  lower: number;
+  upper: number;
+  step: number;
+  minimum?: number;
+  maximum?: number;
+};
+
+export type LayeredSearchStatus = {
+  axes: LayeredAxisStatus[];
+  next_axis?: string;
+  next_side?: string;
+  local_percent: number;
+  issued: number;
+  global_cursor: number;
+  duplicate_skips: number;
+  current_slice_remaining: number;
+};
+
+export type MarketPerformance = {
+	instrument_id: string;
+	pair: string;
+	total_return: number;
+	annualized_return: number;
+	max_drawdown: number;
 };
 
 export type GenomeRecord = {
@@ -146,7 +183,8 @@ export type GenomeRecord = {
   activated_at?: string | null;
   score_total: number;
   max_drawdown: number;
-  window_score: Record<string, number>;
+	window_score: Record<string, number>;
+	market_performance?: MarketPerformance[];
   param_pack?: Record<string, unknown> | null;
 };
 
@@ -176,12 +214,14 @@ export type CreateTaskInput = {
   long_term_filter_months?: number;
   pop_size: number;
   max_generations: number;
+	search_algorithm?: "layered_grid" | "genetic";
+	layered_local_percent?: number;
   spawn_mode: "inherit" | "random_once" | "manual";
   spawn_point?: Record<string, unknown>;
   test_mode?: boolean;
   trace_mode?: TraceMode;
   compute_monitor_enabled?: boolean;
-  continuous_mode?: "" | "standardized_best" | "random";
+  continuous_mode?: "" | "standardized_best" | "random" | "initial_seed";
   continuous_iterations?: number;
   continuous_unlimited?: boolean;
   standard_start_ms?: number;
@@ -190,6 +230,16 @@ export type CreateTaskInput = {
   fixed_param_keys?: string[];
 	market_region_enabled?: boolean;
 	market_region_max_thresholds?: number;
+	multi_market_enabled?: boolean;
+	multi_market_instrument_ids?: string[];
+	multi_market_selections?: MultiMarketSelection[];
+};
+
+export type MultiMarketSelection = {
+	instrument_id: string;
+	use_all_data: boolean;
+	start_time_ms?: number;
+	end_time_ms?: number;
 };
 
 export type ComputeEstimate = {
@@ -242,7 +292,7 @@ export type GeneObservationQuery = {
 };
 
 export type ParameterGridPoint = { value: number; count: number };
-export type ParameterGridAxis = { key: string; label: string; min: number; max: number; points: ParameterGridPoint[] };
+export type ParameterGridAxis = { key: string; label: string; status: "演化中" | "固定中性化" | "停用"; min: number; max: number; points: ParameterGridPoint[] };
 export type ParameterGridResponse = { task_id: number; axes: ParameterGridAxis[]; grid_point_count: number };
 
 export type EvolutionOverview = {

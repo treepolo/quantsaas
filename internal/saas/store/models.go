@@ -182,58 +182,70 @@ type AuditLog struct {
 }
 
 type GeneRecord struct {
-	ID            uint `gorm:"primaryKey"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	DeletedAt     gorm.DeletedAt `gorm:"index"`
-	StrategyID    string         `gorm:"size:80;not null;index"`
-	InstrumentID  string         `gorm:"size:32;not null;index;default:BTCUSDT"`
-	DataSource    string         `gorm:"size:32;not null;index;default:binance"`
-	Interval      string         `gorm:"size:16;not null;index;default:1d"`
-	ExecutionMode string         `gorm:"size:32;not null;index;default:close_same_bar"`
-	Role          string         `gorm:"size:24;not null;index"`
-	Name          string         `gorm:"size:160"`
-	Notes         string         `gorm:"type:text"`
-	Tags          JSONB          `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
-	SearchConfig  JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ParamPack     JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ScoreTotal    float64        `gorm:"type:numeric(30,10);not null;default:0"`
-	MaxDrawdown   float64        `gorm:"type:numeric(30,10);not null;default:0"`
-	WindowScore   JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ActivatedAt   *time.Time
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	DeletedAt         gorm.DeletedAt `gorm:"index"`
+	StrategyID        string         `gorm:"size:80;not null;index"`
+	InstrumentID      string         `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource        string         `gorm:"size:32;not null;index;default:binance"`
+	Interval          string         `gorm:"size:16;not null;index;default:1d"`
+	ExecutionMode     string         `gorm:"size:32;not null;index;default:close_same_bar"`
+	Role              string         `gorm:"size:24;not null;index"`
+	Name              string         `gorm:"size:160"`
+	Notes             string         `gorm:"type:text"`
+	Tags              JSONB          `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	SearchConfig      JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ParamPack         JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ScoreTotal        float64        `gorm:"type:numeric(30,10);not null;default:0"`
+	MaxDrawdown       float64        `gorm:"type:numeric(30,10);not null;default:0"`
+	WindowScore       JSONB          `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	MarketPerformance JSONB          `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	ActivatedAt       *time.Time
 }
 
 type GeneObservation struct {
-	ID            uint `gorm:"primaryKey"`
-	CreatedAt     time.Time
-	StrategyID    string  `gorm:"size:80;not null;index"`
-	InstrumentID  string  `gorm:"size:32;not null;index;default:BTCUSDT"`
-	DataSource    string  `gorm:"size:32;not null;index;default:binance"`
-	Interval      string  `gorm:"size:16;not null;index;default:1d"`
-	ExecutionMode string  `gorm:"size:32;not null;index;default:close_same_bar"`
-	TrainStartMs  int64   `gorm:"not null;default:0;index"`
-	TrainEndMs    int64   `gorm:"not null;default:0;index"`
-	SpawnMode     string  `gorm:"size:32;not null;index;default:inherit"`
-	SearchHash    string  `gorm:"size:64;not null;index;uniqueIndex:idx_gene_observation_unique"`
-	TaskID        uint    `gorm:"not null;index"`
-	Generation    int     `gorm:"not null;index"`
-	Individual    int     `gorm:"not null;default:0"`
-	Fingerprint   string  `gorm:"size:32;not null;index;uniqueIndex:idx_gene_observation_unique"`
-	ParamPack     JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
-	ScoreTotal    float64 `gorm:"type:numeric(30,10);not null;default:0;index"`
-	MaxDrawdown   float64 `gorm:"type:numeric(30,10);not null;default:0"`
-	Fatal         bool    `gorm:"not null;default:false"`
+	ID                uint `gorm:"primaryKey"`
+	CreatedAt         time.Time
+	StrategyID        string  `gorm:"size:80;not null;index"`
+	InstrumentID      string  `gorm:"size:32;not null;index;default:BTCUSDT"`
+	DataSource        string  `gorm:"size:32;not null;index;default:binance"`
+	Interval          string  `gorm:"size:16;not null;index;default:1d"`
+	ExecutionMode     string  `gorm:"size:32;not null;index;default:close_same_bar"`
+	TrainStartMs      int64   `gorm:"not null;default:0;index"`
+	TrainEndMs        int64   `gorm:"not null;default:0;index"`
+	SpawnMode         string  `gorm:"size:32;not null;index;default:inherit"`
+	SearchHash        string  `gorm:"size:64;not null;index;uniqueIndex:idx_gene_observation_unique"`
+	TaskID            uint    `gorm:"not null;index"`
+	Generation        int     `gorm:"not null;index"`
+	Individual        int     `gorm:"not null;default:0"`
+	Fingerprint       string  `gorm:"size:32;not null;index;uniqueIndex:idx_gene_observation_unique"`
+	ParamPack         JSONB   `gorm:"type:jsonb;not null;default:'{}'::jsonb"`
+	ScoreTotal        float64 `gorm:"type:numeric(30,10);not null;default:0;index"`
+	MaxDrawdown       float64 `gorm:"type:numeric(30,10);not null;default:0"`
+	Fatal             bool    `gorm:"not null;default:false"`
+	WindowScore       JSONB   `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	MarketPerformance JSONB   `gorm:"type:jsonb;not null;default:'[]'::jsonb"`
+	Evaluated         bool    `gorm:"not null;default:false;index"`
+	// Version 0 is the legacy reservation schema whose rows were evaluated even
+	// though no result was written back. Version 1 distinguishes a durable
+	// reservation from a completed evaluation so a crash cannot lose work.
+	EvaluationVersion int `gorm:"not null;default:0;index"`
 }
 
 // GeneParameterGridPoint is the compact coverage index used by the parameter
-// laboratory. It stores one row per task, core parameter and 0.05 grid point,
-// rather than requiring the UI to load every historical candidate.
+// laboratory. SearchHash lets equivalent later tasks read the same compact
+// coverage without loading every historical candidate.
 type GeneParameterGridPoint struct {
 	ID           uint   `gorm:"primaryKey"`
 	TaskID       uint   `gorm:"not null;index;uniqueIndex:idx_gene_parameter_grid_unique"`
+	SearchHash   string `gorm:"size:64;not null;default:'';index"`
 	ParameterKey string `gorm:"size:64;not null;uniqueIndex:idx_gene_parameter_grid_unique"`
-	GridStep     int    `gorm:"not null;uniqueIndex:idx_gene_parameter_grid_unique"`
-	Count        int64  `gorm:"not null;default:0"`
+	GridStep     int64  `gorm:"not null;uniqueIndex:idx_gene_parameter_grid_unique"`
+	// GridValue preserves the exact raw market-data decision value. GridStep
+	// remains the compact uniqueness key for backward-compatible core grids.
+	GridValue float64 `gorm:"type:double precision;not null;default:0"`
+	Count     int64   `gorm:"not null;default:0"`
 }
 
 type EvolutionTask struct {

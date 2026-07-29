@@ -49,6 +49,22 @@ func TestCandidateReservationConfigIgnoresTaskControlOptions(t *testing.T) {
 	if string(e.candidateReservationConfig(fixed)) == string(e.candidateReservationConfig(fixedChanged)) {
 		t.Fatal("a fixed core parameter value must affect the cross-task reservation key")
 	}
+	multi := base
+	multi.MultiMarkets = []MarketScope{
+		{InstrumentID: "A", DataSource: "yahoo", StartTimeMs: 10, EndTimeMs: 20},
+		{InstrumentID: "B", DataSource: "yahoo", StartTimeMs: 30, EndTimeMs: 40},
+	}
+	multiChanged := multi
+	multiChanged.StartTimeMs = 999
+	multiChanged.EndTimeMs = 1000
+	if string(e.candidateReservationConfig(multi)) != string(e.candidateReservationConfig(multiChanged)) {
+		t.Fatal("hidden single-market dates must not affect a multi-market reservation key")
+	}
+	dataChanged := base
+	dataChanged.DatasetHash = "changed-bars"
+	if string(e.candidateReservationConfig(base)) == string(e.candidateReservationConfig(dataChanged)) {
+		t.Fatal("the evaluated dataset must affect the cross-task reservation key")
+	}
 }
 
 func assertSearchChromosomeLattice(t *testing.T, c quant.Chromosome) {

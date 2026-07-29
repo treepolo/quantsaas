@@ -429,8 +429,23 @@ func validateEffectiveChromosome(c quant.Chromosome) error {
 		"soft_release_pct":          c.SoftReleasePct,
 		"hard_release_max_pct":      c.HardReleaseMaxPct,
 	}
+	// A zero on these fields is an explicit strategy-level disabled sentinel,
+	// not a value outside the ordinary search interval. Market-region mode
+	// deliberately disables beta, the reserve, the dust filter and the legacy
+	// wedge gate, so its daily effective chromosome must be validated with the
+	// same semantics as quant.ClampChromosome.
+	disabledAtZero := map[string]bool{
+		"micro_reserve_pct":         true,
+		"beta":                      true,
+		"dust_usd":                  true,
+		"wedge_delta_threshold":     true,
+		"wedge_vol_ratio_threshold": true,
+	}
 	for name, value := range values {
 		bound := quant.HardBounds[name]
+		if disabledAtZero[name] && value == 0 {
+			continue
+		}
 		if math.IsNaN(value) || math.IsInf(value, 0) || value < bound.Min || value > bound.Max {
 			return fmt.Errorf("%s 超出允許範圍 [%g, %g]", name, bound.Min, bound.Max)
 		}

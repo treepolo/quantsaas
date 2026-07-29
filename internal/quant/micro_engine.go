@@ -77,9 +77,7 @@ func ComputeMicroDecisionV4(input MicroDecisionInput) MicroDecisionOutput {
 	}
 
 	dust := input.DustUSD
-	if dust <= 0 {
-		dust = 10.1
-	}
+	dustEnabled := dust > 0
 
 	marketBeta := input.MarketBetaMultiplier
 	if marketBeta <= 0 {
@@ -87,7 +85,13 @@ func ComputeMicroDecisionV4(input MicroDecisionInput) MicroDecisionOutput {
 	}
 
 	currentWeight := ClipFloat64(input.FloatBTC*price/input.TotalEquity, 0, 1)
-	effectiveBeta := math.Max(0.01, input.Beta*marketBeta)
+	// Beta == 0 is the explicit "Beta is absent" sentinel used by
+	// market-region parameter packs. In that mode the signal keeps a neutral
+	// coefficient of one and does not inherit the legacy market multiplier.
+	effectiveBeta := 1.0
+	if input.Beta > 0 {
+		effectiveBeta = input.Beta * marketBeta
+	}
 	inventoryBias := currentWeight - 0.5
 	aiSignal := input.AIW1*input.AISignal.SMarket +
 		input.AIW2*input.AISignal.SNews +
@@ -99,7 +103,10 @@ func ComputeMicroDecisionV4(input MicroDecisionInput) MicroDecisionOutput {
 	theoreticalUSD := deltaWeight * input.TotalEquity
 
 	input.VolatilityRatio = volatilityRatio
-	orderUSD, forced := filterMicroOrder(theoreticalUSD, deltaWeight, input, dust)
+	orderUSD, forced := theoreticalUSD, false
+	if dustEnabled {
+		orderUSD, forced = filterMicroOrder(theoreticalUSD, deltaWeight, input, dust)
+	}
 	action := ""
 	if orderUSD > 0 {
 		action = ActionBuy
@@ -108,7 +115,7 @@ func ComputeMicroDecisionV4(input MicroDecisionInput) MicroDecisionOutput {
 		action = ActionSell
 	}
 
-	if math.Abs(orderUSD) < dust && !forced {
+	if dustEnabled && math.Abs(orderUSD) < dust && !forced {
 		orderUSD = 0
 		action = ""
 	}
@@ -208,13 +215,19 @@ func filterMicroOrder(theoreticalUSD, deltaWeight float64, input MicroDecisionIn
 		return 0, false
 	}
 
+	// Both thresholds set to zero explicitly disable the legacy forced-minimum
+	// order mechanism. Existing persisted parameter packs keep their positive
+	// values and therefore preserve their historical behaviour.
+	if input.WedgeDeltaThreshold <= 0 && input.WedgeVolRatioThreshold <= 0 {
+		return 0, false
+	}
 	wedgeDelta := input.WedgeDeltaThreshold
 	if wedgeDelta <= 0 {
-		wedgeDelta = 0.04
+		wedgeDelta = math.Inf(1)
 	}
 	wedgeVol := input.WedgeVolRatioThreshold
 	if wedgeVol <= 0 {
-		wedgeVol = 1.6
+		wedgeVol = math.Inf(1)
 	}
 
 	breaksWedge := math.Abs(deltaWeight) >= wedgeDelta || input.VolatilityRatio >= wedgeVol

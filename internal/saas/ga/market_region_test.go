@@ -2,6 +2,8 @@ package ga
 
 import (
 	"encoding/json"
+	"fmt"
+	"math/rand"
 	"reflect"
 	"testing"
 
@@ -22,6 +24,52 @@ func TestMarketRegionKeysUsesEachFeatureInterval(t *testing.T) {
 	key, available := marketRegionKey(features, map[string]float64{"tr_mean": 0.11, "parkinson": 0.015})
 	if !available || key != "tr_mean=1;parkinson=1" {
 		t.Fatalf("unexpected region key %q, available=%v", key, available)
+	}
+}
+
+func TestThresholdCombinationUsesExactRawValuesWithoutTransform(t *testing.T) {
+	values := []float64{0.011, 0.027, 0.043, 0.089}
+	seen := map[string]bool{}
+	for index := 0; index < 6; index++ {
+		got := thresholdValuesAtRanks(values, []int{0, 1}, index)
+		if len(got) != 2 {
+			t.Fatalf("combination %d has %d values", index, len(got))
+		}
+		for _, value := range got {
+			found := false
+			for _, raw := range values {
+				found = found || value == raw
+			}
+			if !found {
+				t.Fatalf("threshold %v is not an original market observation", value)
+			}
+		}
+		seen[fmt.Sprintf("%v", got)] = true
+	}
+	if len(seen) != 6 {
+		t.Fatalf("enumerated %d combinations, want 6", len(seen))
+	}
+}
+
+func TestRebuildMarketRegionPacksDoesNotAllocateTheoreticalCombinations(t *testing.T) {
+	features := make([]MarketRegionFeature, 0, len(MarketRegionFeatureIDs))
+	for _, id := range MarketRegionFeatureIDs {
+		features = append(features, MarketRegionFeature{ID: id, Window: 2})
+	}
+	oldKey := marketRegionKeys(features)[0]
+	features[0].Thresholds = []float64{0.05}
+	region := MarketRegionGene{
+		SchemaVersion: MarketRegionSchemaVersion,
+		Global:        quant.DefaultSeedChromosome,
+		Features:      features,
+		Packs: []MarketRegionPack{{
+			Key:        oldKey,
+			Chromosome: quant.DefaultSeedChromosome,
+		}},
+	}
+	rebuilt := rebuildMarketRegionPacks(region, rand.New(rand.NewSource(1)))
+	if len(rebuilt.Packs) != 1 || rebuilt.Packs[0].Key != oldKey {
+		t.Fatalf("layout mutation must retain only existing sparse packs, got %#v", rebuilt.Packs)
 	}
 }
 
@@ -90,7 +138,7 @@ func TestResolveMarketRegionParamsUsesLatestCompletedBar(t *testing.T) {
 	}
 	keys := marketRegionKeys(features)
 	base := quant.DefaultSeedChromosome
-	base.Beta = 0.8
+	base.Gamma = 0.8
 	gene := MarketRegionGene{SchemaVersion: MarketRegionSchemaVersion, Features: features, Packs: []MarketRegionPack{{Key: keys[0], Chromosome: base}}}
 	gene, err := normalizeMarketRegionGene(gene, GeneOptions{MarketRegionEnabled: true, MarketRegionMaxThresholds: 1, MarketRegionMaxWindow: 2})
 	if err != nil {
@@ -109,8 +157,11 @@ func TestResolveMarketRegionParamsUsesLatestCompletedBar(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("resolve market region params: handled=%v err=%v", handled, err)
 	}
-	if params.Chromosome.Beta != quant.ClampChromosome(base).Beta {
-		t.Fatalf("expected selected pack beta %v, got %v", base.Beta, params.Chromosome.Beta)
+	if params.Chromosome.Beta != 0 {
+		t.Fatalf("market-region beta must be disabled, got %v", params.Chromosome.Beta)
+	}
+	if params.Chromosome.Gamma != quant.ClampChromosome(base).Gamma {
+		t.Fatalf("expected selected pack gamma %v, got %v", base.Gamma, params.Chromosome.Gamma)
 	}
 }
 
@@ -131,4 +182,24 @@ func marketRegionLongTestBars() []quant.Bar {
 		bars = append(bars, quant.Bar{OpenTime: int64(index + 1), Open: open, High: close + 1.1, Low: open - 0.9, Close: close})
 	}
 	return bars
+}
+
+func TestMarketRegionFingerprintIgnoresInactiveFeatureWindows(t *testing.T) {
+	featuresA := make([]MarketRegionFeature, 0, len(MarketRegionFeatureIDs))
+	featuresB := make([]MarketRegionFeature, 0, len(MarketRegionFeatureIDs))
+	for index, id := range MarketRegionFeatureIDs {
+		featuresA = append(featuresA, MarketRegionFeature{ID: id, Window: 2})
+		featuresB = append(featuresB, MarketRegionFeature{ID: id, Window: 9 + index})
+	}
+	a := MarketRegionGene{
+		SchemaVersion: MarketRegionSchemaVersion,
+		Global:        quant.DefaultSeedChromosome,
+		DefaultState:  marketRegionStateChromosome(quant.DefaultSeedChromosome),
+		Features:      featuresA,
+	}
+	b := a
+	b.Features = featuresB
+	if marketRegionFingerprint(a) != marketRegionFingerprint(b) {
+		t.Fatal("inactive feature windows must not create distinct candidates")
+	}
 }

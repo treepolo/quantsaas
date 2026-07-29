@@ -108,8 +108,8 @@ func TestSearchConfigIncludesExecutionCostsAndCapitalPolicy(t *testing.T) {
 	if !ok {
 		t.Fatalf("gene_options = %T, want object", cfg["gene_options"])
 	}
-	if geneOptions["EvolveRebalanceThreshold"] != true {
-		t.Fatalf("EvolveRebalanceThreshold = %v, want true", geneOptions["EvolveRebalanceThreshold"])
+	if geneOptions["EvolveRebalanceThreshold"] != false {
+		t.Fatalf("EvolveRebalanceThreshold = %v, want false in floating-only mode", geneOptions["EvolveRebalanceThreshold"])
 	}
 	if geneOptions["EvolveGamma"] != true {
 		t.Fatalf("EvolveGamma = %v, want true", geneOptions["EvolveGamma"])

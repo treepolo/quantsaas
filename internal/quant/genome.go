@@ -92,18 +92,28 @@ var GeneSteps = map[string]float64{
 }
 
 func ClampChromosome(c Chromosome) Chromosome {
-	c.MicroReservePct = clampByName(c.MicroReservePct, "micro_reserve_pct")
-	c.Beta = clampByName(c.Beta, "beta")
+	if c.MicroReservePct != 0 {
+		c.MicroReservePct = clampByName(c.MicroReservePct, "micro_reserve_pct")
+	}
+	if c.Beta != 0 {
+		c.Beta = clampByName(c.Beta, "beta")
+	}
 	c.Gamma = clampByName(c.Gamma, "gamma")
 	c.WMean = clampByName(c.WMean, "w_mean")
 	c.WMomentum = clampByName(c.WMomentum, "w_momentum")
 	c.WBreakout = clampByName(c.WBreakout, "w_breakout")
-	c.DustUSD = clampByName(c.DustUSD, "dust_usd")
+	if c.DustUSD != 0 {
+		c.DustUSD = clampByName(c.DustUSD, "dust_usd")
+	}
 	c.RebalanceThreshold = clampByName(c.RebalanceThreshold, "rebalance_threshold")
 	c.ForceFullThreshold = clampByName(c.ForceFullThreshold, "force_full_threshold")
 	c.ForceEmptyThreshold = clampByName(c.ForceEmptyThreshold, "force_empty_threshold")
-	c.WedgeDeltaThreshold = clampByName(c.WedgeDeltaThreshold, "wedge_delta_threshold")
-	c.WedgeVolRatioThreshold = clampByName(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold")
+	if c.WedgeDeltaThreshold != 0 {
+		c.WedgeDeltaThreshold = clampByName(c.WedgeDeltaThreshold, "wedge_delta_threshold")
+	}
+	if c.WedgeVolRatioThreshold != 0 {
+		c.WedgeVolRatioThreshold = clampByName(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold")
+	}
 	c.MacroBearMultiplier = clampByName(c.MacroBearMultiplier, "macro_bear_multiplier")
 	c.MacroBullMultiplier = clampByName(c.MacroBullMultiplier, "macro_bull_multiplier")
 	c.ExtraDeployPct = clampByName(c.ExtraDeployPct, "extra_deploy_pct")
@@ -119,7 +129,7 @@ func ClampChromosome(c Chromosome) Chromosome {
 
 func ValidateChromosome(c Chromosome) error {
 	c = ClampChromosome(c)
-	if c.DustUSD <= 0 {
+	if c.DustUSD < 0 {
 		return fmt.Errorf("dust_usd must be positive")
 	}
 	if c.MacroBearMultiplier < c.MacroBullMultiplier {

@@ -2,6 +2,7 @@ package ga
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -29,9 +30,27 @@ type CandidateReservationStore interface {
 	ReserveCandidates(ctx context.Context, scope GeneScope, searchConfig []byte, taskID uint, generation int, candidates []CandidateReservation) error
 }
 
+type CandidateResultStore interface {
+	UpdateCandidateResults(ctx context.Context, searchConfig []byte, results []CandidateEvaluation) error
+}
+
+type CandidateBestStore interface {
+	LoadBestEvaluatedCandidate(ctx context.Context, scope GeneScope, searchConfig []byte) (EvaluatedCandidate, bool, error)
+}
+
 type CandidateReservation struct {
 	Fingerprint uint64
 	ParamPack   []byte
+}
+
+type CandidateEvaluation struct {
+	Fingerprint uint64
+	Fitness     FitnessResult
+}
+
+type EvaluatedCandidate struct {
+	ParamPack []byte
+	Fitness   FitnessResult
 }
 
 type GeneScope struct {
@@ -49,6 +68,14 @@ type DatasetScope struct {
 	Interval     string
 	StartTimeMs  int64
 	EndTimeMs    int64
+}
+
+type MarketScope struct {
+	InstrumentID string `json:"instrument_id"`
+	Pair         string `json:"pair"`
+	DataSource   string `json:"data_source"`
+	StartTimeMs  int64  `json:"start_time_ms"`
+	EndTimeMs    int64  `json:"end_time_ms"`
 }
 
 type EvolutionEngine struct {
@@ -69,38 +96,82 @@ type EvolutionEngine struct {
 }
 
 type EpochConfig struct {
-	TaskID             uint
-	Pair               string
-	InstrumentID       string
-	DataSource         string
-	ExecutionMode      string
-	StartTimeMs        int64
-	EndTimeMs          int64
-	Interval           string
-	PopSize            int
-	MaxGenerations     int
-	SpawnMode          string
-	LotStepSize        float64
-	LotMinQty          float64
-	InitialCapital     float64
-	MonthlyDCA         float64
-	GeneOptions        GeneOptions
-	Costs              quant.ExecutionCostConfig
-	TradePenalty       float64
-	LongTermFilter     backtestcore.LongTermFilterConfig
-	OnProgress         func(EpochProgress)
-	OnTrace            func(TraceEvent)
-	OnComputePlan      func(ComputePlan)
-	OnComputeStep      func(int64)
-	TraceMode          TraceMode
-	TraceModeFunc      func() TraceMode
-	SpawnPointOverride *quant.SpawnPoint
-	SeedGeneID         uint
-	SeedParamPack      []byte
-	RandomPopulation   bool
+	TaskID         uint
+	Pair           string
+	InstrumentID   string
+	DataSource     string
+	ExecutionMode  string
+	StartTimeMs    int64
+	EndTimeMs      int64
+	Interval       string
+	PopSize        int
+	MaxGenerations int
+	// SearchAlgorithm selects candidate generation only.  "layered_grid" is
+	// the deterministic default; "genetic" retains the legacy GA behaviour.
+	SearchAlgorithm string
+	// LayeredLocalPercent is the visible share of each layered batch allocated
+	// to systematic expansion around the current centre.  The remainder is
+	// allocated to the deterministic global frontier.
+	LayeredLocalPercent int
+	SpawnMode           string
+	LotStepSize         float64
+	LotMinQty           float64
+	InitialCapital      float64
+	MonthlyDCA          float64
+	GeneOptions         GeneOptions
+	Costs               quant.ExecutionCostConfig
+	TradePenalty        float64
+	LongTermFilter      backtestcore.LongTermFilterConfig
+	OnProgress          func(EpochProgress)
+	OnTrace             func(TraceEvent)
+	OnComputePlan       func(ComputePlan)
+	OnComputeStep       func(int64)
+	OnSearchCheckpoint  func([]byte)
+	OnSearchIdentity    func(string)
+	TraceMode           TraceMode
+	TraceModeFunc       func() TraceMode
+	SpawnPointOverride  *quant.SpawnPoint
+	SeedGeneID          uint
+	SeedParamPack       []byte
+	SeedIsAutomatic     bool
+	RandomPopulation    bool
+	// UseInitialSeedOnly keeps every continuous epoch anchored to the task's
+	// original seed and bypasses the shared historical elite pool.
+	UseInitialSeedOnly bool
 	// ReservedFingerprints belongs to one user task. Continuous runs pass the
 	// same map into every epoch so a candidate is never sent to evaluation twice.
 	ReservedFingerprints map[uint64]bool `json:"-"`
+	SearchCheckpoint     []byte          `json:"-"`
+	MultiMarketEnabled   bool            `json:"multi_market_enabled"`
+	MultiMarkets         []MarketScope   `json:"multi_markets,omitempty"`
+	DatasetHash          string          `json:"-"`
+}
+
+const candidateEvaluationSemanticsVersion = "sigmoid-dca-search-evaluation-v2"
+
+const (
+	SearchAlgorithmLayeredGrid = "layered_grid"
+	SearchAlgorithmGenetic     = "genetic"
+)
+
+func normalizeSearchAlgorithm(value string) string {
+	if value == SearchAlgorithmGenetic {
+		return SearchAlgorithmGenetic
+	}
+	return SearchAlgorithmLayeredGrid
+}
+
+func normalizeLayeredLocalPercent(value int) int {
+	if value == 0 {
+		return 70
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
 }
 
 type EpochProgress struct {
@@ -108,9 +179,12 @@ type EpochProgress struct {
 	BestFitness         float64
 	BestMaxDrawdown     float64
 	BestWindows         []quant.CrucibleResult
+	BestMarkets         []MarketPerformance
 	BestParamPack       []byte
 	MutationProbability float64
 	MutationScale       float64
+	SearchAxes          []LayeredAxisStatus
+	SearchStatus        *LayeredSearchStatus
 }
 
 type EpochResult struct {
@@ -146,6 +220,8 @@ func NewEvolutionEngine(evolvable EvolvableStrategy, store GenomeStore) *Evoluti
 
 func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochResult, error) {
 	cfg.TraceMode = NormalizeTraceMode(cfg.TraceMode)
+	cfg.SearchAlgorithm = normalizeSearchAlgorithm(cfg.SearchAlgorithm)
+	cfg.LayeredLocalPercent = normalizeLayeredLocalPercent(cfg.LayeredLocalPercent)
 	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	e.trace(cfg, TraceModeSummary, "evolution", "epoch.start", "epoch started", map[string]any{
@@ -166,6 +242,8 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		"long_term_filter_months":  cfg.LongTermFilter.Months,
 		"long_term_filter_version": cfg.LongTermFilter.Version,
 		"trace_mode":               cfg.TraceMode,
+		"search_algorithm":         cfg.SearchAlgorithm,
+		"layered_local_percent":    cfg.LayeredLocalPercent,
 	})
 	plan, err := e.buildEvaluablePlan(ctx, cfg)
 	if err != nil {
@@ -181,8 +259,12 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	plan.TraceMode = cfg.TraceMode
 	plan.TraceModeFunc = cfg.TraceModeFunc
 	plan.ComputeStep = cfg.OnComputeStep
+	cfg.DatasetHash = evaluablePlanDatasetHash(plan)
 	searchConfig := e.searchConfig(cfg)
 	reservationConfig := e.candidateReservationConfig(cfg)
+	if cfg.OnSearchIdentity != nil {
+		cfg.OnSearchIdentity(candidateSearchHash(reservationConfig))
+	}
 	scope := GeneScope{
 		StrategyID:    e.evolvable.StrategyID(),
 		InstrumentID:  cfg.InstrumentID,
@@ -203,15 +285,42 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 			reservedFingerprints[fingerprint] = true
 		}
 	}
+	var inheritedBest *individual
+	if bestStore, ok := e.store.(CandidateBestStore); ok {
+		candidate, found, loadErr := bestStore.LoadBestEvaluatedCandidate(ctx, scope, reservationConfig)
+		if loadErr != nil {
+			return EpochResult{}, loadErr
+		}
+		if found {
+			gene := e.normalizeGene(cfg, e.evolvable.DecodeElite(candidate.ParamPack))
+			inheritedBest = &individual{Gene: gene, Fitness: candidate.Fitness, Evaluated: true}
+			if cfg.SearchAlgorithm == SearchAlgorithmLayeredGrid && (cfg.SeedGeneID == 0 || cfg.SeedIsAutomatic) && !cfg.UseInitialSeedOnly && !cfg.RandomPopulation {
+				cfg.SeedParamPack = append([]byte(nil), candidate.ParamPack...)
+			}
+		}
+	}
 
-	population, err := e.initializePopulation(ctx, cfg, rng)
+	var scheduler *layeredGridScheduler
+	var population []individual
+	if cfg.SearchAlgorithm == SearchAlgorithmLayeredGrid {
+		population, scheduler, err = e.initializeLayeredPopulation(ctx, cfg, rng)
+	} else {
+		population, err = e.initializePopulation(ctx, cfg, rng)
+	}
 	if err != nil {
 		e.trace(cfg, TraceModeSummary, "evolution", "epoch.failed", "failed to initialize population", map[string]any{
 			"error": err.Error(),
 		})
 		return EpochResult{}, err
 	}
-	population, err = e.deduplicatePopulation(population, reservedFingerprints, rng, cfg)
+	if scheduler != nil {
+		population, err = e.deduplicateLayeredPopulation(population, reservedFingerprints, scheduler, cfg, plan)
+	} else {
+		population, err = e.deduplicatePopulation(population, reservedFingerprints, rng, cfg)
+		if err == nil {
+			err = materializePopulationMarketRegionPacks(population, plan)
+		}
+	}
 	if err != nil {
 		return EpochResult{}, err
 	}
@@ -230,9 +339,20 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 	if err != nil {
 		return EpochResult{}, err
 	}
+	e.persistLayeredCheckpoint(cfg, scheduler)
 
 	best := bestIndividual(population)
+	if inheritedBest != nil && inheritedBest.Fitness.ScoreTotal > best.Fitness.ScoreTotal {
+		best = *inheritedBest
+	}
+	if math.IsInf(best.Fitness.ScoreTotal, -1) {
+		return EpochResult{}, fmt.Errorf("所有候選參數在至少一張行情的現金流調整後報酬皆不大於 -100%%，沒有可用候選參數")
+	}
 	bestScore := best.Fitness.ScoreTotal
+	if scheduler != nil {
+		scheduler.ObserveMaterializedStatePackages(best.Gene)
+		scheduler.Recenter(best.Gene)
+	}
 	patience := 0
 	mutProb := e.mutationProbability(cfg)
 	mutScale := e.mutationScale()
@@ -244,15 +364,25 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		}
 		sortPopulation(population)
 		currentBest := population[0]
-		if currentBest.Fitness.ScoreTotal-bestScore < e.EarlyStopMinDelta {
+		improvement := currentBest.Fitness.ScoreTotal - bestScore
+		if improvement <= 0 {
 			patience++
 		} else {
 			best = currentBest
 			bestScore = currentBest.Fitness.ScoreTotal
-			patience = 0
+			if scheduler != nil {
+				scheduler.ObserveMaterializedStatePackages(best.Gene)
+				scheduler.Recenter(best.Gene)
+			}
+			if improvement >= e.EarlyStopMinDelta {
+				patience = 0
+			} else {
+				patience++
+			}
 		}
+		e.persistLayeredCheckpoint(cfg, scheduler)
 
-		if patience >= e.EarlyStopPatience {
+		if scheduler == nil && patience >= e.EarlyStopPatience {
 			nextProb, nextScale := e.rampMutation(mutProb, mutScale)
 			if nextProb == mutProb && nextScale == mutScale {
 				e.trace(cfg, TraceModeSummary, "evolution", "epoch.early_stop", "mutation ramp reached limit", map[string]any{
@@ -279,9 +409,12 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 				BestFitness:         bestScore,
 				BestMaxDrawdown:     best.Fitness.MaxDrawdown,
 				BestWindows:         best.Fitness.Windows,
+				BestMarkets:         best.Fitness.Markets,
 				BestParamPack:       paramPack,
 				MutationProbability: mutProb,
 				MutationScale:       mutScale,
+				SearchAxes:          layeredAxisStatuses(scheduler),
+				SearchStatus:        layeredSearchStatus(scheduler),
 			})
 		}
 		e.trace(cfg, TraceModeSummary, "evolution", "generation.completed", "generation completed", map[string]any{
@@ -292,19 +425,34 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 			"mutation_scale":       mutScale,
 		})
 
-		population, err = e.nextGeneration(population, mutProb, mutScale, rng, cfg, generation+1, reservedFingerprints)
+		if scheduler != nil {
+			population, err = e.nextLayeredPopulation(e.popSize(cfg), reservedFingerprints, scheduler, cfg, plan)
+		} else {
+			population, err = e.nextGeneration(population, mutProb, mutScale, rng, cfg, generation+1, reservedFingerprints)
+		}
 		if err != nil {
 			return EpochResult{}, err
+		}
+		if scheduler == nil {
+			if err := materializePopulationMarketRegionPacks(population, plan); err != nil {
+				return EpochResult{}, err
+			}
 		}
 		population, err = e.evaluatePopulation(ctx, population, plan, generation+1, cfg, scope, reservationConfig)
 		if err != nil {
 			return EpochResult{}, err
 		}
+		e.persistLayeredCheckpoint(cfg, scheduler)
 	}
 
 	sortPopulation(population)
 	if population[0].Fitness.ScoreTotal > best.Fitness.ScoreTotal {
 		best = population[0]
+		if scheduler != nil {
+			scheduler.ObserveMaterializedStatePackages(best.Gene)
+			scheduler.Recenter(best.Gene)
+			e.persistLayeredCheckpoint(cfg, scheduler)
+		}
 	}
 
 	paramPack, err := e.evolvable.EncodeResult(best.Gene, plan.Spawn, cfg.GeneOptions)
@@ -326,6 +474,28 @@ func (e *EvolutionEngine) RunEpoch(ctx context.Context, cfg EpochConfig) (EpochR
 		Fitness:      best.Fitness,
 		ParamPack:    paramPack,
 	}, nil
+}
+
+func materializePopulationMarketRegionPacks(population []individual, plan EvaluablePlan) error {
+	barSets := make([][]quant.Bar, 0, len(plan.Windows)+len(plan.MultiMarkets))
+	for _, window := range plan.Windows {
+		barSets = append(barSets, window.Bars)
+	}
+	for _, market := range plan.MultiMarkets {
+		barSets = append(barSets, market.Window.Bars)
+	}
+	for index := range population {
+		region, ok := isMarketRegionGene(population[index].Gene)
+		if !ok {
+			continue
+		}
+		materialized, err := materializeMarketRegionPacks(region, barSets, plan.MarketRegionCache)
+		if err != nil {
+			return err
+		}
+		population[index].Gene = materialized
+	}
+	return nil
 }
 
 func (e *EvolutionEngine) EvaluateParamPack(ctx context.Context, cfg EpochConfig, paramPack []byte) (FitnessResult, error) {
@@ -363,6 +533,8 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		spawnMode = "inherit"
 	}
 	raw, err := json.Marshal(map[string]any{
+		"evaluation_version":       candidateEvaluationSemanticsVersion,
+		"dataset_hash":             cfg.DatasetHash,
 		"strategy_id":              e.evolvable.StrategyID(),
 		"symbol":                   cfg.Pair,
 		"instrument_id":            cfg.InstrumentID,
@@ -380,11 +552,15 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 		"spawn_mode":               spawnMode,
 		"population":               e.popSize(cfg),
 		"generations":              e.maxGenerations(cfg),
+		"search_algorithm":         normalizeSearchAlgorithm(cfg.SearchAlgorithm),
+		"layered_local_percent":    normalizeLayeredLocalPercent(cfg.LayeredLocalPercent),
 		"seed_gene_id":             cfg.SeedGeneID,
 		"fixed_param_keys":         cfg.GeneOptions.FixedParamKeys,
 		"long_term_filter_enabled": cfg.LongTermFilter.Enabled,
 		"long_term_filter_months":  cfg.LongTermFilter.Months,
 		"long_term_filter_version": cfg.LongTermFilter.Version,
+		"multi_market_enabled":     cfg.MultiMarketEnabled,
+		"multi_markets":            cfg.MultiMarkets,
 	})
 	if err != nil {
 		return []byte(`{}`)
@@ -398,32 +574,45 @@ func (e *EvolutionEngine) searchConfig(cfg EpochConfig) []byte {
 // this key, so separate runs of the same actual search share reservations.
 func (e *EvolutionEngine) candidateReservationConfig(cfg EpochConfig) []byte {
 	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
+	startTimeMs, endTimeMs := cfg.StartTimeMs, cfg.EndTimeMs
+	if len(cfg.MultiMarkets) > 0 {
+		// Multi-market evaluation uses only the explicit per-market ranges.
+		// Hidden single-market form dates must not split an otherwise identical
+		// reservation identity.
+		startTimeMs, endTimeMs = 0, 0
+	}
 	raw, err := json.Marshal(struct {
-		StrategyID     string                            `json:"strategy_id"`
-		Pair           string                            `json:"pair"`
-		InstrumentID   string                            `json:"instrument_id"`
-		DataSource     string                            `json:"data_source"`
-		Interval       string                            `json:"interval"`
-		ExecutionMode  string                            `json:"execution_mode"`
-		StartTimeMs    int64                             `json:"start_time_ms"`
-		EndTimeMs      int64                             `json:"end_time_ms"`
-		LotStepSize    float64                           `json:"lot_step_size"`
-		LotMinQty      float64                           `json:"lot_min_qty"`
-		InitialCapital float64                           `json:"initial_capital"`
-		MonthlyDCA     float64                           `json:"monthly_dca"`
-		GeneOptions    GeneOptions                       `json:"gene_options"`
-		FixedGene      *quant.Chromosome                 `json:"fixed_gene,omitempty"`
-		Costs          quant.ExecutionCostConfig         `json:"costs"`
-		TradePenalty   float64                           `json:"trade_penalty"`
-		LongTermFilter backtestcore.LongTermFilterConfig `json:"long_term_filter"`
-		SpawnPoint     *quant.SpawnPoint                 `json:"spawn_point"`
+		EvaluationVersion string                            `json:"evaluation_version"`
+		DatasetHash       string                            `json:"dataset_hash"`
+		StrategyID        string                            `json:"strategy_id"`
+		Pair              string                            `json:"pair"`
+		InstrumentID      string                            `json:"instrument_id"`
+		DataSource        string                            `json:"data_source"`
+		Interval          string                            `json:"interval"`
+		ExecutionMode     string                            `json:"execution_mode"`
+		StartTimeMs       int64                             `json:"start_time_ms"`
+		EndTimeMs         int64                             `json:"end_time_ms"`
+		LotStepSize       float64                           `json:"lot_step_size"`
+		LotMinQty         float64                           `json:"lot_min_qty"`
+		InitialCapital    float64                           `json:"initial_capital"`
+		MonthlyDCA        float64                           `json:"monthly_dca"`
+		GeneOptions       GeneOptions                       `json:"gene_options"`
+		FixedGene         *quant.Chromosome                 `json:"fixed_gene,omitempty"`
+		Costs             quant.ExecutionCostConfig         `json:"costs"`
+		TradePenalty      float64                           `json:"trade_penalty"`
+		LongTermFilter    backtestcore.LongTermFilterConfig `json:"long_term_filter"`
+		SpawnPoint        *quant.SpawnPoint                 `json:"spawn_point"`
+		MultiMarkets      []MarketScope                     `json:"multi_markets,omitempty"`
 	}{
-		StrategyID: e.evolvable.StrategyID(), Pair: cfg.Pair, InstrumentID: cfg.InstrumentID,
+		EvaluationVersion: candidateEvaluationSemanticsVersion,
+		DatasetHash:       cfg.DatasetHash,
+		StrategyID:        e.evolvable.StrategyID(), Pair: cfg.Pair, InstrumentID: cfg.InstrumentID,
 		DataSource: cfg.DataSource, Interval: cfg.Interval, ExecutionMode: cfg.ExecutionMode,
-		StartTimeMs: cfg.StartTimeMs, EndTimeMs: cfg.EndTimeMs, LotStepSize: cfg.LotStepSize,
+		StartTimeMs: startTimeMs, EndTimeMs: endTimeMs, LotStepSize: cfg.LotStepSize,
 		LotMinQty: cfg.LotMinQty, InitialCapital: e.initialCapital(cfg), MonthlyDCA: e.monthlyDCA(cfg),
-		GeneOptions: cfg.GeneOptions, FixedGene: cfg.GeneOptions.FixedGene, Costs: quant.NormalizeExecutionCosts(cfg.Costs),
+		GeneOptions: cfg.GeneOptions, FixedGene: reservationFixedGene(cfg.GeneOptions), Costs: quant.NormalizeExecutionCosts(cfg.Costs),
 		TradePenalty: cfg.TradePenalty, LongTermFilter: cfg.LongTermFilter, SpawnPoint: cfg.SpawnPointOverride,
+		MultiMarkets: cfg.MultiMarkets,
 	})
 	if err != nil {
 		return []byte(`{}`)
@@ -431,7 +620,41 @@ func (e *EvolutionEngine) candidateReservationConfig(cfg EpochConfig) []byte {
 	return raw
 }
 
+func evaluablePlanDatasetHash(plan EvaluablePlan) string {
+	type marketBars struct {
+		InstrumentID string      `json:"instrument_id,omitempty"`
+		Pair         string      `json:"pair"`
+		Bars         []quant.Bar `json:"bars"`
+	}
+	payload := make([]marketBars, 0, max(1, len(plan.MultiMarkets)))
+	if len(plan.MultiMarkets) > 0 {
+		for _, market := range plan.MultiMarkets {
+			payload = append(payload, marketBars{InstrumentID: market.InstrumentID, Pair: market.Pair, Bars: market.Window.Bars})
+		}
+	} else if len(plan.Windows) > 0 {
+		full := plan.Windows[len(plan.Windows)-1]
+		payload = append(payload, marketBars{Pair: plan.Pair, Bars: full.Bars})
+	}
+	raw, _ := json.Marshal(payload)
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("%x", sum[:])
+}
+
+func reservationFixedGene(options GeneOptions) *quant.Chromosome {
+	if len(options.FixedParamKeys) == 0 {
+		return nil
+	}
+	return options.FixedGene
+}
+
 func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfig) (EvaluablePlan, error) {
+	if cfg.MultiMarketEnabled {
+		return e.buildMultiMarketEvaluablePlan(ctx, cfg)
+	}
+	return e.buildSingleEvaluablePlan(ctx, cfg)
+}
+
+func (e *EvolutionEngine) buildSingleEvaluablePlan(ctx context.Context, cfg EpochConfig) (EvaluablePlan, error) {
 	cfg.GeneOptions = NormalizeGeneOptions(cfg.GeneOptions)
 	e.trace(cfg, TraceModeSummary, "market_data", "klines.load", "loading historical bars", map[string]any{
 		"pair":          cfg.Pair,
@@ -466,28 +689,18 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 				maxWindow = len(window.Bars)
 			}
 		}
+		// A feature window needs observations after its own lookback period.
+		// Using the entire shortest evaluation period left no usable row to
+		// discover threshold ranges, which silently produced window-only genes.
+		maxWindow /= 2
 		if maxWindow < 2 {
 			return EvaluablePlan{}, fmt.Errorf("market region search requires at least two bars in every evaluation window")
 		}
 		cfg.GeneOptions.MarketRegionMaxWindow = maxWindow
-		// Range discovery is real causal work and may be expensive for large
-		// histories. Start the monitor before it so a running task never looks
-		// like a stalled zero-progress task while it is preparing candidates.
-		initializationUnits = 2 * int64(len(bars)) * int64(maxWindow)
-		if cfg.OnComputePlan != nil {
-			cfg.OnComputePlan(ComputePlan{PlannedUnits: initializationUnits})
-		}
-		e.trace(cfg, TraceModeSummary, "evolution", "market_region.ranges.start", "preparing market-region threshold ranges", map[string]any{
-			"bars": len(bars), "max_window": maxWindow,
-		})
-		ranges, rangeErr := marketRegionFeatureRangesWithProgress(bars, maxWindow, cfg.OnComputeStep)
-		if rangeErr != nil {
-			return EvaluablePlan{}, rangeErr
-		}
-		e.trace(cfg, TraceModeSummary, "evolution", "market_region.ranges.done", "market-region threshold ranges prepared", map[string]any{
-			"feature_count": len(ranges),
-		})
-		cfg.GeneOptions.MarketRegionFeatureRanges = ranges
+		// Threshold values are resolved lazily from the candidate's own feature
+		// window during materialisation.  Precomputing a value pool at the
+		// largest window was both memory-heavy and semantically wrong for every
+		// other searched window.
 	}
 	costs := quant.NormalizeExecutionCosts(cfg.Costs)
 	spawn := cfg.SpawnPointOverride
@@ -551,8 +764,98 @@ func (e *EvolutionEngine) buildEvaluablePlan(ctx context.Context, cfg EpochConfi
 	}, nil
 }
 
+func (e *EvolutionEngine) buildMultiMarketEvaluablePlan(ctx context.Context, cfg EpochConfig) (EvaluablePlan, error) {
+	if len(cfg.MultiMarkets) < 2 {
+		return EvaluablePlan{}, fmt.Errorf("多行情搜尋至少要選擇兩張行情")
+	}
+	var root EvaluablePlan
+	minimumRegionWindow := 0
+	for i, market := range cfg.MultiMarkets {
+		marketCfg := cfg
+		marketCfg.MultiMarketEnabled = false
+		marketCfg.MultiMarkets = nil
+		marketCfg.Pair, marketCfg.InstrumentID, marketCfg.DataSource = market.Pair, market.InstrumentID, market.DataSource
+		marketCfg.StartTimeMs, marketCfg.EndTimeMs = market.StartTimeMs, market.EndTimeMs
+		// Range preparation on every market is still required in region mode;
+		// the UI monitor remains attached to the aggregate task.
+		marketPlan, err := e.buildSingleEvaluablePlan(ctx, marketCfg)
+		if err != nil {
+			return EvaluablePlan{}, fmt.Errorf("讀取行情 %s 失敗：%w", market.InstrumentID, err)
+		}
+		full := marketPlan.Windows[len(marketPlan.Windows)-1]
+		if i == 0 {
+			root = marketPlan
+			root.Windows = nil
+			root.DCABaselines = nil
+			root.InitializationUnits = 0
+		}
+		if cfg.GeneOptions.MarketRegionEnabled {
+		}
+		if cfg.GeneOptions.MarketRegionEnabled && (minimumRegionWindow == 0 || marketPlan.GeneOptions.MarketRegionMaxWindow < minimumRegionWindow) {
+			minimumRegionWindow = marketPlan.GeneOptions.MarketRegionMaxWindow
+		}
+		root.InitializationUnits += marketPlan.InitializationUnits
+		root.MultiMarkets = append(root.MultiMarkets, MultiMarketPlan{Pair: market.Pair, InstrumentID: market.InstrumentID, Window: full, MarketRegionCache: marketPlan.MarketRegionCache})
+	}
+	if minimumRegionWindow > 0 {
+		// One shared gene must be valid for every selected market.
+		root.GeneOptions.MarketRegionMaxWindow = minimumRegionWindow
+	}
+	if cfg.GeneOptions.MarketRegionEnabled {
+	}
+	return root, nil
+}
+
+func mergeMarketRegionFeatureRanges(destination, source map[string][2]float64) {
+	for id, candidate := range source {
+		if current, exists := destination[id]; exists {
+			if candidate[0] < current[0] {
+				current[0] = candidate[0]
+			}
+			if candidate[1] > current[1] {
+				current[1] = candidate[1]
+			}
+			destination[id] = current
+			continue
+		}
+		destination[id] = candidate
+	}
+}
+
+func mergeMarketRegionFeatureValues(destination, source map[string][]float64) {
+	seen := make(map[string]map[uint64]bool, len(source))
+	for id, values := range destination {
+		seen[id] = make(map[uint64]bool, len(values))
+		for _, value := range values {
+			seen[id][math.Float64bits(value)] = true
+		}
+	}
+	for id, values := range source {
+		if seen[id] == nil {
+			seen[id] = map[uint64]bool{}
+		}
+		for _, value := range values {
+			bits := math.Float64bits(value)
+			if !seen[id][bits] {
+				seen[id][bits] = true
+				destination[id] = append(destination[id], value)
+			}
+		}
+		sort.Float64s(destination[id])
+	}
+}
+
 func planComputeUnits(plan EvaluablePlan) int64 {
 	total := plan.InitializationUnits
+	if len(plan.MultiMarkets) > 0 {
+		for _, market := range plan.MultiMarkets {
+			total += int64(len(market.Window.Bars))
+			if plan.GeneOptions.MarketRegionEnabled {
+				total += marketRegionMaximumProviderUnits(plan.GeneOptions.MarketRegionMaxWindow, len(market.Window.Bars))
+			}
+		}
+		return total
+	}
 	for _, window := range plan.Windows {
 		total += int64(len(window.Bars))
 		if plan.GeneOptions.MarketRegionEnabled {
@@ -565,6 +868,15 @@ func planComputeUnits(plan EvaluablePlan) int64 {
 func candidateComputeUnits(plan EvaluablePlan, g Gene) int64 {
 	var total int64
 	region, regionMode := isMarketRegionGene(g)
+	if len(plan.MultiMarkets) > 0 {
+		for _, market := range plan.MultiMarkets {
+			total += int64(len(market.Window.Bars))
+			if regionMode {
+				total += marketRegionProviderUnits(region, market.Window.Bars)
+			}
+		}
+		return total
+	}
 	for _, window := range plan.Windows {
 		total += int64(len(window.Bars))
 		if regionMode {
@@ -602,13 +914,30 @@ func (e *EvolutionEngine) sampleGene(cfg EpochConfig, rng RandomSource) Gene {
 	return e.evolvable.Sample(rng)
 }
 
+func (e *EvolutionEngine) mutateGene(cfg EpochConfig, gene Gene, prob float64, scale float64, rng RandomSource) Gene {
+	if mutator, ok := e.evolvable.(GeneOptionMutator); ok {
+		return mutator.MutateWithOptions(gene, prob, scale, rng, cfg.GeneOptions)
+	}
+	return e.evolvable.Mutate(gene, prob, scale, rng)
+}
+
+func (e *EvolutionEngine) crossoverGene(cfg EpochConfig, left Gene, right Gene, rng RandomSource) Gene {
+	if crossover, ok := e.evolvable.(GeneOptionCrossover); ok {
+		return crossover.CrossoverWithOptions(left, right, rng, cfg.GeneOptions)
+	}
+	return e.evolvable.Crossover(left, right, rng)
+}
+
 func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochConfig, rng RandomSource) ([]individual, error) {
 	popSize := e.popSize(cfg)
-	elitesRaw := [][]byte{}
+	sourceGenes := make([]Gene, 0)
 	if len(cfg.SeedParamPack) > 0 {
-		elitesRaw = append(elitesRaw, cfg.SeedParamPack)
+		sourceGenes = append(sourceGenes, e.normalizeGene(cfg, e.evolvable.DecodeElite(cfg.SeedParamPack)))
 	}
-	if !cfg.RandomPopulation {
+	if cfg.UseInitialSeedOnly && len(sourceGenes) == 0 {
+		sourceGenes = append(sourceGenes, e.normalizeGene(cfg, quant.DefaultSeedChromosome))
+	}
+	if !cfg.RandomPopulation && !cfg.UseInitialSeedOnly {
 		loaded, err := e.store.LoadEliteGenes(ctx, GeneScope{
 			StrategyID:    e.evolvable.StrategyID(),
 			InstrumentID:  cfg.InstrumentID,
@@ -619,23 +948,25 @@ func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochCon
 		if err != nil {
 			return nil, err
 		}
-		elitesRaw = append(elitesRaw, loaded...)
+		for _, raw := range loaded {
+			sourceGenes = append(sourceGenes, e.normalizeGene(cfg, e.evolvable.DecodeElite(raw)))
+		}
 	}
 
 	population := make([]individual, 0, popSize)
-	if len(elitesRaw) > 0 {
-		seed := e.normalizeGene(cfg, e.evolvable.DecodeElite(elitesRaw[0]))
+	if len(sourceGenes) > 0 {
+		seed := sourceGenes[0]
 		population = append(population, individual{Gene: seed})
 		remaining := popSize - 1
 		copyCount := int(math.Round(float64(remaining) * 0.10))
 		mutateCount := int(math.Round(float64(remaining) * 0.40))
 
 		for i := 0; i < copyCount && len(population) < popSize; i++ {
-			population = append(population, individual{Gene: e.normalizeGene(cfg, e.evolvable.DecodeElite(elitesRaw[i%len(elitesRaw)]))})
+			population = append(population, individual{Gene: sourceGenes[i%len(sourceGenes)]})
 		}
 		for i := 0; i < mutateCount && len(population) < popSize; i++ {
-			base := e.normalizeGene(cfg, e.evolvable.DecodeElite(elitesRaw[i%len(elitesRaw)]))
-			population = append(population, individual{Gene: e.normalizeGene(cfg, e.evolvable.Mutate(base, 0.15, 1.5, rng))})
+			base := sourceGenes[i%len(sourceGenes)]
+			population = append(population, individual{Gene: e.normalizeGene(cfg, e.mutateGene(cfg, base, 0.15, 1.5, rng))})
 		}
 	} else if !cfg.RandomPopulation {
 		population = append(population, individual{Gene: e.normalizeGene(cfg, quant.DefaultSeedChromosome)})
@@ -645,10 +976,131 @@ func (e *EvolutionEngine) initializePopulation(ctx context.Context, cfg EpochCon
 		population = append(population, individual{Gene: e.normalizeGene(cfg, e.sampleGene(cfg, rng))})
 	}
 	e.trace(cfg, TraceModeSummary, "evolution", "population.initialized", "initial population initialized", map[string]any{
-		"population":  len(population),
-		"elite_count": len(elitesRaw),
+		"population":        len(population),
+		"elite_count":       len(sourceGenes),
+		"initial_seed_only": cfg.UseInitialSeedOnly,
 	})
 	return population, nil
+}
+
+// initializeLayeredPopulation chooses a single, explicit centre and then
+// obtains every candidate from the deterministic lattice iterator.  Unlike the
+// GA path it never fills a batch with random samples.
+func (e *EvolutionEngine) initializeLayeredPopulation(ctx context.Context, cfg EpochConfig, rng RandomSource) ([]individual, *layeredGridScheduler, error) {
+	var seed Gene
+	if cfg.RandomPopulation {
+		seed = e.normalizeGene(cfg, e.sampleGene(cfg, rng))
+	} else if len(cfg.SeedParamPack) > 0 {
+		seed = e.normalizeGene(cfg, e.evolvable.DecodeElite(cfg.SeedParamPack))
+	}
+	if seed == nil && !cfg.UseInitialSeedOnly {
+		loaded, err := e.store.LoadEliteGenes(ctx, GeneScope{
+			StrategyID: e.evolvable.StrategyID(), InstrumentID: cfg.InstrumentID,
+			DataSource: cfg.DataSource, Interval: cfg.Interval, ExecutionMode: cfg.ExecutionMode,
+		}, 1)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(loaded) > 0 {
+			seed = e.normalizeGene(cfg, e.evolvable.DecodeElite(loaded[0]))
+		}
+	}
+	if seed == nil {
+		seed = e.normalizeGene(cfg, quant.DefaultSeedChromosome)
+	}
+	scheduler := newLayeredGridScheduler(seed, cfg.GeneOptions, cfg.LayeredLocalPercent)
+	if len(cfg.SearchCheckpoint) > 0 {
+		restored, err := restoreLayeredGridScheduler(cfg.SearchCheckpoint, cfg.GeneOptions)
+		if err != nil {
+			return nil, nil, fmt.Errorf("layered grid checkpoint is incompatible: %w", err)
+		}
+		scheduler = restored
+	}
+	// Placeholder slots are deliberately filled only by
+	// deduplicateLayeredPopulation, where reservation happens before an
+	// evaluation candidate is admitted.  Do not consume grid points here.
+	population := make([]individual, e.popSize(cfg))
+	centreSource := "default"
+	if cfg.RandomPopulation {
+		centreSource = "random"
+	} else if len(cfg.SeedParamPack) > 0 {
+		centreSource = "seed_or_champion"
+	}
+	e.trace(cfg, TraceModeSummary, "evolution", "layered_grid.initialized", "layered grid population initialized", map[string]any{
+		"population": len(population), "local_percent": cfg.LayeredLocalPercent,
+		"centre_source": centreSource,
+	})
+	return population, scheduler, nil
+}
+
+func layeredAxisStatuses(scheduler *layeredGridScheduler) []LayeredAxisStatus {
+	if scheduler == nil {
+		return nil
+	}
+	return scheduler.Bounds()
+}
+
+func layeredSearchStatus(scheduler *layeredGridScheduler) *LayeredSearchStatus {
+	if scheduler == nil {
+		return nil
+	}
+	status := scheduler.Status()
+	return &status
+}
+
+func (e *EvolutionEngine) persistLayeredCheckpoint(cfg EpochConfig, scheduler *layeredGridScheduler) {
+	if scheduler == nil || cfg.OnSearchCheckpoint == nil {
+		return
+	}
+	raw, err := scheduler.Checkpoint()
+	if err == nil {
+		cfg.OnSearchCheckpoint(raw)
+	}
+}
+
+func (e *EvolutionEngine) deduplicateLayeredPopulation(population []individual, reserved map[uint64]bool, scheduler *layeredGridScheduler, cfg EpochConfig, plan EvaluablePlan) ([]individual, error) {
+	out := make([]individual, 0, len(population))
+	for range population {
+		gene, err := e.nextNovelLayeredGene(reserved, scheduler, cfg, plan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, individual{Gene: gene})
+	}
+	return out, nil
+}
+
+func (e *EvolutionEngine) nextLayeredPopulation(popSize int, reserved map[uint64]bool, scheduler *layeredGridScheduler, cfg EpochConfig, plan EvaluablePlan) ([]individual, error) {
+	population := make([]individual, 0, popSize)
+	for len(population) < popSize {
+		gene, err := e.nextNovelLayeredGene(reserved, scheduler, cfg, plan)
+		if err != nil {
+			return nil, err
+		}
+		population = append(population, individual{Gene: gene})
+	}
+	return population, nil
+}
+
+// nextNovelLayeredGene does not use the GA retry limit.  A deterministic
+// lattice may legitimately need to pass a long already-reserved prefix from a
+// prior task before reaching its next unevaluated point; stopping after an
+// arbitrary number would turn a valid search into the observed 0% failure.
+func (e *EvolutionEngine) nextNovelLayeredGene(reserved map[uint64]bool, scheduler *layeredGridScheduler, cfg EpochConfig, plan EvaluablePlan) (Gene, error) {
+	for {
+		gene := e.normalizeGene(cfg, scheduler.Next())
+		materialized := []individual{{Gene: gene}}
+		if err := materializePopulationMarketRegionPacks(materialized, plan); err != nil {
+			return nil, err
+		}
+		gene = materialized[0].Gene
+		fingerprint := e.evolvable.Fingerprint(gene)
+		if !reserved[fingerprint] {
+			reserved[fingerprint] = true
+			return gene, nil
+		}
+		scheduler.RecordDuplicate()
+	}
 }
 
 func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []individual, plan EvaluablePlan, generation int, cfg EpochConfig, scope GeneScope, searchConfig []byte) ([]individual, error) {
@@ -751,6 +1203,20 @@ func (e *EvolutionEngine) evaluatePopulation(ctx context.Context, population []i
 	}
 	close(tasks)
 	wg.Wait()
+	if resultStore, ok := e.store.(CandidateResultStore); ok {
+		results := make([]CandidateEvaluation, 0, len(population))
+		for _, item := range population {
+			if item.Evaluated {
+				results = append(results, CandidateEvaluation{
+					Fingerprint: e.evolvable.Fingerprint(item.Gene),
+					Fitness:     item.Fitness,
+				})
+			}
+		}
+		if err := resultStore.UpdateCandidateResults(ctx, searchConfig, results); err != nil {
+			return nil, err
+		}
+	}
 	e.trace(cfg, TraceModeSummary, "evolution", "population.evaluated", "population evaluation completed", map[string]any{
 		"generation": generation,
 		"population": len(population),
@@ -810,8 +1276,8 @@ func (e *EvolutionEngine) nextGeneration(population []individual, mutProb float6
 		p1 := e.tournamentSelect(population, rng)
 		p2 := e.tournamentSelect(population, rng)
 		nearby := func() Gene {
-			child := e.evolvable.Crossover(p1.Gene, p2.Gene, rng)
-			return e.normalizeGene(cfg, e.evolvable.Mutate(child, mutProb, mutScale, rng))
+			child := e.crossoverGene(cfg, p1.Gene, p2.Gene, rng)
+			return e.normalizeGene(cfg, e.mutateGene(cfg, child, mutProb, mutScale, rng))
 		}
 		nearbyAttempts := 0
 		child, ok := e.reserveNovelGene(nearby(), reserved, func() Gene {

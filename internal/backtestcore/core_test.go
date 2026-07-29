@@ -270,6 +270,29 @@ func TestSigmoidDynamicParametersAreValidatedAndTraceable(t *testing.T) {
 	}
 }
 
+func TestSigmoidDynamicParametersAllowExplicitDisabledSentinels(t *testing.T) {
+	bars := flatCoreBars(115)
+	params := sigmoiddca.DefaultParams()
+	params.Spawn.Policy.InitialUSDT = 1000
+	disabled := params.Chromosome
+	disabled.MicroReservePct = 0
+	disabled.Beta = 0
+	disabled.DustUSD = 0
+	disabled.WedgeDeltaThreshold = 0
+	disabled.WedgeVolRatioThreshold = 0
+	_, err := RunSigmoidDCA(SigmoidDCARequest{
+		Spec:   Spec{Symbol: "TEST", Interval: "1d", InitialCapital: 1000},
+		Bars:   bars,
+		Params: params,
+		ParameterProvider: func(ParameterContext) (EffectiveParameters, error) {
+			return EffectiveParameters{Chromosome: disabled}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("disabled dynamic sentinels must be valid: %v", err)
+	}
+}
+
 func TestFixedDynamicProviderMatchesStaticP02Execution(t *testing.T) {
 	bars := flatCoreBars(140)
 	params := sigmoiddca.DefaultParams()

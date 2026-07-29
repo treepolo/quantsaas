@@ -28,6 +28,20 @@ func TestMicroNeutralInventoryBias(t *testing.T) {
 	}
 }
 
+func TestAbsentBetaKeepsNeutralSignalCoefficient(t *testing.T) {
+	input := baseMicroInput(1)
+	input.Beta = 0
+	input.Gamma = 0
+	input.MarketBetaMultiplier = 9
+	out := ComputeMicroDecisionV4(input)
+	if math.Abs(out.Exponent-1) > 1e-12 {
+		t.Fatalf("exponent = %.12f, want 1 when beta is absent", out.Exponent)
+	}
+	if out.TargetWeight >= 0.5 {
+		t.Fatalf("target weight = %.12f, want the signal to remain effective", out.TargetWeight)
+	}
+}
+
 func TestMicroDeterministic(t *testing.T) {
 	input := baseMicroInput(0.25)
 	a := ComputeMicroDecisionV4(input)

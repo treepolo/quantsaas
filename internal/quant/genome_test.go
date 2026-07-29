@@ -22,3 +22,12 @@ func TestClampChromosomeAllowsHighRebalanceThreshold(t *testing.T) {
 		t.Fatalf("rebalance threshold = %.2f, want 0.75", clamped.RebalanceThreshold)
 	}
 }
+
+func TestClampChromosomePreservesDisabledMicroReserve(t *testing.T) {
+	c := DefaultSeedChromosome
+	c.MicroReservePct = 0
+
+	if got := ClampChromosome(c).MicroReservePct; got != 0 {
+		t.Fatalf("disabled micro reserve = %.2f, want 0", got)
+	}
+}

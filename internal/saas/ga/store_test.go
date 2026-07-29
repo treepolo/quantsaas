@@ -1,6 +1,7 @@
 package ga
 
 import (
+	"math"
 	"testing"
 
 	"quantsaas/internal/quant"
@@ -11,7 +12,7 @@ func TestAggregateGridPointsUsesCompactCoreLattice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode candidate: %v", err)
 	}
-	points := aggregateGridPoints(42, []CandidateReservation{{Fingerprint: 1, ParamPack: pack}, {Fingerprint: 2, ParamPack: pack}})
+	points := aggregateGridPoints(42, "test-scope", []CandidateReservation{{Fingerprint: 1, ParamPack: pack}, {Fingerprint: 2, ParamPack: pack}})
 	if len(points) != len(chromosomeGridValues(quant.DefaultSeedChromosome)) {
 		t.Fatalf("point count = %d", len(points))
 	}
@@ -29,5 +30,17 @@ func TestAggregateGridPointsUsesCompactCoreLattice(t *testing.T) {
 	}
 	if !betaFound {
 		t.Fatal("beta lattice point missing")
+	}
+}
+
+func TestMarketThresholdGridKeepsRawSmallValue(t *testing.T) {
+	key := "market_region.parkinson.threshold_1"
+	value := 0.000013579
+	step := gridStoredStep(key, value)
+	if step == 0 {
+		t.Fatal("raw market threshold was collapsed to zero")
+	}
+	if restored := GridStoredValue(key, step); math.Abs(restored-value) > 1e-12 {
+		t.Fatalf("restored=%0.15f want=%0.15f", restored, value)
 	}
 }

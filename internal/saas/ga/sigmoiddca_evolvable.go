@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"hash/fnv"
 	"math"
 	"sort"
@@ -28,6 +29,7 @@ type BacktestPoint = backtestcore.NAVPoint
 type SigmoidDCAPathResult struct {
 	Metrics BacktestMetrics
 	NAV     []BacktestPoint
+	Err     error
 }
 
 func NewSigmoidDCAEvolvable() SigmoidDCAEvolvable {
@@ -47,6 +49,17 @@ func NormalizeGeneOptions(options GeneOptions) GeneOptions {
 	options.FixedParamKeys = NormalizeFixedParamKeys(options.FixedParamKeys)
 	if options.MarketRegionEnabled && options.MarketRegionMaxThresholds < 0 {
 		options.MarketRegionMaxThresholds = 0
+	}
+	if options.MarketRegionEnabled {
+		options.DisableBeta = true
+		// Region selection owns the complete micro decision. A global cash reserve
+		// or rebalance gate would otherwise change the strategy outside the
+		// selected interval parameter pack.
+		options.EvolveRebalanceThreshold = false
+	}
+	if options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
+		options.DisableWedgeMinimum = true
+		options.EvolveRebalanceThreshold = false
 	}
 	return options
 }
@@ -110,7 +123,7 @@ func (SigmoidDCAEvolvable) Sample(rng RandomSource) Gene {
 func (e SigmoidDCAEvolvable) SampleWithOptions(rng RandomSource, options GeneOptions) Gene {
 	options = NormalizeGeneOptions(options)
 	if !options.MarketRegionEnabled {
-		return e.Sample(rng)
+		return sampleChromosomeWithOptions(rng, options)
 	}
 	maxWindow := options.MarketRegionMaxWindow
 	if maxWindow < 2 {
@@ -119,30 +132,93 @@ func (e SigmoidDCAEvolvable) SampleWithOptions(rng RandomSource, options GeneOpt
 	features := make([]MarketRegionFeature, 0, len(MarketRegionFeatureIDs))
 	for _, id := range MarketRegionFeatureIDs {
 		feature := MarketRegionFeature{ID: id, Window: 2 + rng.Intn(maxWindow-1)}
-		if options.MarketRegionMaxThresholds > 0 && rng.Float64() < 0.22 {
+		if options.MarketRegionMaxThresholds > 0 {
 			if limits, ok := options.MarketRegionFeatureRanges[id]; ok && limits[1] > limits[0] {
 				count := 1 + rng.Intn(options.MarketRegionMaxThresholds)
 				for i := 0; i < count; i++ {
-					feature.Thresholds = append(feature.Thresholds, limits[0]+rng.Float64()*(limits[1]-limits[0]))
+					if value, ok := sampleRegionThreshold(rng, limits); ok {
+						feature.Thresholds = append(feature.Thresholds, value)
+					}
 				}
-				sort.Float64s(feature.Thresholds)
+				feature.Thresholds = normalizeRegionThresholds(feature.Thresholds, limits, options.MarketRegionMaxThresholds)
 			}
 		}
 		features = append(features, feature)
 	}
-	for len(marketRegionKeys(features)) > maxMarketRegionPacks {
-		for i := len(features) - 1; i >= 0; i-- {
-			if len(features[i].Thresholds) > 0 {
-				features[i].Thresholds = features[i].Thresholds[:len(features[i].Thresholds)-1]
-				break
+	gene := MarketRegionGene{SchemaVersion: MarketRegionSchemaVersion, Global: sampleMarketRegionGlobal(rng, options), Features: features}
+	gene.DefaultState = sampleMarketRegionState(rng, gene.Global)
+	return gene
+}
+
+// MutateWithOptions never perturbs a dimension that the current task has
+// removed from the candidate space.
+func (SigmoidDCAEvolvable) MutateWithOptions(g Gene, prob float64, scale float64, rng RandomSource, options GeneOptions) Gene {
+	options = NormalizeGeneOptions(options)
+	if region, ok := isMarketRegionGene(g); ok {
+		region.Global = mutateMarketRegionGlobal(region.Global, prob, scale, rng, options)
+		for i := range region.Features {
+			if rng.Float64() < prob {
+				region.Features[i].Window += int(math.Round(rng.NormFloat64() * scale))
+			}
+			if limits, ok := options.MarketRegionFeatureRanges[region.Features[i].ID]; ok && rng.Float64() < prob {
+				region.Features[i].Thresholds = mutateRegionThresholds(region.Features[i].Thresholds, limits, options.MarketRegionMaxThresholds, scale, rng)
 			}
 		}
+		region = rebuildMarketRegionPacks(region, rng)
+		region.DefaultState = mutateMarketRegionState(region.DefaultState, region.Global, prob, scale, rng)
+		for i := range region.Packs {
+			region.Packs[i].Chromosome = mutateMarketRegionState(region.Packs[i].Chromosome, region.Global, prob, scale, rng)
+		}
+		return region
 	}
-	gene := MarketRegionGene{SchemaVersion: MarketRegionSchemaVersion, Features: features}
-	for _, key := range marketRegionKeys(features) {
-		gene.Packs = append(gene.Packs, MarketRegionPack{Key: key, Chromosome: asChromosome(e.Sample(rng))})
+	return mutateChromosomeWithOptions(asChromosome(g), prob, scale, rng, options)
+}
+
+// rebuildMarketRegionPacks makes a changed interval layout executable before
+// it can enter evaluation. Existing region keys retain their state parameters;
+// only genuinely new interval combinations receive a fresh state package.
+func rebuildMarketRegionPacks(region MarketRegionGene, rng RandomSource) MarketRegionGene {
+	byKey := make(map[string]MarketRegionPack, len(region.Packs))
+	for _, pack := range region.Packs {
+		byKey[pack.Key] = pack
 	}
-	return gene
+	// State packs are sparse and materialised from observed bars immediately
+	// before evaluation.  A layout mutation must preserve only packs whose
+	// keys still belong to the new layout; it must never generate the full
+	// Cartesian product in advance.
+	packs := make([]MarketRegionPack, 0, len(byKey))
+	for _, pack := range byKey {
+		packs = append(packs, pack)
+	}
+	sort.Slice(packs, func(i, j int) bool { return packs[i].Key < packs[j].Key })
+	region.Packs = packs
+	return region
+}
+
+// CrossoverWithOptions never copies an inactive dimension from either parent.
+func (SigmoidDCAEvolvable) CrossoverWithOptions(p1 Gene, p2 Gene, rng RandomSource, options GeneOptions) Gene {
+	options = NormalizeGeneOptions(options)
+	left, leftOK := isMarketRegionGene(p1)
+	right, rightOK := isMarketRegionGene(p2)
+	if leftOK && rightOK && len(left.Features) == len(right.Features) && len(left.Packs) == len(right.Packs) {
+		child := left
+		child.Global = crossoverMarketRegionGlobal(left.Global, right.Global, rng, options)
+		for i := range child.Features {
+			if rng.Float64() < 0.5 {
+				child.Features[i].Window = right.Features[i].Window
+			}
+			if len(child.Features[i].Thresholds) == len(right.Features[i].Thresholds) {
+				for j := range child.Features[i].Thresholds {
+					child.Features[i].Thresholds[j] = pick(rng, child.Features[i].Thresholds[j], right.Features[i].Thresholds[j])
+				}
+			}
+		}
+		for i := range child.Packs {
+			child.Packs[i].Chromosome = crossoverMarketRegionState(left.Packs[i].Chromosome, right.Packs[i].Chromosome, child.Global, rng)
+		}
+		return child
+	}
+	return crossoverChromosomeWithOptions(asChromosome(p1), asChromosome(p2), rng, options)
 }
 
 func (SigmoidDCAEvolvable) Mutate(g Gene, prob float64, scale float64, rng RandomSource) Gene {
@@ -258,6 +334,9 @@ func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
 			if options.MarketRegionMaxThresholds >= 0 && len(region.Features[i].Thresholds) > options.MarketRegionMaxThresholds {
 				region.Features[i].Thresholds = region.Features[i].Thresholds[:options.MarketRegionMaxThresholds]
 			}
+			if limits, ok := options.MarketRegionFeatureRanges[region.Features[i].ID]; ok {
+				region.Features[i].Thresholds = normalizeRegionThresholds(region.Features[i].Thresholds, limits, options.MarketRegionMaxThresholds)
+			}
 		}
 		normalized, err := normalizeMarketRegionGene(region, options)
 		if err != nil {
@@ -269,30 +348,390 @@ func (SigmoidDCAEvolvable) NormalizeGene(g Gene, options GeneOptions) Gene {
 	return normalizeChromosome(c, options)
 }
 
+func chromosomeFieldEvolves(key string, options GeneOptions) bool {
+	options = NormalizeGeneOptions(options)
+	for _, fixed := range options.FixedParamKeys {
+		if fixed == key {
+			return false
+		}
+	}
+	if options.MarketRegionEnabled {
+		switch key {
+		case "micro_reserve_pct", "beta", "rebalance_threshold":
+			return false
+		case "gamma", "w_mean", "w_momentum", "w_breakout", "force_full_threshold", "force_empty_threshold":
+			return true
+		}
+	}
+	switch key {
+	case "micro_reserve_pct":
+		return options.PositionStructure != sigmoiddca.PositionStructureFloatingOnly
+	case "beta":
+		return !options.DisableBeta
+	case "dust_usd":
+		return !options.DisableDustFilter
+	case "wedge_delta_threshold", "wedge_vol_ratio_threshold":
+		return !options.DisableWedgeMinimum
+	case "macro_bear_multiplier", "macro_bull_multiplier", "extra_deploy_pct", "soft_release_months", "soft_release_pct", "hard_release_max_pct":
+		return options.PositionStructure != sigmoiddca.PositionStructureFloatingOnly
+	case "rebalance_threshold":
+		return options.EvolveRebalanceThreshold
+	case "gamma":
+		return options.EvolveGamma
+	case "w_mean":
+		return options.EnableWMean
+	case "w_momentum":
+		return options.EnableWMomentum
+	case "w_breakout":
+		return options.EnableWBreakout
+	case "force_full_threshold":
+		return options.EvolveForceFullThreshold
+	case "force_empty_threshold":
+		return options.EvolveForceEmptyThreshold
+	default:
+		return true
+	}
+}
+
+func sampleChromosomeWithOptions(rng RandomSource, options GeneOptions) quant.Chromosome {
+	c := normalizeChromosome(quant.DefaultSeedChromosome, options)
+	if chromosomeFieldEvolves("micro_reserve_pct", options) {
+		c.MicroReservePct = sampleRange(rng, "micro_reserve_pct")
+	}
+	if chromosomeFieldEvolves("beta", options) {
+		c.Beta = sampleRange(rng, "beta")
+	}
+	if chromosomeFieldEvolves("gamma", options) {
+		c.Gamma = sampleRange(rng, "gamma")
+	}
+	if chromosomeFieldEvolves("w_mean", options) {
+		c.WMean = sampleRange(rng, "w_mean")
+	}
+	if chromosomeFieldEvolves("w_momentum", options) {
+		c.WMomentum = sampleRange(rng, "w_momentum")
+	}
+	if chromosomeFieldEvolves("w_breakout", options) {
+		c.WBreakout = sampleRange(rng, "w_breakout")
+	}
+	if chromosomeFieldEvolves("dust_usd", options) {
+		c.DustUSD = sampleRange(rng, "dust_usd")
+	}
+	if chromosomeFieldEvolves("rebalance_threshold", options) {
+		c.RebalanceThreshold = sampleRange(rng, "rebalance_threshold")
+	}
+	if chromosomeFieldEvolves("force_full_threshold", options) && chromosomeFieldEvolves("force_empty_threshold", options) {
+		c.ForceEmptyThreshold = sampleRange(rng, "force_empty_threshold")
+		c.ForceFullThreshold = sampleRangeAtLeast(rng, "force_full_threshold", c.ForceEmptyThreshold)
+	} else if chromosomeFieldEvolves("force_full_threshold", options) {
+		c.ForceFullThreshold = sampleRange(rng, "force_full_threshold")
+	} else if chromosomeFieldEvolves("force_empty_threshold", options) {
+		c.ForceEmptyThreshold = sampleRange(rng, "force_empty_threshold")
+	}
+	if chromosomeFieldEvolves("wedge_delta_threshold", options) {
+		c.WedgeDeltaThreshold = sampleRange(rng, "wedge_delta_threshold")
+	}
+	if chromosomeFieldEvolves("wedge_vol_ratio_threshold", options) {
+		c.WedgeVolRatioThreshold = sampleRange(rng, "wedge_vol_ratio_threshold")
+	}
+	if chromosomeFieldEvolves("macro_bear_multiplier", options) {
+		c.MacroBearMultiplier = sampleRange(rng, "macro_bear_multiplier")
+	}
+	if chromosomeFieldEvolves("macro_bull_multiplier", options) {
+		c.MacroBullMultiplier = sampleRange(rng, "macro_bull_multiplier")
+	}
+	if chromosomeFieldEvolves("extra_deploy_pct", options) {
+		c.ExtraDeployPct = sampleRange(rng, "extra_deploy_pct")
+	}
+	if chromosomeFieldEvolves("soft_release_months", options) {
+		c.SoftReleaseMonths = int(sampleRange(rng, "soft_release_months"))
+	}
+	if chromosomeFieldEvolves("soft_release_pct", options) {
+		c.SoftReleasePct = sampleRange(rng, "soft_release_pct")
+	}
+	if chromosomeFieldEvolves("hard_release_max_pct", options) {
+		c.HardReleaseMaxPct = sampleRange(rng, "hard_release_max_pct")
+	}
+	return normalizeChromosome(c, options)
+}
+
+func mutateChromosomeWithOptions(c quant.Chromosome, prob float64, scale float64, rng RandomSource, options GeneOptions) quant.Chromosome {
+	if chromosomeFieldEvolves("micro_reserve_pct", options) {
+		c.MicroReservePct = mutateFloat(c.MicroReservePct, "micro_reserve_pct", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("beta", options) {
+		c.Beta = mutateFloat(c.Beta, "beta", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("gamma", options) {
+		c.Gamma = mutateFloat(c.Gamma, "gamma", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("w_mean", options) {
+		c.WMean = mutateFloat(c.WMean, "w_mean", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("w_momentum", options) {
+		c.WMomentum = mutateFloat(c.WMomentum, "w_momentum", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("w_breakout", options) {
+		c.WBreakout = mutateFloat(c.WBreakout, "w_breakout", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("dust_usd", options) {
+		c.DustUSD = mutateFloat(c.DustUSD, "dust_usd", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("rebalance_threshold", options) {
+		c.RebalanceThreshold = mutateFloat(c.RebalanceThreshold, "rebalance_threshold", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("force_full_threshold", options) || chromosomeFieldEvolves("force_empty_threshold", options) {
+		c.ForceFullThreshold, c.ForceEmptyThreshold = mutateForceThresholdPair(c.ForceFullThreshold, c.ForceEmptyThreshold, prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("wedge_delta_threshold", options) {
+		c.WedgeDeltaThreshold = mutateFloat(c.WedgeDeltaThreshold, "wedge_delta_threshold", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("wedge_vol_ratio_threshold", options) {
+		c.WedgeVolRatioThreshold = mutateFloat(c.WedgeVolRatioThreshold, "wedge_vol_ratio_threshold", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("macro_bear_multiplier", options) {
+		c.MacroBearMultiplier = mutateFloat(c.MacroBearMultiplier, "macro_bear_multiplier", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("macro_bull_multiplier", options) {
+		c.MacroBullMultiplier = mutateFloat(c.MacroBullMultiplier, "macro_bull_multiplier", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("extra_deploy_pct", options) {
+		c.ExtraDeployPct = mutateFloat(c.ExtraDeployPct, "extra_deploy_pct", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("soft_release_months", options) {
+		c.SoftReleaseMonths = int(math.Round(mutateFloat(float64(c.SoftReleaseMonths), "soft_release_months", prob, scale, rng)))
+	}
+	if chromosomeFieldEvolves("soft_release_pct", options) {
+		c.SoftReleasePct = mutateFloat(c.SoftReleasePct, "soft_release_pct", prob, scale, rng)
+	}
+	if chromosomeFieldEvolves("hard_release_max_pct", options) {
+		c.HardReleaseMaxPct = mutateFloat(c.HardReleaseMaxPct, "hard_release_max_pct", prob, scale, rng)
+	}
+	return normalizeChromosome(c, options)
+}
+
+func crossoverChromosomeWithOptions(a quant.Chromosome, b quant.Chromosome, rng RandomSource, options GeneOptions) quant.Chromosome {
+	c := normalizeChromosome(quant.DefaultSeedChromosome, options)
+	if chromosomeFieldEvolves("micro_reserve_pct", options) {
+		c.MicroReservePct = pick(rng, a.MicroReservePct, b.MicroReservePct)
+	}
+	if chromosomeFieldEvolves("beta", options) {
+		c.Beta = pick(rng, a.Beta, b.Beta)
+	}
+	if chromosomeFieldEvolves("gamma", options) {
+		c.Gamma = pick(rng, a.Gamma, b.Gamma)
+	}
+	if chromosomeFieldEvolves("w_mean", options) {
+		c.WMean = pick(rng, a.WMean, b.WMean)
+	}
+	if chromosomeFieldEvolves("w_momentum", options) {
+		c.WMomentum = pick(rng, a.WMomentum, b.WMomentum)
+	}
+	if chromosomeFieldEvolves("w_breakout", options) {
+		c.WBreakout = pick(rng, a.WBreakout, b.WBreakout)
+	}
+	if chromosomeFieldEvolves("dust_usd", options) {
+		c.DustUSD = pick(rng, a.DustUSD, b.DustUSD)
+	}
+	if chromosomeFieldEvolves("rebalance_threshold", options) {
+		c.RebalanceThreshold = pick(rng, a.RebalanceThreshold, b.RebalanceThreshold)
+	}
+	if chromosomeFieldEvolves("force_full_threshold", options) || chromosomeFieldEvolves("force_empty_threshold", options) {
+		c.ForceFullThreshold, c.ForceEmptyThreshold = crossoverForceThresholdPair(a.ForceFullThreshold, a.ForceEmptyThreshold, b.ForceFullThreshold, b.ForceEmptyThreshold, rng)
+	}
+	if chromosomeFieldEvolves("wedge_delta_threshold", options) {
+		c.WedgeDeltaThreshold = pick(rng, a.WedgeDeltaThreshold, b.WedgeDeltaThreshold)
+	}
+	if chromosomeFieldEvolves("wedge_vol_ratio_threshold", options) {
+		c.WedgeVolRatioThreshold = pick(rng, a.WedgeVolRatioThreshold, b.WedgeVolRatioThreshold)
+	}
+	if chromosomeFieldEvolves("macro_bear_multiplier", options) {
+		c.MacroBearMultiplier = pick(rng, a.MacroBearMultiplier, b.MacroBearMultiplier)
+	}
+	if chromosomeFieldEvolves("macro_bull_multiplier", options) {
+		c.MacroBullMultiplier = pick(rng, a.MacroBullMultiplier, b.MacroBullMultiplier)
+	}
+	if chromosomeFieldEvolves("extra_deploy_pct", options) {
+		c.ExtraDeployPct = pick(rng, a.ExtraDeployPct, b.ExtraDeployPct)
+	}
+	if chromosomeFieldEvolves("soft_release_months", options) {
+		c.SoftReleaseMonths = int(pick(rng, float64(a.SoftReleaseMonths), float64(b.SoftReleaseMonths)))
+	}
+	if chromosomeFieldEvolves("soft_release_pct", options) {
+		c.SoftReleasePct = pick(rng, a.SoftReleasePct, b.SoftReleasePct)
+	}
+	if chromosomeFieldEvolves("hard_release_max_pct", options) {
+		c.HardReleaseMaxPct = pick(rng, a.HardReleaseMaxPct, b.HardReleaseMaxPct)
+	}
+	return normalizeChromosome(c, options)
+}
+
+func sampleRegionThreshold(rng RandomSource, limits [2]float64) (float64, bool) {
+	if limits[1] <= limits[0] {
+		return 0, false
+	}
+	return limits[0] + rng.Float64()*(limits[1]-limits[0]), true
+}
+
+func normalizeRegionThresholds(values []float64, limits [2]float64, maximum int) []float64 {
+	if maximum <= 0 {
+		return nil
+	}
+	minimum, upper := limits[0], limits[1]
+	if minimum >= upper {
+		return nil
+	}
+	seen := map[uint64]bool{}
+	out := make([]float64, 0, len(values))
+	for _, value := range values {
+		if value < minimum || value > upper {
+			continue
+		}
+		bits := math.Float64bits(value)
+		if seen[bits] {
+			continue
+		}
+		seen[bits] = true
+		out = append(out, value)
+	}
+	sort.Float64s(out)
+	if len(out) > maximum {
+		out = out[:maximum]
+	}
+	return out
+}
+
+func mutateRegionThresholds(values []float64, limits [2]float64, maximum int, scale float64, rng RandomSource) []float64 {
+	values = append([]float64(nil), values...)
+	for i := range values {
+		if rng.Float64() < 0.5 {
+			values[i] += math.Round(rng.NormFloat64()*scale) * searchParameterStep
+		}
+	}
+	if maximum > 0 && len(values) < maximum && rng.Float64() < 0.25 {
+		if value, ok := sampleRegionThreshold(rng, limits); ok {
+			values = append(values, value)
+		}
+	}
+	if len(values) > 0 && rng.Float64() < 0.15 {
+		values = append(values[:len(values)-1], values[len(values):]...)
+	}
+	return normalizeRegionThresholds(values, limits, maximum)
+}
+
+func marketRegionGlobalOptions(options GeneOptions) GeneOptions {
+	options.MarketRegionEnabled = false
+	options.DisableBeta = true
+	options.EvolveGamma = false
+	options.EnableWMean = false
+	options.EnableWMomentum = false
+	options.EnableWBreakout = false
+	options.EvolveForceFullThreshold = false
+	options.EvolveForceEmptyThreshold = false
+	options.EvolveRebalanceThreshold = false
+	return options
+}
+
+func sampleMarketRegionGlobal(rng RandomSource, options GeneOptions) quant.Chromosome {
+	return sampleChromosomeWithOptions(rng, marketRegionGlobalOptions(options))
+}
+
+func mutateMarketRegionGlobal(c quant.Chromosome, prob float64, scale float64, rng RandomSource, options GeneOptions) quant.Chromosome {
+	return mutateChromosomeWithOptions(c, prob, scale, rng, marketRegionGlobalOptions(options))
+}
+
+func crossoverMarketRegionGlobal(a quant.Chromosome, b quant.Chromosome, rng RandomSource, options GeneOptions) quant.Chromosome {
+	return crossoverChromosomeWithOptions(a, b, rng, marketRegionGlobalOptions(options))
+}
+
+func combineMarketRegionChromosome(global quant.Chromosome, state quant.Chromosome) quant.Chromosome {
+	c := global
+	c.Gamma = state.Gamma
+	c.WMean = state.WMean
+	c.WMomentum = state.WMomentum
+	c.WBreakout = state.WBreakout
+	c.ForceFullThreshold = state.ForceFullThreshold
+	c.ForceEmptyThreshold = state.ForceEmptyThreshold
+	return c
+}
+
+// marketRegionStateChromosome deliberately retains only the six values that a
+// market interval is allowed to select. Keeping the stored pack sparse makes
+// it impossible for a state pack to smuggle a second Beta, reserve or legacy
+// base-position setting into the execution path.
+func marketRegionStateChromosome(c quant.Chromosome) quant.Chromosome {
+	return quant.Chromosome{
+		Gamma:               c.Gamma,
+		WMean:               c.WMean,
+		WMomentum:           c.WMomentum,
+		WBreakout:           c.WBreakout,
+		ForceFullThreshold:  c.ForceFullThreshold,
+		ForceEmptyThreshold: c.ForceEmptyThreshold,
+	}
+}
+
+func sampleMarketRegionState(rng RandomSource, global quant.Chromosome) quant.Chromosome {
+	c := global
+	c.Gamma = sampleRange(rng, "gamma")
+	c.WMean = sampleRange(rng, "w_mean")
+	c.WMomentum = sampleRange(rng, "w_momentum")
+	c.WBreakout = sampleRange(rng, "w_breakout")
+	c.ForceEmptyThreshold = sampleRange(rng, "force_empty_threshold")
+	c.ForceFullThreshold = sampleRangeAtLeast(rng, "force_full_threshold", c.ForceEmptyThreshold)
+	return marketRegionStateChromosome(c)
+}
+
+func mutateMarketRegionState(c quant.Chromosome, global quant.Chromosome, prob float64, scale float64, rng RandomSource) quant.Chromosome {
+	c = combineMarketRegionChromosome(global, c)
+	c.Gamma = mutateFloat(c.Gamma, "gamma", prob, scale, rng)
+	c.WMean = mutateFloat(c.WMean, "w_mean", prob, scale, rng)
+	c.WMomentum = mutateFloat(c.WMomentum, "w_momentum", prob, scale, rng)
+	c.WBreakout = mutateFloat(c.WBreakout, "w_breakout", prob, scale, rng)
+	c.ForceFullThreshold, c.ForceEmptyThreshold = mutateForceThresholdPair(c.ForceFullThreshold, c.ForceEmptyThreshold, prob, scale, rng)
+	return marketRegionStateChromosome(c)
+}
+
+func crossoverMarketRegionState(a quant.Chromosome, b quant.Chromosome, global quant.Chromosome, rng RandomSource) quant.Chromosome {
+	c := global
+	c.Gamma = pick(rng, a.Gamma, b.Gamma)
+	c.WMean = pick(rng, a.WMean, b.WMean)
+	c.WMomentum = pick(rng, a.WMomentum, b.WMomentum)
+	c.WBreakout = pick(rng, a.WBreakout, b.WBreakout)
+	c.ForceFullThreshold, c.ForceEmptyThreshold = crossoverForceThresholdPair(a.ForceFullThreshold, a.ForceEmptyThreshold, b.ForceFullThreshold, b.ForceEmptyThreshold, rng)
+	return marketRegionStateChromosome(c)
+}
+
 func normalizeChromosome(c quant.Chromosome, options GeneOptions) quant.Chromosome {
 	options = NormalizeGeneOptions(options)
 	if !options.EvolveRebalanceThreshold {
 		c.RebalanceThreshold = 0
 	}
-	if !options.EvolveForceFullThreshold {
+	if options.MarketRegionEnabled {
+		// These two mechanisms are intentionally absent from market-region
+		// search and execution, rather than being frozen at an arbitrary seed.
+		c.MicroReservePct = 0
+		c.RebalanceThreshold = 0
+	}
+	if !options.EvolveForceFullThreshold && !options.MarketRegionEnabled {
 		c.ForceFullThreshold = 1
 	}
-	if !options.EvolveForceEmptyThreshold {
+	if !options.EvolveForceEmptyThreshold && !options.MarketRegionEnabled {
 		c.ForceEmptyThreshold = 0
 	}
-	if !options.EvolveGamma {
+	if !options.EvolveGamma && !options.MarketRegionEnabled {
 		c.Gamma = 0
 	}
-	if !options.EnableWMean {
+	if !options.EnableWMean && !options.MarketRegionEnabled {
 		c.WMean = 0
 	}
-	if !options.EnableWMomentum {
+	if !options.EnableWMomentum && !options.MarketRegionEnabled {
 		c.WMomentum = 0
 	}
-	if !options.EnableWBreakout {
+	if !options.EnableWBreakout && !options.MarketRegionEnabled {
 		c.WBreakout = 0
 	}
 	if options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
+		c.MicroReservePct = 0
+		c.RebalanceThreshold = 0
 		c.MacroBearMultiplier = 1
 		c.MacroBullMultiplier = 1
 		c.ExtraDeployPct = 0
@@ -304,7 +743,24 @@ func normalizeChromosome(c quant.Chromosome, options GeneOptions) quant.Chromoso
 		c = applyFixedChromosomeFields(c, *options.FixedGene, options.FixedParamKeys)
 		c = constrainFixedForceThresholdPair(c, options.FixedParamKeys)
 	}
-	return quantizeSearchChromosome(c, options.FixedParamKeys)
+	c = quantizeSearchChromosome(c, options.FixedParamKeys)
+	if options.MarketRegionEnabled || options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
+		// quantizeSearchChromosome applies ordinary hard bounds; restore these
+		// explicit disabled sentinels after that generic normalisation.
+		c.MicroReservePct = 0
+		c.RebalanceThreshold = 0
+	}
+	if options.DisableBeta || options.MarketRegionEnabled {
+		c.Beta = 0
+	}
+	if options.DisableDustFilter {
+		c.DustUSD = 0
+	}
+	if options.DisableWedgeMinimum {
+		c.WedgeDeltaThreshold = 0
+		c.WedgeVolRatioThreshold = 0
+	}
+	return c
 }
 
 func quantizeSearchChromosome(c quant.Chromosome, fixedKeys []string) quant.Chromosome {
@@ -469,6 +925,9 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
 		}
 	}
+	if len(plan.MultiMarkets) > 0 {
+		return e.evaluateMultiMarket(ctx, normalized, region, regionMode, plan)
+	}
 	result := FitnessResult{}
 	for i, window := range plan.Windows {
 		if err := ctx.Err(); err != nil {
@@ -495,7 +954,7 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 		} else {
 			c = normalized.(quant.Chromosome)
 		}
-		metrics := runSigmoidDCAPathBacktestWithTraceAndMode(window.Bars, window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
+		path := runSigmoidDCAPathBacktestWithTraceAndMode(window.Bars, window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
 			Trace:         plan.Trace,
 			Mode:          plan.TraceMode,
 			TraceModeFunc: plan.TraceModeFunc,
@@ -504,7 +963,12 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 			Individual:    plan.Individual,
 			Worker:        plan.Worker,
 			Window:        window.Label,
-		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair, plan.LongTermFilter, provider).Metrics
+		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, plan.Pair, plan.LongTermFilter, provider)
+		if path.Err != nil {
+			trace(plan, TraceModeSummary, "strategy", "window.evaluate.failed", "backtest failed", map[string]any{"error": path.Err.Error(), "window": window.Label})
+			return FitnessResult{}, fmt.Errorf("window %s backtest failed: %w", window.Label, path.Err)
+		}
+		metrics := path.Metrics
 		baseline := plan.DCABaselines[i]
 		alpha := metrics.ROI - baseline.ROI
 		score := alpha - 1.5*math.Max(0, metrics.MaxDrawdown-baseline.MaxDrawdown) - plan.TradePenalty*float64(metrics.TradeCount)
@@ -562,6 +1026,71 @@ func (e SigmoidDCAEvolvable) Evaluate(ctx context.Context, g Gene, plan Evaluabl
 	return result, nil
 }
 
+// evaluateMultiMarket intentionally has no window result output.  A market is
+// evaluated once over its complete supplied training period, then the direct
+// sum of annualized log growth is used as the candidate score.
+func (e SigmoidDCAEvolvable) evaluateMultiMarket(ctx context.Context, normalized Gene, region MarketRegionGene, regionMode bool, plan EvaluablePlan) (FitnessResult, error) {
+	result := FitnessResult{}
+	for _, market := range plan.MultiMarkets {
+		if err := ctx.Err(); err != nil {
+			return FitnessResult{}, err
+		}
+		c := quant.DefaultSeedChromosome
+		var provider backtestcore.ParameterProvider
+		if regionMode {
+			if plan.ComputeStep != nil {
+				plan.ComputeStep(marketRegionProviderUnits(region, market.Window.Bars))
+			}
+			var err error
+			provider, err = newMarketRegionProviderWithCache(region, market.Window.Bars, market.MarketRegionCache)
+			if err != nil {
+				return FitnessResult{ScoreTotal: FatalFitnessScore, Fatal: true}, nil
+			}
+		} else {
+			c = normalized.(quant.Chromosome)
+		}
+		path := runSigmoidDCAPathBacktestWithTraceAndMode(market.Window.Bars, market.Window.EvalStartMs, plan.Interval, plan.ExecutionMode, c, plan.Spawn, PathTraceConfig{
+			Trace: plan.Trace, Mode: plan.TraceMode, TraceModeFunc: plan.TraceModeFunc, ComputeStep: plan.ComputeStep,
+			Generation: plan.Generation, Individual: plan.Individual, Worker: plan.Worker, Window: "完整訓練期",
+		}, plan.Costs, NormalizeGeneOptions(plan.GeneOptions).PositionStructure, market.Pair, plan.LongTermFilter, provider)
+		if path.Err != nil {
+			trace(plan, TraceModeSummary, "strategy", "market.evaluate.failed", "backtest failed", map[string]any{"error": path.Err.Error(), "market": market.InstrumentID})
+			return FitnessResult{}, fmt.Errorf("market %s backtest failed: %w", market.InstrumentID, path.Err)
+		}
+		metrics := path.Metrics
+		if metrics.MaxDrawdown > result.MaxDrawdown {
+			result.MaxDrawdown = metrics.MaxDrawdown
+		}
+		years := float64(market.Window.Bars[len(market.Window.Bars)-1].OpenTime-market.Window.EvalStartMs) / float64(365*24*60*60*1000)
+		if years <= 0 {
+			return FitnessResult{}, fmt.Errorf("行情 %s 的可評估期間不足一年日", market.InstrumentID)
+		}
+		performance := MarketPerformance{
+			InstrumentID: market.InstrumentID,
+			Pair:         market.Pair,
+			TotalReturn:  metrics.ROI,
+			MaxDrawdown:  metrics.MaxDrawdown,
+		}
+		if 1+metrics.ROI <= 0 {
+			result.Markets = append(result.Markets, performance)
+			return FitnessResult{ScoreTotal: math.Inf(-1), MaxDrawdown: result.MaxDrawdown, Markets: result.Markets, Fatal: true}, nil
+		}
+		annualLogGrowth := math.Log1p(metrics.ROI) / years
+		performance.AnnualizedReturn = math.Expm1(annualLogGrowth)
+		result.Markets = append(result.Markets, performance)
+		// The aggregate drawdown is the worst selected market.  The existing
+		// strategy safety ceiling applies to that aggregate, so one unacceptable
+		// market rejects the whole candidate.
+		if result.MaxDrawdown >= 0.88 {
+			result.ScoreTotal = FatalFitnessScore
+			result.Fatal = true
+			return result, nil
+		}
+		result.ScoreTotal += annualLogGrowth
+	}
+	return result, nil
+}
+
 func (SigmoidDCAEvolvable) DecodeElite(raw []byte) Gene {
 	if len(raw) == 0 {
 		return quant.DefaultSeedChromosome
@@ -591,7 +1120,7 @@ func (e SigmoidDCAEvolvable) EncodeResult(g Gene, spawn *quant.SpawnPoint, optio
 		}
 		return json.Marshal(marketRegionParamPack{
 			SchemaVersion:     MarketRegionSchemaVersion,
-			Chromosome:        params.Chromosome,
+			Chromosome:        normalized.Global,
 			Spawn:             params.Spawn,
 			PositionStructure: params.PositionStructure,
 			MarketRegion:      normalized,
@@ -738,7 +1267,7 @@ func runSigmoidDCAPathBacktestWithTraceAndMode(bars []quant.Bar, evalStartMs int
 		Hooks:             hooks,
 	})
 	if err != nil {
-		return SigmoidDCAPathResult{}
+		return SigmoidDCAPathResult{Err: err}
 	}
 	nav := make([]float64, 0, len(result.Path))
 	for _, point := range result.Path {
@@ -863,7 +1392,7 @@ func mutateFloat(v float64, name string, prob float64, scale float64, rng Random
 
 func sampleRangeAtLeast(rng RandomSource, name string, minimum float64) float64 {
 	minStep, maxStep := searchLatticeBounds(quant.HardBounds[name])
-	required := int(math.Ceil((minimum-1e-9)/searchParameterStep))
+	required := int(math.Ceil((minimum - 1e-9) / searchParameterStep))
 	if required > minStep {
 		minStep = required
 	}
