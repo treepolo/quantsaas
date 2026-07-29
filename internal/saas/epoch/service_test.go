@@ -7,18 +7,18 @@ import (
 	"quantsaas/internal/strategies/sigmoiddca"
 )
 
-func TestNormalizeRequestDisablesRebalanceForFloatingOnly(t *testing.T) {
+func TestNormalizeRequestKeepsRebalanceForFloatingOnly(t *testing.T) {
 	service := &Service{}
 	req := service.normalizeRequest(context.Background(), CreateTaskRequest{
 		PositionStructure:        sigmoiddca.PositionStructureFloatingOnly,
 		EvolveRebalanceThreshold: true,
 		MultiMarketEnabled:       true,
 	})
-	if req.EvolveRebalanceThreshold {
-		t.Fatal("floating-only request must persist rebalance evolution as disabled")
+	if !req.EvolveRebalanceThreshold {
+		t.Fatal("floating-only request must preserve rebalance evolution")
 	}
-	if searchGeneOptions(req).EvolveRebalanceThreshold {
-		t.Fatal("floating-only gene options must not evolve rebalance threshold")
+	if !searchGeneOptions(req).EvolveRebalanceThreshold {
+		t.Fatal("floating-only gene options must evolve rebalance threshold when requested")
 	}
 }
 

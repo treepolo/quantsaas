@@ -226,9 +226,6 @@ func RunSigmoidDCA(request SigmoidDCARequest) (Result, error) {
 			effectiveParams.DisableMinimumTrade,
 		)
 		rebalanceThreshold := effectiveParams.Chromosome.RebalanceThreshold
-		if effectiveParams.FloatingOnly() {
-			rebalanceThreshold = 0
-		}
 		rebalanceAllowed := RebalanceThresholdAllows(output, portfolio, bar.Close, rebalanceThreshold)
 		output = ApplyRebalanceThreshold(output, portfolio, bar.Close, rebalanceThreshold)
 		if !hasAdoptedPracticalTargetWeight {

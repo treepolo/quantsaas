@@ -50,7 +50,6 @@ func TestFloatingOnlyDisablesNonEffectiveFieldsAndFingerprint(t *testing.T) {
 	second := first
 	second.MicroReservePct = 0.45
 	second.DustUSD = 25
-	second.RebalanceThreshold = 0.75
 	second.WedgeDeltaThreshold = 0.15
 	second.WedgeVolRatioThreshold = 2.5
 	second.MacroBearMultiplier = 2.5
@@ -75,9 +74,17 @@ func TestFloatingOnlyDisablesNonEffectiveFieldsAndFingerprint(t *testing.T) {
 		if floatingOnlyDisabledFields[axis.Key] && axis.GridSize != 1 {
 			t.Fatalf("disabled axis %s grid size = %d, want 1", axis.Key, axis.GridSize)
 		}
-		if axis.Key == "rebalance_threshold" && axis.Value != 0 {
-			t.Fatalf("disabled rebalance threshold value = %v, want 0", axis.Value)
+		if axis.Key == "rebalance_threshold" && axis.State != ParameterStateEvolving {
+			t.Fatalf("rebalance threshold state = %s, want evolving for floating-only", axis.State)
 		}
+		if axis.Key == "rebalance_threshold" && axis.GridSize <= 1 {
+			t.Fatalf("rebalance threshold grid size = %d, want evolving grid", axis.GridSize)
+		}
+	}
+
+	second.RebalanceThreshold = 0.75
+	if evolvable.FingerprintWithOptions(first, options) == evolvable.FingerprintWithOptions(second, options) {
+		t.Fatal("floating-only rebalance threshold must change candidate fingerprint")
 	}
 }
 

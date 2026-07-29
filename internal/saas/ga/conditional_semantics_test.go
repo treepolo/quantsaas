@@ -16,7 +16,6 @@ func TestFloatingOnlyIgnoresDisabledChromosomeFieldsInPath(t *testing.T) {
 	changed := base
 	changed.MicroReservePct = 0.45
 	changed.DustUSD = 25
-	changed.RebalanceThreshold = 0.75
 	changed.WedgeDeltaThreshold = 0.15
 	changed.WedgeVolRatioThreshold = 2.5
 	changed.MacroBearMultiplier = 2.5

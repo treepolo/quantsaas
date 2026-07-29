@@ -64,7 +64,6 @@ var coreFields = []coreField{
 var floatingOnlyDisabledFields = map[string]bool{
 	"micro_reserve_pct":         true,
 	"dust_usd":                  true,
-	"rebalance_threshold":       true,
 	"wedge_delta_threshold":     true,
 	"wedge_vol_ratio_threshold": true,
 	"macro_bear_multiplier":     true,
@@ -182,7 +181,6 @@ func normalizeChromosomeForOptions(input quant.Chromosome, options GeneOptions) 
 		c.SoftReleaseMonths = int(quant.HardBounds["soft_release_months"].Max)
 		c.SoftReleasePct = 0
 		c.HardReleaseMaxPct = 0
-		c.RebalanceThreshold = 0
 	}
 	if options.DisableMinimumTrade || options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
 		c.DustUSD = neutral.DustUSD

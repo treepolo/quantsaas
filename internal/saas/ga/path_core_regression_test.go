@@ -45,7 +45,7 @@ func TestSharedCoreMatchesLegacySigmoidDCAPath(t *testing.T) {
 			roi:         -0.12205202287406713,
 			maxDrawdown: 0.06973231707688078,
 			finalEquity: 1429.8440839422337,
-			tradeCount:  9,
+			tradeCount:  8,
 		},
 		{
 			mode:        executionModeCloseNextOpen,

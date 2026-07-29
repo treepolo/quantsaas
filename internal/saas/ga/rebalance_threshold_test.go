@@ -151,6 +151,40 @@ func TestZeroCostFloatingModeDoesNotSuppressForcedTargetAsDust(t *testing.T) {
 	}
 }
 
+func TestFloatingOnlyAppliesRebalanceThresholdToPracticalPath(t *testing.T) {
+	params := sigmoiddca.DefaultParams()
+	params.Spawn.Policy.InitialUSDT = 1000
+	params.Spawn.Policy.MonthlyInjectUSDT = 0
+	params.PositionStructure = sigmoiddca.PositionStructureFloatingOnly
+	params.Chromosome.RebalanceThreshold = 0.75
+
+	bars := flatTestBars(115)
+	path := RunSigmoidDCAPathBacktestWithModeCostsAndStructure(
+		bars,
+		bars[112].OpenTime,
+		"1d",
+		executionModeCloseSameBar,
+		params.Chromosome,
+		&params.Spawn,
+		quant.ExecutionCostConfig{},
+		params.PositionStructure,
+	)
+	if len(path.NAV) == 0 {
+		t.Fatal("expected path points")
+	}
+
+	first := path.NAV[0]
+	if first.ModelTargetWeight <= 0 {
+		t.Fatalf("model target weight = %.12f, want positive theoretical target", first.ModelTargetWeight)
+	}
+	if math.Abs(first.PracticalTargetWeight) > 1e-12 {
+		t.Fatalf("practical target weight = %.12f, want threshold to keep prior zero target", first.PracticalTargetWeight)
+	}
+	if math.Abs(first.ActualExposureWeight) > 1e-12 {
+		t.Fatalf("actual exposure weight = %.12f, want no micro rebalance", first.ActualExposureWeight)
+	}
+}
+
 func TestEvaluateRejectsInvalidForceThresholdOrder(t *testing.T) {
 	params := sigmoiddca.DefaultParams()
 	params.Chromosome.ForceFullThreshold = 0.40

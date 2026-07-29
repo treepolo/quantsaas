@@ -37,9 +37,6 @@ func NormalizeGeneOptions(options GeneOptions) GeneOptions {
 		options.PositionStructure = sigmoiddca.PositionStructureDualLayer
 	}
 	options.PositionStructure = sigmoiddca.NormalizePositionStructure(options.PositionStructure)
-	if options.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
-		options.EvolveRebalanceThreshold = false
-	}
 	if !options.EnableWMean && !options.EnableWMomentum && !options.EnableWBreakout {
 		options.EnableWMean = true
 		options.EnableWMomentum = true

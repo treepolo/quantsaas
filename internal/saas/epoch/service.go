@@ -1266,9 +1266,6 @@ func (s *Service) normalizeRequest(ctx context.Context, req CreateTaskRequest) C
 		req.EnableWBreakout = &value
 	}
 	req.PositionStructure = normalizedPositionStructure(req.PositionStructure)
-	if req.PositionStructure == sigmoiddca.PositionStructureFloatingOnly {
-		req.EvolveRebalanceThreshold = false
-	}
 	req.ContinuousMode = strings.ToLower(strings.TrimSpace(req.ContinuousMode))
 	if req.ContinuousMode != "" && req.ContinuousIterations == 0 && !req.ContinuousUnlimited {
 		req.ContinuousIterations = 2
